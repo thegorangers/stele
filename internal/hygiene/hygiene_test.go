@@ -36,6 +36,55 @@ func TestNoOrganizationSpecificIdentifiers(t *testing.T) {
 	banned := bannedIdentifiers()
 	root := repoRoot(t)
 
+	for _, rel := range publishedFiles(t, root) {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lower := bytes.ToLower(b)
+		for _, w := range banned {
+			if bytes.Contains(lower, []byte(w)) {
+				t.Errorf("%s: private identifier %q must not appear in a public repository", rel, w)
+			}
+		}
+	}
+}
+
+// publishedFiles returns every file the repository would publish: what is
+// tracked, plus what is untracked and not ignored.
+//
+// The scope is the repository, not the directory it happens to sit in. Walking
+// the directory instead would fail on a developer's ignored editor state — a
+// file that is not in the repository, cannot reach anyone, and is none of this
+// check's business — and a check that fails on somebody's IDE gets exempted,
+// which is the one thing this check must never acquire. Where git cannot say,
+// the walk is the fallback and errs towards checking too much.
+func publishedFiles(t *testing.T, root string) []string {
+	t.Helper()
+	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err == nil {
+		var files []string
+		for _, name := range strings.Split(string(out), "\x00") {
+			if name == "" {
+				continue
+			}
+			// A tracked file may have been deleted in the working tree.
+			if info, err := os.Lstat(filepath.Join(root, name)); err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			files = append(files, name)
+		}
+		return files
+	}
+	return walkFiles(t, root)
+}
+
+// walkFiles is the fallback for a tree that is not a git checkout.
+func walkFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var files []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -49,25 +98,17 @@ func TestNoOrganizationSpecificIdentifiers(t *testing.T) {
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		b, err := os.ReadFile(path)
+		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
-		lower := bytes.ToLower(b)
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
-		}
-		for _, w := range banned {
-			if bytes.Contains(lower, []byte(w)) {
-				t.Errorf("%s: private identifier %q must not appear in a public repository", rel, w)
-			}
-		}
+		files = append(files, rel)
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return files
 }
 
 // repoRoot returns the root of the repository the test is running from.
