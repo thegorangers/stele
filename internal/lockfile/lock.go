@@ -8,8 +8,6 @@ package lockfile
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -18,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/thegorangers/stele/internal/hashing"
 	"gopkg.in/yaml.v3"
 )
 
@@ -242,7 +241,7 @@ func hashTree(dir string) (map[string]string, error) {
 			return fmt.Errorf("%s is not a regular file (%s); a pinned tree may contain files only",
 				slashed, kindOf(d.Type()))
 		}
-		sum, err := hashFile(path)
+		sum, err := hashing.File(path)
 		if err != nil {
 			return err
 		}
@@ -270,17 +269,4 @@ func kindOf(m fs.FileMode) string {
 	default:
 		return strings.TrimSpace(m.String())
 	}
-}
-
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }

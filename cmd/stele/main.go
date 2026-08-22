@@ -1,0 +1,63 @@
+// Command stele builds proto contracts from the repositories that own them.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"strings"
+)
+
+// usage is the text printed for `stele`, `stele --help` and any unrecognised
+// command. It lists commands only; each command documents its own flags.
+const usage = `stele builds proto contracts from the repositories that own them.
+
+Usage:
+  stele <command> [flags]
+
+Commands:
+  export      write proto files into a directory tree, laid out by import path
+
+Run "stele <command> --help" for the flags of a command.
+`
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		if errors.Is(err, errHelp) {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "stele: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// errHelp reports that the user asked for help and got it. It is an error only
+// so that it can travel the same path as one; it exits zero.
+var errHelp = errors.New("help requested")
+
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		fmt.Fprint(stdout, usage)
+		return errHelp
+	}
+	switch cmd := args[0]; cmd {
+	case "-h", "--help", "help":
+		fmt.Fprint(stdout, usage)
+		return errHelp
+	case "export":
+		return runExport(ctx, args[1:], stdout, stderr)
+	default:
+		if strings.HasPrefix(cmd, "-") {
+			// A flag before the command is not silently ignored: it would
+			// otherwise look like it had been honoured.
+			return fmt.Errorf("unknown flag %q; flags come after the command name\n\n%s", cmd, usage)
+		}
+		return fmt.Errorf("unknown command %q\n\n%s", cmd, usage)
+	}
+}

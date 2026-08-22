@@ -11,11 +11,8 @@ package resolve
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -24,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/thegorangers/stele/internal/config"
+	"github.com/thegorangers/stele/internal/hashing"
 	"gopkg.in/yaml.v3"
 )
 
@@ -247,7 +245,7 @@ func (g *Graph) addModule(origin Origin, modulePath string) error {
 			return err
 		}
 		importPath := filepath.ToSlash(relPath)
-		sum, err := hashFile(p)
+		sum, err := hashing.File(p)
 		if err != nil {
 			return err
 		}
@@ -383,21 +381,6 @@ func bufModuleRoots(p string) ([]config.Module, error) {
 		out = append(out, config.Module{Path: m.Path})
 	}
 	return out, nil
-}
-
-// hashFile returns the hex sha256 of a file's contents. The file is streamed
-// rather than read whole: nothing here needs the bytes, only their identity.
-func hashFile(p string) (string, error) {
-	f, err := os.Open(p)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func exists(p string) bool {
