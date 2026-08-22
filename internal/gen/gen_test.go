@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/thegorangers/stele/internal/gen"
+	"github.com/thegorangers/stele/internal/lockfile"
 	"github.com/thegorangers/stele/internal/report"
 	"github.com/thegorangers/stele/internal/resolve"
 	"google.golang.org/protobuf/proto"
@@ -538,5 +540,53 @@ func TestRun_SplitsRequestsByDirectory(t *testing.T) {
 		if !slices.Equal(got[i], want[i]) {
 			t.Fatalf("request %d file_to_generate = %v, want %v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestRun_RecordsPluginsInTheLock: a lock that pinned only the inputs would
+// pin half of what produced the output. A plugin taken from PATH is recorded
+// as what it is — an observation, with no module behind it.
+func TestRun_RecordsPluginsInTheLock(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := world(t, manifest(plugin(s.bin, "gen"), "api"))
+
+	if err := run(t, dir, fetch, gen.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := lockfile.Load(filepath.Join(dir, "stele.lock"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []lockfile.Plugin{{Name: s.bin, Version: "unknown"}}
+	if !reflect.DeepEqual(l.Plugins, want) {
+		t.Fatalf("plugins:\n got %+v\nwant %+v", l.Plugins, want)
+	}
+
+	// The recorded version is then enforced: a plugin that moved is the drift
+	// this feature exists to catch.
+	l.Plugins = []lockfile.Plugin{{Name: s.bin, Version: "v0.0.1"}}
+	if err := lockfile.Save(filepath.Join(dir, "stele.lock"), l); err != nil {
+		t.Fatal(err)
+	}
+	err = run(t, dir, fetch, gen.Options{})
+	if err == nil || !strings.Contains(err.Error(), "v0.0.1") {
+		t.Fatalf("expected a complaint about the recorded plugin version, got %v", err)
+	}
+	if err := run(t, dir, fetch, gen.Options{Update: true}); err != nil {
+		t.Fatalf("--update: %v", err)
+	}
+}
+
+// TestRun_ManagedPluginNeedsACache: a manifest that declares a version asks the
+// tool to install it, and installing needs somewhere to install to.
+func TestRun_ManagedPluginNeedsACache(t *testing.T) {
+	plugins := "      - local: protoc-gen-go\n" +
+		"        module: google.golang.org/protobuf/cmd/protoc-gen-go\n" +
+		"        version: v1.36.11\n        out: gen\n"
+	dir, fetch := world(t, manifest(plugins, "api"))
+
+	err := run(t, dir, fetch, gen.Options{})
+	if err == nil || !strings.Contains(err.Error(), "cache") {
+		t.Fatalf("expected a complaint about the missing cache root, got %v", err)
 	}
 }

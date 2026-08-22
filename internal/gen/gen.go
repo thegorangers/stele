@@ -31,6 +31,7 @@ import (
 	"github.com/thegorangers/stele/internal/compile"
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/genreq"
+	"github.com/thegorangers/stele/internal/lockfile"
 	"github.com/thegorangers/stele/internal/managed"
 	"github.com/thegorangers/stele/internal/pin"
 	"github.com/thegorangers/stele/internal/plugin"
@@ -98,6 +99,15 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 		return nil, err
 	}
 
+	// Plugins are resolved before anything is fetched or compiled. A run that
+	// discovered a missing or uninstallable plugin only after producing half
+	// its output would leave the tree in a state nobody asked for, and the
+	// install is the step most likely to need the network.
+	binaries, err := resolvePlugins(ctx, targets, plugin.Cache{Root: opts.CacheRoot})
+	if err != nil {
+		return nil, err
+	}
+
 	fetch := opts.Fetch
 	if fetch == nil {
 		if opts.CacheRoot == "" {
@@ -113,6 +123,10 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 		Fetch:    fetch,
 		Update:   opts.Update,
 		NoLock:   opts.NoLock,
+		Plugins:  lockedPlugins(binaries),
+		// A run of every target states the whole plugin set; a run of some
+		// targets knows about some of it only.
+		PluginsAuthoritative: len(opts.Targets) == 0,
 	})
 	if err != nil {
 		return nil, err
@@ -123,7 +137,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	}
 
 	written := 0
-	var invoked []string
+	var invoked []report.Plugin
 	for _, t := range targets {
 		var mcfg *managed.Config
 		if t.Managed != nil {
@@ -151,8 +165,12 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 					if opts.IncludeImports {
 						includeImports(req)
 					}
-					invoked = append(invoked, p.Local)
-					resp, err := plugin.Run(ctx, p.Local, req)
+					bin := binaries[pluginKey(p)]
+					invoked = append(invoked, report.Plugin{
+						Name: bin.Name, Path: bin.Path, Module: bin.Module,
+						Version: bin.Version, Origin: bin.Origin,
+					})
+					resp, err := plugin.Run(ctx, bin.Path, req)
 					if err != nil {
 						return nil, fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 					}
@@ -175,6 +193,51 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 		return nil, errors.New("generate: the plugins wrote no files; a run that generates nothing is an error, not an empty success")
 	}
 	return report.Build(invoked), nil
+}
+
+// pluginKey identifies a manifest plugin by everything that decides which
+// binary it is. Two targets naming the same plugin at the same version are one
+// binary; the same name at two versions is two, and must not collapse.
+func pluginKey(p config.Plugin) string { return p.Local + "\x00" + p.Module + "@" + p.Version }
+
+// resolvePlugins turns every plugin of the selected targets into a runnable
+// binary, installing the declared ones.
+//
+// A declared plugin needs a cache to be installed into. Rather than let the
+// installer fail with a message about an empty root, the absence is reported
+// against the plugin that needed it, because that is the fact the reader has
+// to act on.
+func resolvePlugins(ctx context.Context, targets []config.GenTarget, cache plugin.Cache) (map[string]plugin.Binary, error) {
+	out := make(map[string]plugin.Binary)
+	for _, t := range targets {
+		for _, p := range t.Plugins {
+			k := pluginKey(p)
+			if _, done := out[k]; done {
+				continue
+			}
+			if p.Module != "" && cache.Root == "" {
+				return nil, fmt.Errorf("target %q, plugin %q: it declares %s@%s, which this tool installs into its own cache, "+
+					"but this run was given no cache root", t.Name, p.Local, p.Module, p.Version)
+			}
+			bin, err := cache.Resolve(ctx, p.Local, p.Module, p.Version)
+			if err != nil {
+				return nil, fmt.Errorf("target %q: %w", t.Name, err)
+			}
+			out[k] = bin
+		}
+	}
+	return out, nil
+}
+
+// lockedPlugins renders the resolved binaries as lock entries, sorted by name
+// so that the same run always writes the same bytes.
+func lockedPlugins(binaries map[string]plugin.Binary) []lockfile.Plugin {
+	out := make([]lockfile.Plugin, 0, len(binaries))
+	for _, b := range binaries {
+		out = append(out, lockfile.Plugin{Name: b.Name, Module: b.Module, Version: b.Version})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // selectTargets returns the targets to run, in manifest order.

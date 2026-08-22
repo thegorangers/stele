@@ -86,6 +86,12 @@ type Component struct {
 	// with the same plugin name and different binaries are a real cause of
 	// differing output, and the name alone would hide it.
 	Path string `json:"path,omitempty"`
+	// Origin says where a plugin binary came from: OriginManaged when the
+	// tool installed the version the manifest declared, OriginPath when it
+	// was found on PATH. The distinction is the report's most load-bearing
+	// field for a reader asking whether another machine would generate the
+	// same bytes.
+	Origin string `json:"origin,omitempty"`
 	// Note says why a version is Unknown. It is prose for a human reading the
 	// evidence, never parsed.
 	Note string `json:"note,omitempty"`
@@ -98,13 +104,31 @@ type Report struct {
 	Components map[string]Component `json:"components"`
 }
 
+// Origins a plugin binary can have, mirroring the resolver's own vocabulary.
+const (
+	OriginManaged = "managed"
+	OriginPath    = "path"
+)
+
+// Plugin is one plugin a run invoked, as the resolver handed it over: the
+// name the manifest wrote, the binary that actually ran, and what is known
+// about where it came from. Path may be empty, in which case the binary is
+// looked up as the name says and the report records whatever it finds.
+type Plugin struct {
+	Name    string
+	Path    string
+	Module  string
+	Version string
+	Origin  string
+}
+
 // Build assembles the report for a run that invoked the named plugins.
 //
 // Duplicates among plugins collapse: a plugin named by two targets is one
 // binary and one version. Nothing here fails: a report is evidence about a run
 // that already happened, and refusing to produce it because one plugin could
 // not be versioned would destroy the evidence about the rest.
-func Build(plugins []string) *Report {
+func Build(plugins []Plugin) *Report {
 	r := &Report{Components: make(map[string]Component, len(plugins)+3)}
 
 	r.Components["stele"] = Component{Kind: KindTool, Module: modulePath(), Version: steleVersion()}
@@ -123,15 +147,20 @@ func Build(plugins []string) *Report {
 		r.Components[name] = c
 	}
 
-	for _, bin := range plugins {
-		if bin == "" {
+	for _, p := range plugins {
+		if p.Name == "" && p.Path == "" {
 			continue
 		}
-		name := pluginName(bin)
+		// The key is the base name, so that a manifest naming a plugin by
+		// path and one naming it on PATH produce comparable reports.
+		name := pluginName(p.Name)
+		if p.Name == "" {
+			name = pluginName(p.Path)
+		}
 		if _, seen := r.Components[name]; seen {
 			continue
 		}
-		r.Components[name] = describePlugin(bin)
+		r.Components[name] = describePlugin(p)
 	}
 	return r
 }
@@ -175,6 +204,9 @@ func (r *Report) Summary() string {
 		if c.Module != "" && c.Module != n {
 			fmt.Fprintf(&b, "  (%s)", c.Module)
 		}
+		if c.Origin != "" {
+			fmt.Fprintf(&b, "  [%s]", c.Origin)
+		}
 		if c.Note != "" {
 			fmt.Fprintf(&b, "  [%s]", c.Note)
 		}
@@ -185,10 +217,17 @@ func (r *Report) Summary() string {
 
 // describePlugin reads a plugin's module metadata, reporting honestly when
 // there is none to read.
-func describePlugin(bin string) Component {
-	c := Component{Kind: KindPlugin, Version: Unknown}
+func describePlugin(p Plugin) Component {
+	c := Component{Kind: KindPlugin, Version: Unknown, Origin: p.Origin}
+	bin := p.Path
+	if bin == "" {
+		bin = p.Name
+	}
 	path, err := exec.LookPath(bin)
 	if err != nil {
+		if p.Version != "" {
+			c.Version = p.Version
+		}
 		c.Note = "not found: " + err.Error()
 		return c
 	}
@@ -199,6 +238,12 @@ func describePlugin(bin string) Component {
 		// metadata was stripped. Both are the same answer to the only
 		// question asked: the version is not obtainable from the binary.
 		c.Note = "no Go module metadata in the binary: " + err.Error()
+		// A plugin the resolver already described — a non-Go one taken from
+		// PATH — keeps what it said, which is usually Unknown and honest.
+		if p.Version != "" {
+			c.Version = p.Version
+		}
+		c.Module = p.Module
 		return c
 	}
 	c.Module = info.Main.Path

@@ -38,7 +38,7 @@ func TestBuild_IncludesEngineVersions(t *testing.T) {
 func TestBuild_GoPluginVersionFromBuildMetadata(t *testing.T) {
 	bin := buildFakePlugin(t, "example.com/fakeplugin")
 
-	r := report.Build([]string{bin})
+	r := report.Build([]report.Plugin{{Path: bin}})
 
 	c, ok := r.Components["protoc-gen-fake"]
 	if !ok {
@@ -70,7 +70,7 @@ func TestBuild_NonGoPluginIsUnknownNotOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := report.Build([]string{bin})
+	r := report.Build([]report.Plugin{{Path: bin}})
 
 	c, ok := r.Components["protoc-gen-dart"]
 	if !ok {
@@ -84,7 +84,7 @@ func TestBuild_NonGoPluginIsUnknownNotOmitted(t *testing.T) {
 // TestBuild_MissingPluginIsReportedNotDropped: a plugin that could not even be
 // found is still evidence about the run.
 func TestBuild_MissingPluginIsReportedNotDropped(t *testing.T) {
-	r := report.Build([]string{"protoc-gen-nothing-here-at-all"})
+	r := report.Build([]report.Plugin{{Name: "protoc-gen-nothing-here-at-all"}})
 	c, ok := r.Components["protoc-gen-nothing-here-at-all"]
 	if !ok {
 		t.Fatalf("missing plugin dropped; components: %v", keys(r))
@@ -159,4 +159,26 @@ func buildFakePlugin(t *testing.T, module string) string {
 		t.Skipf("could not build a fake plugin: %v\n%s", err, b)
 	}
 	return out
+}
+
+// TestBuild_SaysWhereAPluginCameFrom: a plugin the tool installed at a
+// declared version and a plugin it merely found on PATH are different claims
+// about reproducibility, and the evidence has to tell them apart.
+func TestBuild_SaysWhereAPluginCameFrom(t *testing.T) {
+	bin := buildFakePlugin(t, "example.com/fakeplugin")
+
+	r := report.Build([]report.Plugin{
+		{Name: "protoc-gen-fake", Path: bin, Module: "example.com/fakeplugin", Version: "(devel)", Origin: report.OriginManaged},
+		{Name: "protoc-gen-dart", Path: "", Version: report.Unknown, Origin: report.OriginPath},
+	})
+
+	if got := r.Components["protoc-gen-fake"].Origin; got != report.OriginManaged {
+		t.Errorf("origin of the installed plugin = %q, want %q", got, report.OriginManaged)
+	}
+	if got := r.Components["protoc-gen-dart"].Origin; got != report.OriginPath {
+		t.Errorf("origin of the PATH plugin = %q, want %q", got, report.OriginPath)
+	}
+	if s := r.Summary(); !strings.Contains(s, report.OriginPath) || !strings.Contains(s, report.OriginManaged) {
+		t.Errorf("the summary does not say where the plugins came from:\n%s", s)
+	}
 }
