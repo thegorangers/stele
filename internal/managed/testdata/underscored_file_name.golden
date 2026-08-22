@@ -1,0 +1,9 @@
+java_package: "com.acme.widget.events.v1"
+java_outer_classname: "MerchantStatusProto"
+java_multiple_files: true
+go_package: "github.com/acme/project/gen/acme/widget/events/v1;eventsv1"
+objc_class_prefix: "AWE"
+csharp_namespace: "Acme.Widget.Events.V1"
+php_namespace: "Acme\\Widget\\Events\\V1"
+php_metadata_namespace: "Acme\\Widget\\Events\\V1\\GPBMetadata"
+ruby_package: "Acme::Widget::Events::V1"
