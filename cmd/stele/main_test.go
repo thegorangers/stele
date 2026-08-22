@@ -49,6 +49,10 @@ func TestCLI(t *testing.T) {
 		{name: "migrate unknown flag is named", args: []string{"migrate", "--nosuch"}, wantErr: "not defined: -nosuch"},
 		{name: "migrate positional argument refused", args: []string{"migrate", "x"}, wantErr: `unexpected argument "x"`},
 		{name: "migrate is listed in the usage", args: nil, help: true, wantHelp: "migrate"},
+		{name: "plugins is listed in the usage", args: nil, help: true, wantHelp: "plugins"},
+		{name: "plugins help", args: []string{"plugins", "--help"}, help: true, wantHelp: "install"},
+		{name: "plugins needs a subcommand", args: []string{"plugins"}, wantErr: "list or install"},
+		{name: "plugins unknown subcommand is named", args: []string{"plugins", "nosuch"}, wantErr: `unknown subcommand "nosuch"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errOut strings.Builder
@@ -242,4 +246,51 @@ func moduleVersionFromGoMod(t *testing.T, root, module string) string {
 	}
 	t.Fatalf("go.mod does not require %s", module)
 	return ""
+}
+
+// TestPluginsList: listing is the answer to "which binary will actually run",
+// asked without running anything. It must not install: a question about the
+// state of the cache that changed the cache would be useless as a diagnostic.
+func TestPluginsList(t *testing.T) {
+	dir := t.TempDir()
+	body := `version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: v1.36.11
+        out: gen
+      - local: protoc-gen-dart
+        out: lib
+`
+	if err := os.WriteFile(filepath.Join(dir, "stele.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache := t.TempDir()
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"plugins", "list", "--dir", dir, "--cache-dir", cache}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("plugins list: %v (%s)", err, errOut.String())
+	}
+	for _, want := range []string{
+		"protoc-gen-go", "google.golang.org/protobuf/cmd/protoc-gen-go", "v1.36.11",
+		"protoc-gen-dart", "PATH",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("listing does not mention %q:\n%s", want, out.String())
+		}
+	}
+	entries, err := os.ReadDir(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("listing wrote to the cache: %v", entries)
+	}
 }
