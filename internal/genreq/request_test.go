@@ -285,14 +285,15 @@ message Opt { string name = 1; }
 	return files
 }
 
-// TestBuild_SetsCompilerVersion pins that the field is populated at all.
-func TestBuild_SetsCompilerVersion(t *testing.T) {
+// TestBuild_LeavesCompilerVersionUnset pins the measurement that settled the
+// open question: the tool being replaced sends no compiler_version, and
+// protoc-gen-go writes whatever is there into a comment in every file it
+// emits. Setting the field, however truthfully, would differ in every
+// generated file.
+func TestBuild_LeavesCompilerVersionUnset(t *testing.T) {
 	req := mustBuild(t, diamond(t))
-	if req.CompilerVersion == nil {
-		t.Fatal("compiler_version is unset")
-	}
-	if req.CompilerVersion.GetMajor() == 0 && req.CompilerVersion.GetMinor() == 0 && req.CompilerVersion.GetPatch() == 0 {
-		t.Error("compiler_version is all zeroes, which reads as absent to a plugin")
+	if req.CompilerVersion != nil {
+		t.Fatalf("compiler_version = %v, want unset", req.CompilerVersion)
 	}
 }
 

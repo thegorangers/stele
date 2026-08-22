@@ -402,10 +402,16 @@ func TestRun_GeneratesFromADependencyWithNoLocalModules(t *testing.T) {
 	if err := run(t, dir, fetch, gen.Options{}); err != nil {
 		t.Fatal(err)
 	}
-	got := s.requests(t)[0].GetFileToGenerate()
+	// Two directories, so two requests; what the target selected is their
+	// union, not any one of them.
+	var got []string
+	for _, req := range s.requests(t) {
+		got = append(got, req.GetFileToGenerate()...)
+	}
+	slices.Sort(got)
 	want := []string{"dep/v1/b.proto", "other/v1/o.proto"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("file_to_generate = %v, want the dependency's module %v", got, want)
+		t.Fatalf("file_to_generate across requests = %v, want the dependency's module %v", got, want)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "gen", "dep", "v1", "b.txt")); err != nil {
 		t.Fatalf("the plugin's file was not written: %v", err)
@@ -461,5 +467,32 @@ func TestRun_DependencyInputDoesNotReachTheProducersOtherModules(t *testing.T) {
 	err := run(t, dir, fetch, gen.Options{})
 	if err == nil || !strings.Contains(err.Error(), "shared/v1") {
 		t.Fatalf("want an error: shared/v1 is outside the module the dep entry names, got %v", err)
+	}
+}
+
+// TestRun_SplitsRequestsByDirectory pins the split the acceptance measurement
+// found: one request per directory of the files being generated, not one per
+// input. A plugin that asks what else is in file_to_generate — vtprotobuf
+// emits a fast path only for messages generated alongside it — writes
+// different code for a cross-directory reference under the two splits, so this
+// is an output property, not an internal one.
+func TestRun_SplitsRequestsByDirectory(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := depWorld(t, depManifest(plugin(s.bin, "gen"), "      - dep: dep\n"))
+	if err := run(t, dir, fetch, gen.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	var got [][]string
+	for _, req := range s.requests(t) {
+		got = append(got, req.GetFileToGenerate())
+	}
+	want := [][]string{{"dep/v1/b.proto"}, {"other/v1/o.proto"}}
+	if len(got) != len(want) {
+		t.Fatalf("%d request(s) %v, want one per directory %v", len(got), got, want)
+	}
+	for i := range want {
+		if !slices.Equal(got[i], want[i]) {
+			t.Fatalf("request %d file_to_generate = %v, want %v", i, got[i], want[i])
+		}
 	}
 }

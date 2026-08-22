@@ -24,20 +24,16 @@ import (
 	"google.golang.org/protobuf/types/pluginpb"
 )
 
-// Compiler version reported to the plugin.
+// No compiler_version is reported to the plugin, and that is a measurement
+// rather than an omission.
 //
-// OPEN QUESTION (design §6.3): what a plugin does with this value, and what
-// another tool puts here, is not measured. We report our own version because
-// it is the only number we can state truthfully; whether byte parity with
-// another generator requires reporting that generator's number instead is an
-// open parity question, to be settled by comparing artefacts, not by guessing
-// here. Plugins in use read the request's parameter, not this field, so a
-// wrong guess would be worse than an honest one.
-const (
-	versionMajor = 0
-	versionMinor = 1
-	versionPatch = 0
-)
+// The design notes listed this as an open question (§6.3, §11). It was settled
+// by dumping the request the tool being replaced actually sends over a real
+// repository: the field is absent. It has to be absent here too, because
+// protoc-gen-go writes the value into a comment at the top of every file it
+// emits — "protoc (unknown)" when the field is unset — so any number reported
+// here, however truthful, is a byte-for-byte difference in every generated
+// file.
 
 // Target is what the caller supplies beyond the compiled files: everything
 // that comes from configuration rather than from the sources.
@@ -94,11 +90,21 @@ func Build(files linker.Files, t Target) (*pluginpb.CodeGeneratorRequest, error)
 		// imports, whose comments nothing reads while their locations would
 		// bloat each embedded descriptor. protocompile has no per-file switch
 		// for this, so the choice is made here.
+		//
+		// This is a deliberate divergence, and it is measured rather than
+		// assumed on both sides. The tool being replaced does NOT drop it:
+		// dumping its request shows source info on every import, well-known
+		// types included. Dropping it changes no byte of the output of any
+		// plugin in the measured surface — the acceptance corpus was run with
+		// this line removed and stayed identical — because a generator reads
+		// the comments of the files it is generating, not of their imports. If
+		// a plugin ever turns up that does read them, this is the line to
+		// delete, and the acceptance test is what will say so.
 		if !isTarget[fd.GetName()] {
 			fd.SourceCodeInfo = nil
 		}
 
-		if t.Managed != nil && !isWellKnown(fd.GetName()) {
+		if t.Managed != nil && !IsWellKnown(fd.GetName()) {
 			managed.Apply(fd, *t.Managed)
 		}
 
@@ -109,11 +115,6 @@ func Build(files linker.Files, t Target) (*pluginpb.CodeGeneratorRequest, error)
 	req := &pluginpb.CodeGeneratorRequest{
 		FileToGenerate: targets,
 		ProtoFile:      protoFiles,
-		CompilerVersion: &pluginpb.Version{
-			Major: proto.Int32(versionMajor),
-			Minor: proto.Int32(versionMinor),
-			Patch: proto.Int32(versionPatch),
-		},
 	}
 	if t.Parameter != "" {
 		req.Parameter = proto.String(t.Parameter)
@@ -204,6 +205,6 @@ func stripSourceRetentionOptions(fd *descriptorpb.FileDescriptorProto) {
 // protobuf itself. Their options are part of the runtime that generated code
 // links against, so rewriting them would point generated imports at packages
 // that do not exist.
-func isWellKnown(name string) bool {
+func IsWellKnown(name string) bool {
 	return len(name) > len("google/protobuf/") && name[:len("google/protobuf/")] == "google/protobuf/"
 }

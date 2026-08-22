@@ -4,10 +4,12 @@
 // and both are easy to get wrong in a way no test of the happy path would
 // notice.
 //
-// The first is that each input of a target gets its own request. A target with
-// two inputs is not a target with one input holding both: file_to_generate
-// differs, and so does everything a plugin derives from it. Merging them would
-// be simpler and would produce different code.
+// The first is how the files being generated are split across requests. An
+// input does not become one request: it becomes one request per directory of
+// the files it selected, and a target with two inputs never merges them. That
+// is measured, not chosen — see byDirectory — and it is visible in the output:
+// a plugin that asks whether a message it references is also being generated
+// answers differently depending on what else is in file_to_generate.
 //
 // The second is that resolution goes through pin.Resolve, exactly as export
 // does, so that a generated tree and an exported tree can never be built from
@@ -24,6 +26,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bufbuild/protocompile/linker"
 	"github.com/thegorangers/stele/internal/compile"
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/genreq"
@@ -119,29 +122,31 @@ func Run(ctx context.Context, opts Options) error {
 			if err != nil {
 				return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 			}
-			for _, p := range t.Plugins {
-				req, err := genreq.Build(compiled, genreq.Target{
-					Parameter: strings.Join(p.Opt, ","),
-					Managed:   mcfg,
-				})
-				if err != nil {
-					return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+			for _, group := range byDirectory(compiled) {
+				for _, p := range t.Plugins {
+					req, err := genreq.Build(group, genreq.Target{
+						Parameter: strings.Join(p.Opt, ","),
+						Managed:   mcfg,
+					})
+					if err != nil {
+						return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+					}
+					if opts.IncludeImports {
+						includeImports(req)
+					}
+					resp, err := plugin.Run(ctx, p.Local, req)
+					if err != nil {
+						return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+					}
+					if err := check(p.Local, req, resp); err != nil {
+						return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+					}
+					n, err := writeResponse(filepath.Join(dir, filepath.FromSlash(p.Out)), p.Local, resp)
+					if err != nil {
+						return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+					}
+					written += n
 				}
-				if opts.IncludeImports {
-					includeImports(req)
-				}
-				resp, err := plugin.Run(ctx, p.Local, req)
-				if err != nil {
-					return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
-				}
-				if err := check(p.Local, req, resp); err != nil {
-					return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
-				}
-				n, err := writeResponse(filepath.Join(dir, filepath.FromSlash(p.Out)), p.Local, resp)
-				if err != nil {
-					return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
-				}
-				written += n
 			}
 		}
 	}
@@ -291,15 +296,57 @@ func moduleName(m string) string {
 	return m
 }
 
-// includeImports promotes every file of the request's closure to a target.
+// byDirectory splits the files being generated into one group per directory,
+// in directory order, each group holding that directory's files in the order
+// they were compiled.
+//
+// This mirrors the tool being replaced, whose default is exactly this split,
+// and it was found by measurement rather than by reading: two repositories
+// generate byte-identical code either way, and the third does not. A plugin
+// that emits a fast path for a message type only when that type is also being
+// generated in the same request — vtprotobuf does — writes different code for
+// a cross-directory reference depending on the split. Merging an input into a
+// single request is not a simplification of this; it is a different output.
+//
+// The closure is not split: each request still carries the transitive imports
+// of its own group, because genreq walks them from the descriptors.
+func byDirectory(files linker.Files) []linker.Files {
+	order := make([]string, 0, len(files))
+	groups := make(map[string]linker.Files, len(files))
+	for _, f := range files {
+		d := path.Dir(f.Path())
+		if _, ok := groups[d]; !ok {
+			order = append(order, d)
+		}
+		groups[d] = append(groups[d], f)
+	}
+	sort.Strings(order)
+	out := make([]linker.Files, 0, len(order))
+	for _, d := range order {
+		out = append(out, groups[d])
+	}
+	return out
+}
+
+// includeImports promotes the imports of the request's closure to targets.
 //
 // The order is the request's own proto_file order — topological, imports
 // first — rather than the sorted order of the targets, because that is the
 // order the file list already has and a second ordering rule would be one more
 // thing that could disagree with the descriptors.
+//
+// The well-known types are left out. That is measured, not assumed: dumping
+// the request the tool being replaced sends with imports included shows every
+// other import promoted — google/api and google/type among them — and
+// google/protobuf absent. It has to be absent, because the Go runtime already
+// ships generated code for those files and a second copy under the consumer's
+// own import path would be a different set of types with the same names.
 func includeImports(req *pluginpb.CodeGeneratorRequest) {
 	all := make([]string, 0, len(req.GetProtoFile()))
 	for _, f := range req.GetProtoFile() {
+		if genreq.IsWellKnown(f.GetName()) {
+			continue
+		}
 		all = append(all, f.GetName())
 	}
 	req.FileToGenerate = all
