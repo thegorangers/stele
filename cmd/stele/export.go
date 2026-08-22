@@ -99,5 +99,6 @@ func runExport(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		ExcludeImports: *exclude,
 		Update:         *update,
 		CacheRoot:      root,
+		Warn:           stderr,
 	})
 }

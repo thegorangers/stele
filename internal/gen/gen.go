@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -63,6 +64,11 @@ type Options struct {
 	Update bool
 	// NoLock leaves the lock out of the run entirely.
 	NoLock bool
+	// Warn, when set, receives non-fatal findings from resolution — today,
+	// the drift between a contract's owner and a stale vendored copy of it.
+	// A finding that blocks nothing has to be visible somewhere, or the
+	// staleness it reports goes on accumulating unseen.
+	Warn io.Writer
 	// Fetch materialises dependency repositories. When nil, repositories are
 	// fetched from the network into CacheRoot.
 	Fetch resolve.FetchFunc
@@ -110,6 +116,10 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if opts.Warn != nil {
+		resolve.WriteDrift(opts.Warn, graph.Drift())
 	}
 
 	written := 0

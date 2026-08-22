@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -91,6 +92,10 @@ type Resolved struct {
 	// Sources lists every repository that supplied this exact path with these
 	// exact bytes, Origin first.
 	Sources []Origin
+	// Authoritative reports whether the root that supplied this file was
+	// claimed by a manifest, as opposed to being admitted by the buf.yaml
+	// compatibility fallback. See addModule.
+	Authoritative bool
 }
 
 // Graph is the resolved closure: every import root the compiler is given, and
@@ -105,6 +110,7 @@ type Graph struct {
 	files map[string]Resolved
 	roots []string
 	deps  []Origin
+	drift []Drift
 }
 
 // ImportRoots returns the import roots, root manifest first and dependencies
@@ -125,6 +131,21 @@ func (g *Graph) ImportPaths() []string {
 // Deps returns the transitive closure, one entry per repository, in the order
 // the repositories were reached. This is what the lock records, flat.
 func (g *Graph) Deps() []Origin { return append([]Origin(nil), g.deps...) }
+
+// Drift reports every import path where an authoritative root won over a
+// fallback root that supplied different bytes.
+type Drift struct {
+	ImportPath          string
+	Authoritative       Origin
+	AuthoritativePath   string
+	AuthoritativeSHA256 string
+	Fallback            Origin
+	FallbackPath        string
+	FallbackSHA256      string
+}
+
+// Drift returns the drift observed while resolving.
+func (g *Graph) Drift() []Drift { return append([]Drift(nil), g.drift...) }
 
 // FileFor returns the file an import path resolves to.
 func (g *Graph) FileFor(importPath string) (Resolved, bool) {
@@ -147,7 +168,7 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 	// anything: it is where the walk starts.
 	rootOrigin := Origin{Dir: dir}
 	for _, m := range root.Modules {
-		if err := g.addModule(rootOrigin, m.Path); err != nil {
+		if err := g.addModule(rootOrigin, m.Path, true); err != nil {
 			return nil, err
 		}
 	}
@@ -173,7 +194,7 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 			}
 			origin := Origin{Name: d.Name, Git: d.Git, Ref: d.Ref, SHA: sha, Dir: treeDir}
 
-			manifest, err := manifestOf(treeDir, d.Module)
+			manifest, own, err := manifestOf(treeDir, d.Module)
 			if err != nil {
 				return nil, fmt.Errorf("dependency %q of %s: %w", d.Name, cur.origin, err)
 			}
@@ -194,7 +215,7 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 			// requested module's files import files from the producer's other
 			// roots, and those imports have to resolve.
 			for _, m := range manifest.Modules {
-				if err := g.addModule(origin, m.Path); err != nil {
+				if err := g.addModule(origin, m.Path, own(m.Path)); err != nil {
 					return nil, err
 				}
 			}
@@ -205,7 +226,21 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 }
 
 // addModule registers every proto file under one module root.
-func (g *Graph) addModule(origin Origin, modulePath string) error {
+//
+// authoritative says whether the root is one a manifest claims as its own —
+// a "modules:" entry of a stele.yaml, or the module a dependency edge names —
+// as opposed to a root admitted only by the buf.yaml compatibility fallback
+// so that the producer's own files can resolve their imports.
+//
+// The test is structural on purpose. Naming a directory ("third_party",
+// "vendor") would encode one fleet's habit into the tool and would be wrong
+// the first time somebody spells it differently; and it would say nothing
+// about authority, only about a word. What actually distinguishes the two is
+// who asked for the root: a claimed root is a statement of ownership made by
+// a manifest this tool understands, while a fallback root is an inference the
+// tool made on the producer's behalf, for the producer's internal benefit.
+// Preferring a statement over an inference is the whole of the rule.
+func (g *Graph) addModule(origin Origin, modulePath string, authoritative bool) error {
 	rel, err := cleanModulePath(modulePath)
 	if err != nil {
 		return fmt.Errorf("%s: %w", origin, err)
@@ -249,8 +284,32 @@ func (g *Graph) addModule(origin Origin, modulePath string) error {
 		if err != nil {
 			return err
 		}
+		cur := Resolved{
+			ImportPath:    importPath,
+			Path:          p,
+			Root:          root,
+			SHA256:        sum,
+			Origin:        origin,
+			Sources:       []Origin{origin},
+			Authoritative: authoritative,
+		}
 		if prev, ok := g.files[importPath]; ok {
 			if prev.SHA256 != sum {
+				switch {
+				case prev.Authoritative && !cur.Authoritative:
+					// The owner keeps the path; the stale vendored copy is
+					// reported rather than obeyed.
+					g.recordDrift(importPath, prev, cur)
+					return nil
+				case !prev.Authoritative && cur.Authoritative:
+					g.recordDrift(importPath, cur, prev)
+					cur.Sources = append(cur.Sources, prev.Sources...)
+					g.files[importPath] = cur
+					return nil
+				}
+				// Two claimed roots disagreeing is a genuine ownership
+				// conflict; two fallback roots disagreeing leaves nobody to
+				// prefer. Both stay fatal.
 				return fmt.Errorf("%w: %s is supplied by %s as %s (sha256 %s) and by %s as %s (sha256 %s)",
 					ErrImportConflict, importPath,
 					prev.Origin, prev.Path, prev.SHA256,
@@ -258,21 +317,50 @@ func (g *Graph) addModule(origin Origin, modulePath string) error {
 			}
 			// Identical bytes: the first registration stays, and the second
 			// supplier is recorded so that a later command can report the
-			// duplication without having to resolve everything again.
+			// duplication without having to resolve everything again. A
+			// claimed root that arrives second is still promoted, so that the
+			// graph names the owner even where the copies agree.
 			prev.Sources = append(prev.Sources, origin)
+			if authoritative && !prev.Authoritative {
+				prev.Path, prev.Root, prev.Origin, prev.Authoritative = p, root, origin, true
+			}
 			g.files[importPath] = prev
 			return nil
 		}
-		g.files[importPath] = Resolved{
-			ImportPath: importPath,
-			Path:       p,
-			Root:       root,
-			SHA256:     sum,
-			Origin:     origin,
-			Sources:    []Origin{origin},
-		}
+		g.files[importPath] = cur
 		return nil
 	})
+}
+
+// recordDrift notes that a claimed root and a fallback root supplied one
+// import path with different bytes. It is not an error, and it must not be
+// silent: it is exactly the staleness that vendored trees accumulate, and the
+// only moment at which anything can see it.
+func (g *Graph) recordDrift(importPath string, authoritative, fallback Resolved) {
+	g.drift = append(g.drift, Drift{
+		ImportPath:          importPath,
+		Authoritative:       authoritative.Origin,
+		AuthoritativePath:   authoritative.Path,
+		AuthoritativeSHA256: authoritative.SHA256,
+		Fallback:            fallback.Origin,
+		FallbackPath:        fallback.Path,
+		FallbackSHA256:      fallback.SHA256,
+	})
+}
+
+// WriteDrift prints drift in a form a person reads at the end of a command.
+// It writes nothing when there is none, so that a quiet run stays quiet.
+func WriteDrift(w io.Writer, drift []Drift) {
+	if len(drift) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "stele: %d import path(s) supplied by a stale vendored copy; the owner was used:\n", len(drift))
+	for _, d := range drift {
+		fmt.Fprintf(w, "  %s\n    owner:    %s %s (sha256 %s)\n    vendored: %s %s (sha256 %s)\n",
+			d.ImportPath,
+			d.Authoritative, d.AuthoritativePath, d.AuthoritativeSHA256,
+			d.Fallback, d.FallbackPath, d.FallbackSHA256)
+	}
 }
 
 // ModuleRoot returns the directory a module path names inside a materialised
@@ -344,22 +432,37 @@ func checkRequestedModule(d config.Dep, manifest *config.File) error {
 //
 // A producer with no manifest at all is taken at its word: the module the
 // dependency asked for is its only root.
-func manifestOf(dir, requestedModule string) (*config.File, error) {
+// It also reports, per module path, whether the producer claims that root as
+// its own. A stele.yaml claims all of them: every entry of "modules:" is a
+// statement by the producer. A buf.yaml claims none of them by itself, since
+// this tool is only guessing at what that file means; the one root that is
+// still claimed there is the module the dependency edge asked for, which the
+// consumer's own manifest names. Everything else the fallback admits exists
+// solely so the producer's files can compile.
+func manifestOf(dir, requestedModule string) (*config.File, func(string) bool, error) {
+	all := func(string) bool { return true }
 	if p := filepath.Join(dir, "stele.yaml"); exists(p) {
-		return config.Load(p)
+		f, err := config.Load(p)
+		return f, all, err
+	}
+	requested, err := cleanModulePath(requestedModule)
+	if err != nil {
+		return nil, nil, err
+	}
+	onlyRequested := func(m string) bool {
+		got, err := cleanModulePath(m)
+		return err == nil && got == requested
 	}
 	if p := filepath.Join(dir, "buf.yaml"); exists(p) {
 		roots, err := bufModuleRoots(p)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return &config.File{Version: config.Version, Modules: roots}, nil
+		return &config.File{Version: config.Version, Modules: roots}, onlyRequested, nil
 	}
-	m, err := cleanModulePath(requestedModule)
-	if err != nil {
-		return nil, err
-	}
-	return &config.File{Version: config.Version, Modules: []config.Module{{Path: m}}}, nil
+	// No manifest at all: the module asked for is the only root there is, and
+	// it is the one the consumer named.
+	return &config.File{Version: config.Version, Modules: []config.Module{{Path: requested}}}, all, nil
 }
 
 // bufModuleRoots reads the module roots out of a buf.yaml, and nothing else.

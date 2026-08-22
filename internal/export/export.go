@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -68,6 +69,11 @@ type Options struct {
 	// ExcludeImports emits only the selected files, leaving the files they
 	// import to whoever consumes the output.
 	ExcludeImports bool
+	// Warn, when set, receives non-fatal findings from resolution — today,
+	// the drift between a contract's owner and a stale vendored copy of it.
+	// A finding that blocks nothing has to be visible somewhere, or the
+	// staleness it reports goes on accumulating unseen.
+	Warn io.Writer
 	// Fetch materialises dependency repositories. When nil, repositories are
 	// fetched from the network into CacheRoot.
 	Fetch resolve.FetchFunc
@@ -121,6 +127,10 @@ func Run(ctx context.Context, opts Options) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	if opts.Warn != nil {
+		resolve.WriteDrift(opts.Warn, graph.Drift())
 	}
 
 	selected, err := selectFiles(cfg, graph, opts.Dep, opts.Paths)

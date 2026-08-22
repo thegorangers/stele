@@ -362,3 +362,169 @@ func sha256Hex(t *testing.T, p string) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
+
+// TestResolve_AuthoritativeBeatsFallback is the case that makes an
+// incremental migration possible at all. The owner of a contract supplies it
+// from a root its manifest declares; other producers, not yet migrated, carry
+// stale vendored copies of the same contract in roots nobody asked for, which
+// resolution admits only so that the producers' own files can compile. The
+// owner wins, the build does not fail, and the drift is reported.
+func TestResolve_AuthoritativeBeatsFallback(t *testing.T) {
+	owner := repo(t, "owner", map[string]string{
+		"buf.yaml":                      "version: v2\nmodules:\n  - path: api\n",
+		"api/acme/place/v1/types.proto": "syntax = \"proto3\";\n// owner\n",
+	})
+	other := repo(t, "other", map[string]string{
+		"buf.yaml":                    "version: v2\nmodules:\n  - path: api\n  - path: third_party/proto\n",
+		"api/acme/menu/v1/menu.proto": "syntax = \"proto3\";\n",
+		"third_party/proto/acme/place/v1/types.proto": "syntax = \"proto3\";\n// stale\n",
+	})
+	consumer := repo(t, "consumer", map[string]string{
+		"api/acme/order/v1/order.proto": "syntax = \"proto3\";\n",
+	})
+
+	cfg := &config.File{
+		Version: 1,
+		Modules: []config.Module{{Path: "api"}},
+		Deps: []config.Dep{
+			{Name: "place", Git: "gh:acme/owner", Ref: "v1.0.0", Module: "api"},
+			{Name: "menu", Git: "gh:acme/other", Ref: "v1.0.0", Module: "api"},
+		},
+	}
+	g, err := resolve.ResolveIn(context.Background(), consumer, cfg, fakeFetch(map[string]string{
+		"gh:acme/owner": owner,
+		"gh:acme/other": other,
+	}))
+	if err != nil {
+		t.Fatalf("an authoritative root must win over a vendored fallback copy: %v", err)
+	}
+	f, ok := g.FileFor("acme/place/v1/types.proto")
+	if !ok {
+		t.Fatal("the contract was not resolved at all")
+	}
+	if !strings.Contains(f.Origin.Git, "owner") {
+		t.Fatalf("the owner must supply the contract, got %v", f.Origin)
+	}
+
+	drift := g.Drift()
+	if len(drift) != 1 {
+		t.Fatalf("drift: got %d entries (%v), want 1", len(drift), drift)
+	}
+	d := drift[0]
+	if d.ImportPath != "acme/place/v1/types.proto" {
+		t.Fatalf("drift path: got %q", d.ImportPath)
+	}
+	if !strings.Contains(d.Authoritative.Git, "owner") || !strings.Contains(d.Fallback.Git, "other") {
+		t.Fatalf("drift must name both sources, got %+v", d)
+	}
+	if d.AuthoritativeSHA256 == "" || d.FallbackSHA256 == "" || d.AuthoritativeSHA256 == d.FallbackSHA256 {
+		t.Fatalf("drift must carry both differing hashes, got %+v", d)
+	}
+}
+
+// TestResolve_TwoAuthoritativeRootsStillConflict: precedence is not leniency.
+// Two roots that both claim to own a path, with different bytes, remain the
+// fatal ownership conflict of §4.4.
+func TestResolve_TwoAuthoritativeRootsStillConflict(t *testing.T) {
+	first := repo(t, "first", map[string]string{
+		"stele.yaml":                    "version: 1\nmodules:\n  - path: api\n",
+		"api/acme/place/v1/types.proto": "syntax = \"proto3\";\n// one\n",
+	})
+	second := repo(t, "second", map[string]string{
+		"stele.yaml":                    "version: 1\nmodules:\n  - path: api\n",
+		"api/acme/place/v1/types.proto": "syntax = \"proto3\";\n// another\n",
+	})
+	consumer := repo(t, "consumer", map[string]string{
+		"api/acme/order/v1/order.proto": "syntax = \"proto3\";\n",
+	})
+	cfg := &config.File{
+		Version: 1,
+		Modules: []config.Module{{Path: "api"}},
+		Deps: []config.Dep{
+			{Name: "place", Git: "gh:acme/first", Ref: "v1.0.0", Module: "api"},
+			{Name: "place-fork", Git: "gh:acme/second", Ref: "v1.0.0", Module: "api"},
+		},
+	}
+	_, err := resolve.ResolveIn(context.Background(), consumer, cfg, fakeFetch(map[string]string{
+		"gh:acme/first":  first,
+		"gh:acme/second": second,
+	}))
+	if !errors.Is(err, resolve.ErrImportConflict) {
+		t.Fatalf("want ErrImportConflict, got %v", err)
+	}
+}
+
+// TestResolve_TwoFallbackRootsStillConflict: when only vendored copies supply
+// a path and they disagree, nobody authoritative owns it and there is nothing
+// to prefer. That stays fatal.
+func TestResolve_TwoFallbackRootsStillConflict(t *testing.T) {
+	first := repo(t, "first", map[string]string{
+		"buf.yaml":                    "version: v2\nmodules:\n  - path: api\n  - path: third_party/proto\n",
+		"api/acme/menu/v1/menu.proto": "syntax = \"proto3\";\n",
+		"third_party/proto/acme/place/v1/types.proto": "syntax = \"proto3\";\n// one\n",
+	})
+	second := repo(t, "second", map[string]string{
+		"buf.yaml":                         "version: v2\nmodules:\n  - path: api\n  - path: vendor\n",
+		"api/acme/cart/v1/cart.proto":      "syntax = \"proto3\";\n",
+		"vendor/acme/place/v1/types.proto": "syntax = \"proto3\";\n// another\n",
+	})
+	consumer := repo(t, "consumer", map[string]string{
+		"api/acme/order/v1/order.proto": "syntax = \"proto3\";\n",
+	})
+	cfg := &config.File{
+		Version: 1,
+		Modules: []config.Module{{Path: "api"}},
+		Deps: []config.Dep{
+			{Name: "menu", Git: "gh:acme/first", Ref: "v1.0.0", Module: "api"},
+			{Name: "cart", Git: "gh:acme/second", Ref: "v1.0.0", Module: "api"},
+		},
+	}
+	_, err := resolve.ResolveIn(context.Background(), consumer, cfg, fakeFetch(map[string]string{
+		"gh:acme/first":  first,
+		"gh:acme/second": second,
+	}))
+	if !errors.Is(err, resolve.ErrImportConflict) {
+		t.Fatalf("want ErrImportConflict, got %v", err)
+	}
+}
+
+// TestResolve_IdenticalBytesDedupeRegardlessOfAuthority: authority decides
+// only what to do with a disagreement. Copies that agree byte for byte are
+// deduplicated as before, and are not drift.
+func TestResolve_IdenticalBytesDedupeRegardlessOfAuthority(t *testing.T) {
+	const body = "syntax = \"proto3\";\n// the one true copy\n"
+	owner := repo(t, "owner", map[string]string{
+		"buf.yaml":                      "version: v2\nmodules:\n  - path: api\n",
+		"api/acme/place/v1/types.proto": body,
+	})
+	other := repo(t, "other", map[string]string{
+		"buf.yaml":                    "version: v2\nmodules:\n  - path: api\n  - path: third_party/proto\n",
+		"api/acme/menu/v1/menu.proto": "syntax = \"proto3\";\n",
+		"third_party/proto/acme/place/v1/types.proto": body,
+	})
+	consumer := repo(t, "consumer", map[string]string{
+		"api/acme/order/v1/order.proto": "syntax = \"proto3\";\n",
+	})
+	cfg := &config.File{
+		Version: 1,
+		Modules: []config.Module{{Path: "api"}},
+		Deps: []config.Dep{
+			{Name: "place", Git: "gh:acme/owner", Ref: "v1.0.0", Module: "api"},
+			{Name: "menu", Git: "gh:acme/other", Ref: "v1.0.0", Module: "api"},
+		},
+	}
+	g, err := resolve.ResolveIn(context.Background(), consumer, cfg, fakeFetch(map[string]string{
+		"gh:acme/owner": owner,
+		"gh:acme/other": other,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := g.FileFor("acme/place/v1/types.proto")
+	if len(f.Sources) != 2 {
+		t.Fatalf("both suppliers must be recorded, got %v", f.Sources)
+	}
+	if len(g.Drift()) != 0 {
+		t.Fatalf("agreeing copies are not drift, got %v", g.Drift())
+	}
+}

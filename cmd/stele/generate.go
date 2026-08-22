@@ -86,6 +86,7 @@ func runGenerate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		IncludeImports: *includeImports,
 		Update:         *update,
 		CacheRoot:      root,
+		Warn:           stderr,
 	})
 	if err != nil {
 		return err
