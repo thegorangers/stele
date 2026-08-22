@@ -446,3 +446,101 @@ generate:
 		t.Fatalf("input = %+v, want the dependency selector set and the module empty", in)
 	}
 }
+
+// A plugin may declare the module it is installed from, so that its version is
+// stated in the manifest rather than left to whatever is on PATH. The older
+// form, a bare local name, must keep parsing unchanged.
+func TestLoad_PluginDeclaredVersion(t *testing.T) {
+	f := mustLoad(t, `
+version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: v1.36.11
+        out: gen
+      - local: protoc-gen-dart
+        out: lib
+`)
+	want := []config.Plugin{
+		{Local: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11", Out: "gen"},
+		{Local: "protoc-gen-dart", Out: "lib"},
+	}
+	if got := f.Generate[0].Plugins; !reflect.DeepEqual(got, want) {
+		t.Errorf("plugins:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestLoad_PluginVersionInvalid(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{
+			name: "version without module",
+			body: `
+version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-go
+        version: v1.36.11
+        out: gen
+`,
+			want: "version: v1.36.11 is declared without a module",
+		},
+		{
+			name: "module without version",
+			body: `
+version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        out: gen
+`,
+			want: "version: missing for plugin",
+		},
+		{
+			name: "inexact version",
+			body: `
+version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: latest
+        out: gen
+`,
+			want: "latest",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load(write(t, tc.body))
+			if err == nil {
+				t.Fatalf("Load: expected an error mentioning %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Load: error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+}

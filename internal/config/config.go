@@ -124,9 +124,28 @@ type Input struct {
 }
 
 // Plugin is one code generator invocation.
+//
+// A plugin either declares where it comes from or does not. Declaring it —
+// Module plus Version — makes the tool responsible for the binary: it installs
+// that exact version into its own cache and runs it, so the same manifest
+// generates the same bytes on every machine. Leaving both empty keeps the
+// older behaviour, a name looked up on PATH, which is not a nicety but a
+// necessity: not every plugin is a Go program, and the one Dart plugin of the
+// measured surface cannot be installed this way at all. What the tool cannot
+// manage it says it did not manage, rather than pretending.
 type Plugin struct {
-	// Local is the name of, or the path to, an executable plugin binary.
+	// Local is the name of, or the path to, an executable plugin binary. It
+	// stays the plugin's name even when Module is declared: it is what the
+	// report and the errors call it.
 	Local string `yaml:"local"`
+	// Module is the Go module path of the command that provides the plugin,
+	// as `go install` takes it. Empty means the binary comes from PATH.
+	Module string `yaml:"module"`
+	// Version is the version of Module to install. It must be exact: a
+	// floating version would put the manifest back in the business of
+	// generating different bytes on different days, which is the whole
+	// problem a declared version exists to remove.
+	Version string `yaml:"version"`
 	// Out is the directory the plugin writes to.
 	Out string `yaml:"out"`
 	// Opt are the plugin options. Accepts a single string or a list of strings.

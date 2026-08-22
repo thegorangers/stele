@@ -113,6 +113,9 @@ func (f *File) validate() error {
 			if p.Out == "" {
 				return fmt.Errorf("generate[%d].plugins[%d].out: missing for plugin %q", i, j, p.Local)
 			}
+			if err := p.validateSource(i, j); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -225,15 +228,57 @@ func (in *Input) UnmarshalYAML(n *yaml.Node) error {
 // UnmarshalYAML decodes a plugin, normalising opt to a list.
 func (p *Plugin) UnmarshalYAML(n *yaml.Node) error {
 	var aux struct {
-		Local string     `yaml:"local"`
-		Out   string     `yaml:"out"`
-		Opt   stringList `yaml:"opt"`
+		Local   string     `yaml:"local"`
+		Module  string     `yaml:"module"`
+		Version string     `yaml:"version"`
+		Out     string     `yaml:"out"`
+		Opt     stringList `yaml:"opt"`
 	}
 	if err := decodeStrict(n, &aux); err != nil {
 		return err
 	}
-	*p = Plugin{Local: aux.Local, Out: aux.Out, Opt: aux.Opt}
+	*p = Plugin{Local: aux.Local, Module: aux.Module, Version: aux.Version, Out: aux.Out, Opt: aux.Opt}
 	return nil
+}
+
+// validateSource checks the pair that says where a plugin binary comes from.
+//
+// The two halves are refused separately because they are different mistakes. A
+// version without a module asks for a version of nothing, and the tool would
+// silently run whatever PATH holds while the manifest claimed a version — the
+// exact drift this is here to end. A module without a version asks the tool to
+// choose, and any choice it made would be a choice the manifest does not
+// record.
+func (p *Plugin) validateSource(i, j int) error {
+	switch {
+	case p.Module == "" && p.Version == "":
+		return nil
+	case p.Module == "":
+		return fmt.Errorf("generate[%d].plugins[%d].version: %s is declared without a module; "+
+			"a version can only be honoured for a plugin the tool installs itself", i, j, p.Version)
+	case p.Version == "":
+		return fmt.Errorf("generate[%d].plugins[%d].version: missing for plugin %q; "+
+			"a declared module must name the exact version to install", i, j, p.Local)
+	case !exactVersion(p.Version):
+		return fmt.Errorf("generate[%d].plugins[%d].version: %q is not an exact version for plugin %q; "+
+			"write the version to install, such as v1.36.11, so that the manifest states what generated the code",
+			i, j, p.Version, p.Local)
+	}
+	return nil
+}
+
+// exactVersion reports whether v is a version `go install` resolves to exactly
+// one build. Anything the module system would resolve at run time — latest,
+// upgrade, patch, a branch name, a bare query — is refused.
+func exactVersion(v string) bool {
+	if !strings.HasPrefix(v, "v") {
+		return false
+	}
+	rest := v[1:]
+	if rest == "" || !(rest[0] >= '0' && rest[0] <= '9') {
+		return false
+	}
+	return strings.Count(v, ".") >= 2
 }
 
 // decodeStrict decodes a mapping node into out, rejecting any key that out
