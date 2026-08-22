@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -96,6 +97,9 @@ func (f *File) validate() error {
 					i, j, in.Module, strings.Join(modulePaths(f.Modules), ", "))
 			}
 		}
+		if err := g.Managed.validate(i); err != nil {
+			return err
+		}
 		for j, p := range g.Plugins {
 			if p.Local == "" {
 				return fmt.Errorf("generate[%d].plugins[%d].local: missing", i, j)
@@ -104,6 +108,35 @@ func (f *File) validate() error {
 				return fmt.Errorf("generate[%d].plugins[%d].out: missing for plugin %q", i, j, p.Local)
 			}
 		}
+	}
+	return nil
+}
+
+// validate checks the managed block of generate target i.
+func (m *Managed) validate(i int) error {
+	if m == nil {
+		return nil
+	}
+	if len(m.Override) == 0 {
+		// A managed block that asks for nothing is a config that reads as if
+		// it configured something. Saying so beats generating without it and
+		// leaving the author to find out from a diff.
+		return fmt.Errorf("generate[%d].managed.override: at least one override is required", i)
+	}
+	seen := make(map[string]bool, len(m.Override))
+	for j, o := range m.Override {
+		switch {
+		case o.FileOption == "":
+			return fmt.Errorf("generate[%d].managed.override[%d].file_option: missing", i, j)
+		case !slices.Contains(fileOptions, o.FileOption):
+			return fmt.Errorf("generate[%d].managed.override[%d].file_option: %s is not a file option this tool synthesises (known: %s)",
+				i, j, o.FileOption, strings.Join(fileOptions, ", "))
+		case o.Value == "":
+			return fmt.Errorf("generate[%d].managed.override[%d].value: missing for file option %s", i, j, o.FileOption)
+		case seen[o.FileOption]:
+			return fmt.Errorf("generate[%d].managed.override[%d].file_option: duplicate override for %s", i, j, o.FileOption)
+		}
+		seen[o.FileOption] = true
 	}
 	return nil
 }

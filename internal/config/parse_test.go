@@ -305,3 +305,107 @@ func TestLoad_ErrorNamesFile(t *testing.T) {
 		t.Fatalf("want an error mentioning %q, got: %v", p, err)
 	}
 }
+
+// A generate target may ask for managed-mode file options. The shape mirrors
+// the one measured on real configs: a list of overrides, each naming a file
+// option, an optional path selector and a value.
+func TestLoad_ManagedOverride(t *testing.T) {
+	f := mustLoad(t, `
+version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    managed:
+      override:
+        - file_option: go_package_prefix
+          path: acme
+          value: example.com/acme/gen
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-go
+        out: gen
+`)
+	got := f.Generate[0].Managed
+	if got == nil {
+		t.Fatal("managed block was dropped")
+	}
+	want := &config.Managed{Override: []config.Override{{
+		FileOption: "go_package_prefix",
+		Path:       "acme",
+		Value:      "example.com/acme/gen",
+	}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("managed =\n%#v\nwant\n%#v", got, want)
+	}
+
+	mc := got.Config()
+	if mc.GoPackagePrefix.Path != "acme" || mc.GoPackagePrefix.Value != "example.com/acme/gen" {
+		t.Fatalf("Config() = %#v, want the prefix override carried over", mc)
+	}
+}
+
+// A target with no managed block asks for no managed options at all: a nil
+// pointer, not an empty config that would silently rewrite every descriptor.
+func TestLoad_NoManagedBlockIsNil(t *testing.T) {
+	f := mustLoad(t, validConfig)
+	if f.Generate[0].Managed != nil {
+		t.Fatalf("managed = %#v, want nil when the block is absent", f.Generate[0].Managed)
+	}
+}
+
+func TestLoad_ManagedInvalid(t *testing.T) {
+	const head = "version: 1\nmodules:\n  - path: api\ngenerate:\n  - name: go\n    inputs:\n      - module: api\n    plugins:\n      - local: protoc-gen-go\n        out: gen\n    managed:\n"
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "unknown key inside managed",
+			yaml: head + "      disable: true\n      override: []\n",
+			want: "disable",
+		},
+		{
+			name: "unknown key inside override",
+			yaml: head + "      override:\n        - file_option: go_package_prefix\n          value: x\n          module: y\n",
+			want: "module",
+		},
+		{
+			name: "unknown file option",
+			yaml: head + "      override:\n        - file_option: java_package_prefix\n          value: x\n",
+			want: "java_package_prefix",
+		},
+		{
+			name: "override without file option",
+			yaml: head + "      override:\n        - value: x\n",
+			want: "generate[0].managed.override[0].file_option",
+		},
+		{
+			name: "override without value",
+			yaml: head + "      override:\n        - file_option: go_package_prefix\n",
+			want: "generate[0].managed.override[0].value",
+		},
+		{
+			name: "empty managed block",
+			yaml: head + "      override: []\n",
+			want: "generate[0].managed.override",
+		},
+		{
+			name: "duplicate file option",
+			yaml: head + "      override:\n        - file_option: go_package_prefix\n          value: x\n        - file_option: go_package_prefix\n          value: y\n",
+			want: "duplicate",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load(write(t, tc.yaml))
+			if err == nil {
+				t.Fatalf("want an error naming %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not name %q", err, tc.want)
+			}
+		})
+	}
+}
