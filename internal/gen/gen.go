@@ -111,7 +111,7 @@ func Run(ctx context.Context, opts Options) error {
 			mcfg = &c
 		}
 		for i, in := range t.Inputs {
-			files, err := selectFiles(graph, dir, in)
+			files, err := selectFiles(graph, cfg, dir, in)
 			if err != nil {
 				return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 			}
@@ -185,20 +185,29 @@ func selectTargets(cfg *config.File, names []string) ([]config.GenTarget, error)
 
 // selectFiles returns the import paths one input selects.
 //
-// Only files of the named module are candidates, and only files this manifest
-// owns: a dependency's files reach a plugin as imports of what was selected,
-// if at all.
-func selectFiles(g *resolve.Graph, dir string, in config.Input) ([]string, error) {
-	root := filepath.Clean(filepath.Join(dir, filepath.FromSlash(in.Module)))
+// A module input takes only files this manifest owns: a dependency's files
+// reach a plugin as imports of what was selected, if at all. A dep input takes
+// only the files of the module that dependency's entry named — the producer's
+// other roots are in the graph so that imports resolve, not because this
+// manifest asked to generate from them.
+func selectFiles(g *resolve.Graph, cfg *config.File, dir string, in config.Input) ([]string, error) {
+	root, subject, err := inputRoot(g, cfg, dir, in)
+	if err != nil {
+		return nil, err
+	}
+	// The origin is checked as well as the root, so that a fetched tree that
+	// happened to land on the same directory as this manifest's own could not
+	// pass files off as the wrong side's.
+	local := in.Dep == ""
 	var own []string
 	for _, p := range g.ImportPaths() {
 		f, ok := g.FileFor(p)
-		if ok && f.Origin.Git == "" && filepath.Clean(f.Root) == root {
+		if ok && (f.Origin.Git == "") == local && filepath.Clean(f.Root) == root {
 			own = append(own, p)
 		}
 	}
 	if len(own) == 0 {
-		return nil, fmt.Errorf("module %q contains no proto files", in.Module)
+		return nil, fmt.Errorf("%s contains no proto files", subject)
 	}
 	if len(in.Paths) == 0 {
 		return own, nil
@@ -223,10 +232,10 @@ func selectFiles(g *resolve.Graph, dir string, in config.Input) ([]string, error
 	}
 	if len(missed) > 0 {
 		// The commonest cause is a coordinate written relative to the
-		// workspace instead of the module root, and listing what the module
-		// does supply says so at a glance.
-		return nil, fmt.Errorf("paths matched no files: %s; module %q supplies: %s",
-			strings.Join(missed, ", "), in.Module, strings.Join(own, ", "))
+		// workspace, or to the producer's repository, instead of the module
+		// root, and listing what the module does supply says so at a glance.
+		return nil, fmt.Errorf("paths matched no files: %s; %s supplies: %s",
+			strings.Join(missed, ", "), subject, strings.Join(own, ", "))
 	}
 	out := make([]string, 0, len(keep))
 	for p := range keep {
@@ -234,6 +243,52 @@ func selectFiles(g *resolve.Graph, dir string, in config.Input) ([]string, error
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// inputRoot returns the directory an input's files must live under, and the
+// phrase naming it in an error.
+//
+// The dependency case deliberately resolves nothing of its own: it looks the
+// dependency up in the graph the lock already pinned. A second way to reach a
+// producer's tree is a second way for a generated tree and an exported tree to
+// come from different commits.
+func inputRoot(g *resolve.Graph, cfg *config.File, dir string, in config.Input) (string, string, error) {
+	if in.Dep == "" {
+		root := filepath.Clean(filepath.Join(dir, filepath.FromSlash(in.Module)))
+		return root, fmt.Sprintf("module %q", in.Module), nil
+	}
+	var d config.Dep
+	for _, cand := range cfg.Deps {
+		if cand.Name == in.Dep {
+			d = cand
+			break
+		}
+	}
+	if d.Name == "" {
+		// config validation rejects this; the check is here so that a caller
+		// constructing a File in code cannot reach a nil dependency silently.
+		return "", "", fmt.Errorf("dependency %q is not declared in deps", in.Dep)
+	}
+	for _, o := range g.Deps() {
+		if o.Git != d.Git || o.Ref != d.Ref {
+			continue
+		}
+		root, err := resolve.ModuleRoot(o.Dir, d.Module)
+		if err != nil {
+			return "", "", err
+		}
+		return root, fmt.Sprintf("dependency %q, module %q", d.Name, moduleName(d.Module)), nil
+	}
+	return "", "", fmt.Errorf("dependency %q was not resolved", in.Dep)
+}
+
+// moduleName renders a dep's module for a message, spelling the repository
+// root the way the manifest may omit it.
+func moduleName(m string) string {
+	if m == "" {
+		return "."
+	}
+	return m
 }
 
 // includeImports promotes every file of the request's closure to a target.

@@ -356,3 +356,110 @@ func TestRun_ManagedOverrideReachesThePlugin(t *testing.T) {
 	}
 	t.Fatal("the target file was not in the request")
 }
+
+// depWorld builds a consumer whose manifest is given verbatim, next to a
+// producer that owns two modules — api, holding the files a consumer would
+// generate from, and internal, which it does not.
+func depWorld(t *testing.T, manifest string) (string, resolve.FetchFunc) {
+	t.Helper()
+
+	producer := t.TempDir()
+	write(t, producer, "stele.yaml", "version: 1\nmodules:\n  - path: api\n  - path: internal\n")
+	write(t, producer, "api/dep/v1/b.proto", "syntax = \"proto3\";\npackage dep.v1;\nimport \"shared/v1/s.proto\";\nmessage B { shared.v1.S s = 1; }\n")
+	write(t, producer, "api/other/v1/o.proto", "syntax = \"proto3\";\npackage other.v1;\nmessage O { int32 n = 1; }\n")
+	write(t, producer, "internal/shared/v1/s.proto", "syntax = \"proto3\";\npackage shared.v1;\nmessage S { string v = 1; }\n")
+
+	consumer := t.TempDir()
+	write(t, consumer, "stele.yaml", manifest)
+
+	fetch := func(_ context.Context, git, ref string) (string, string, error) {
+		return producer, "0123456789abcdef0123456789abcdef01234567", nil
+	}
+	return consumer, fetch
+}
+
+// depManifest is a manifest that owns no protos at all: no modules, one
+// dependency, and one target generating from it.
+func depManifest(plugins, input string) string {
+	return `version: 1
+deps:
+  - name: dep
+    git: https://example.test/dep.git
+    ref: main
+    module: api
+generate:
+  - name: text
+    inputs:
+` + input + "    plugins:\n" + plugins
+}
+
+// The real-world case: a repository that owns nothing, whose every generated
+// line comes from somebody else's repository. Two of the measured repositories
+// look exactly like this, and today they cannot be expressed at all.
+func TestRun_GeneratesFromADependencyWithNoLocalModules(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := depWorld(t, depManifest(plugin(s.bin, "gen"), "      - dep: dep\n"))
+	if err := run(t, dir, fetch, gen.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	got := s.requests(t)[0].GetFileToGenerate()
+	want := []string{"dep/v1/b.proto", "other/v1/o.proto"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("file_to_generate = %v, want the dependency's module %v", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "gen", "dep", "v1", "b.txt")); err != nil {
+		t.Fatalf("the plugin's file was not written: %v", err)
+	}
+}
+
+// The dependency's own imports are still imports, not targets, unless asked
+// for — the same rule a local input obeys.
+func TestRun_DependencyInputImportsFollowTheSameRule(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := depWorld(t, depManifest(plugin(s.bin, "gen"), "      - dep: dep\n"))
+	if err := run(t, dir, fetch, gen.Options{IncludeImports: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.requests(t)[0].GetFileToGenerate(); !slices.Contains(got, "shared/v1/s.proto") {
+		t.Fatalf("file_to_generate = %v; with --include-imports the imports must be in it", got)
+	}
+}
+
+// paths on a dependency input are relative to the root of the dependency's
+// module, exactly as they are on the dep entry itself.
+func TestRun_DependencyInputPathsAreRelativeToTheDepsModuleRoot(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := depWorld(t, depManifest(plugin(s.bin, "gen"), "      - dep: dep\n        paths: [dep/v1]\n"))
+	if err := run(t, dir, fetch, gen.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.requests(t)[0].GetFileToGenerate(); !slices.Equal(got, []string{"dep/v1/b.proto"}) {
+		t.Fatalf("file_to_generate = %v, want the narrowed selection", got)
+	}
+}
+
+// A path written in the coordinates of the producer's repository rather than
+// of its module matches nothing, and that is an error naming the dependency.
+func TestRun_DependencyInputUnmatchedPathIsAnError(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := depWorld(t, depManifest(plugin(s.bin, "gen"), "      - dep: dep\n        paths: [api/dep/v1]\n"))
+	err := run(t, dir, fetch, gen.Options{})
+	if err == nil || !strings.Contains(err.Error(), "api/dep/v1") {
+		t.Fatalf("want an error naming the unmatched path, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "dep/v1/b.proto") {
+		t.Fatalf("error %q does not say what the dependency's module does supply", err)
+	}
+}
+
+// Only the module the dep entry asked for is a candidate. The producer's other
+// roots are in the graph so that imports resolve; generating from them would
+// take code the manifest never asked for.
+func TestRun_DependencyInputDoesNotReachTheProducersOtherModules(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := depWorld(t, depManifest(plugin(s.bin, "gen"), "      - dep: dep\n        paths: [shared/v1]\n"))
+	err := run(t, dir, fetch, gen.Options{})
+	if err == nil || !strings.Contains(err.Error(), "shared/v1") {
+		t.Fatalf("want an error: shared/v1 is outside the module the dep entry names, got %v", err)
+	}
+}

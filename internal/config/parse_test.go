@@ -210,9 +210,19 @@ func TestLoad_Invalid(t *testing.T) {
 			want: "version",
 		},
 		{
-			name: "no modules",
-			yaml: "version: 1\n",
-			want: "modules",
+			name: "input with neither module nor dep",
+			yaml: "version: 1\nmodules:\n  - path: api\ngenerate:\n  - name: go\n    inputs:\n      - paths: [example/v1]\n    plugins:\n      - local: protoc-gen-go\n        out: gen\n",
+			want: "generate[0].inputs[0]",
+		},
+		{
+			name: "input with both module and dep",
+			yaml: "version: 1\nmodules:\n  - path: api\ndeps:\n  - name: example\n    git: github.com/acme/example\n    ref: v1\ngenerate:\n  - name: go\n    inputs:\n      - module: api\n        dep: example\n    plugins:\n      - local: protoc-gen-go\n        out: gen\n",
+			want: "generate[0].inputs[0]",
+		},
+		{
+			name: "input references undeclared dep",
+			yaml: "version: 1\nmodules:\n  - path: api\ndeps:\n  - name: example\n    git: github.com/acme/example\n    ref: v1\ngenerate:\n  - name: go\n    inputs:\n      - dep: other\n    plugins:\n      - local: protoc-gen-go\n        out: gen\n",
+			want: "\"other\" is not declared in deps (declared: example)",
 		},
 		{
 			name: "module without path",
@@ -260,11 +270,6 @@ func TestLoad_Invalid(t *testing.T) {
 			want: "generate[0].plugins",
 		},
 		{
-			name: "input without module",
-			yaml: "version: 1\nmodules:\n  - path: api\ngenerate:\n  - name: go\n    inputs:\n      - paths: [example/v1]\n    plugins:\n      - local: protoc-gen-go\n        out: gen\n",
-			want: "generate[0].inputs[0].module",
-		},
-		{
 			name: "input references undeclared module",
 			yaml: "version: 1\nmodules:\n  - path: api\ngenerate:\n  - name: go\n    inputs:\n      - module: other\n    plugins:\n      - local: protoc-gen-go\n        out: gen\n",
 			want: "\"other\"",
@@ -299,7 +304,7 @@ func TestLoad_Invalid(t *testing.T) {
 
 // Every error must be prefixed with the file path so the user knows what to open.
 func TestLoad_ErrorNamesFile(t *testing.T) {
-	p := write(t, "version: 1\n")
+	p := write(t, "version: 1\nmodules:\n  - path: api\n  - path: api\n")
 	_, err := config.Load(p)
 	if err == nil || !strings.Contains(err.Error(), p) {
 		t.Fatalf("want an error mentioning %q, got: %v", p, err)
@@ -407,5 +412,37 @@ func TestLoad_ManagedInvalid(t *testing.T) {
 				t.Fatalf("error %q does not name %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A consumer that owns no protos at all declares no modules: every generated
+// line comes from somebody else's repository. Requiring a module here would
+// make two of the measured repositories unable to migrate.
+func TestLoad_ManifestWithNoModulesOfItsOwn(t *testing.T) {
+	const y = `version: 1
+deps:
+  - name: example
+    git: github.com/acme/example
+    ref: v1
+    module: api
+generate:
+  - name: go
+    inputs:
+      - dep: example
+        paths: [acme/v1]
+    plugins:
+      - local: protoc-gen-go
+        out: gen
+`
+	f, err := config.Load(write(t, y))
+	if err != nil {
+		t.Fatalf("a manifest that owns nothing must load: %v", err)
+	}
+	if len(f.Modules) != 0 {
+		t.Fatalf("modules = %v, want none", f.Modules)
+	}
+	in := f.Generate[0].Inputs[0]
+	if in.Dep != "example" || in.Module != "" {
+		t.Fatalf("input = %+v, want the dependency selector set and the module empty", in)
 	}
 }

@@ -95,12 +95,31 @@ func (m *Managed) Config() managed.Config {
 	return c
 }
 
-// Input selects files of a local module for generation.
+// Input selects the files one generation request is built from.
+//
+// It names either a local module of this repository or a declared dependency,
+// and exactly one of the two. The second form exists because a consumer that
+// owns no protos at all is not a corner case: two repositories of the measured
+// surface generate every line they have from somebody else's repository, and
+// without it their manifests cannot express a generate target.
+//
+// A dependency input takes the module the deps entry already named, and does
+// not narrow it further. The producer's other module roots are in the resolved
+// graph so that imports resolve, not because this manifest asked for them; a
+// second module selector here would let a target generate code from a root no
+// deps entry ever requested, which is exactly the widening the deps entry
+// exists to prevent. Narrowing within that module is what paths is for.
 type Input struct {
-	// Module is the path of a module declared in Modules.
+	// Module is the path of a module declared in Modules. Mutually exclusive
+	// with Dep.
 	Module string `yaml:"module"`
-	// Paths narrows the selection, in coordinates relative to the root of that
-	// module. Accepts a single string or a list of strings.
+	// Dep is the name of a dependency declared in Deps. Mutually exclusive
+	// with Module.
+	Dep string `yaml:"dep"`
+	// Paths narrows the selection, in coordinates relative to the root of the
+	// referenced module — this repository's module for Module, the producer's
+	// module named by the deps entry for Dep. Accepts a single string or a
+	// list of strings.
 	Paths []string `yaml:"paths"`
 }
 

@@ -275,6 +275,19 @@ func (g *Graph) addModule(origin Origin, modulePath string) error {
 	})
 }
 
+// ModuleRoot returns the directory a module path names inside a materialised
+// tree. It exists so that a caller holding an Origin and a module path — the
+// generator selecting the files of a dependency, for one — computes that
+// directory the same way resolution did, instead of growing a second, subtly
+// different notion of where a module root is.
+func ModuleRoot(treeDir, modulePath string) (string, error) {
+	rel, err := cleanModulePath(modulePath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(filepath.Join(treeDir, filepath.FromSlash(rel))), nil
+}
+
 // cleanModulePath normalises a module path and refuses one that would leave
 // the tree it is relative to.
 func cleanModulePath(p string) (string, error) {

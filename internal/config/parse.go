@@ -42,9 +42,9 @@ func (f *File) validate() error {
 	case f.Version != Version:
 		return fmt.Errorf("version: %d is not supported; expected %d", f.Version, Version)
 	}
-	if len(f.Modules) == 0 {
-		return fmt.Errorf("modules: at least one module is required")
-	}
+	// A manifest is not required to declare a module. A consumer that owns no
+	// protos declares none, and every input of its generate targets names a
+	// dependency instead.
 
 	declared := make(map[string]bool, len(f.Modules))
 	for i, m := range f.Modules {
@@ -89,12 +89,18 @@ func (f *File) validate() error {
 		targets[g.Name] = true
 
 		for j, in := range g.Inputs {
-			if in.Module == "" {
-				return fmt.Errorf("generate[%d].inputs[%d].module: missing", i, j)
-			}
-			if !declared[in.Module] {
+			switch {
+			case in.Module == "" && in.Dep == "":
+				return fmt.Errorf("generate[%d].inputs[%d]: one of module or dep is required", i, j)
+			case in.Module != "" && in.Dep != "":
+				return fmt.Errorf("generate[%d].inputs[%d]: module %q and dep %q are mutually exclusive; an input selects from one place",
+					i, j, in.Module, in.Dep)
+			case in.Module != "" && !declared[in.Module]:
 				return fmt.Errorf("generate[%d].inputs[%d].module: %q is not declared in modules (declared: %s)",
 					i, j, in.Module, strings.Join(modulePaths(f.Modules), ", "))
+			case in.Dep != "" && !depNames[in.Dep]:
+				return fmt.Errorf("generate[%d].inputs[%d].dep: %q is not declared in deps (declared: %s)",
+					i, j, in.Dep, strings.Join(depNamesOf(f.Deps), ", "))
 			}
 		}
 		if err := g.Managed.validate(i); err != nil {
@@ -139,6 +145,14 @@ func (m *Managed) validate(i int) error {
 		seen[o.FileOption] = true
 	}
 	return nil
+}
+
+func depNamesOf(ds []Dep) []string {
+	out := make([]string, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, d.Name)
+	}
+	return out
 }
 
 func modulePaths(ms []Module) []string {
@@ -198,12 +212,13 @@ func (d *Dep) UnmarshalYAML(n *yaml.Node) error {
 func (in *Input) UnmarshalYAML(n *yaml.Node) error {
 	var aux struct {
 		Module string     `yaml:"module"`
+		Dep    string     `yaml:"dep"`
 		Paths  stringList `yaml:"paths"`
 	}
 	if err := decodeStrict(n, &aux); err != nil {
 		return err
 	}
-	*in = Input{Module: aux.Module, Paths: aux.Paths}
+	*in = Input{Module: aux.Module, Dep: aux.Dep, Paths: aux.Paths}
 	return nil
 }
 
