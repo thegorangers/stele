@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/thegorangers/stele/internal/lockfile"
@@ -190,20 +191,66 @@ func TestLoad_RejectsUnsupportedVersion(t *testing.T) {
 	}
 }
 
-// A symlink cannot be pinned: its target is outside the hashed content, so the
-// recorded hashes would keep matching while what is read changes.
-func TestSnapshot_RefusesSymlink(t *testing.T) {
+// A symlink is recorded by its target text and never followed. Refusing it
+// outright, which this once did, makes real repositories unpinnable: the first
+// external dependency this tool was pointed at carries one in a directory that
+// holds no protos at all.
+func TestSnapshot_RecordsSymlinkWithoutFollowingIt(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "a.proto", "original")
 	if err := os.Symlink("a.proto", filepath.Join(dir, "link.proto")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	_, err := lockfile.Snapshot("dep", dir)
+	e := snapshot(t, "dep", dir)
+	got, ok := e.Files["link.proto"]
+	if !ok {
+		t.Fatalf("the link must be recorded, got %v", e.Files)
+	}
+	// Recorded as a link, not as its target's contents: otherwise replacing a
+	// file with a link to identical bytes would go unnoticed, and a link out
+	// of the tree would launder foreign content into a green check.
+	if got == e.Files["a.proto"] {
+		t.Fatal("a link must not be recorded as the hash of what it points at")
+	}
+	if !strings.HasPrefix(got, "symlink:") {
+		t.Fatalf("a link's record must be distinguishable from a file's, got %q", got)
+	}
+}
+
+// Repointing a link is a change, even though no file's bytes moved.
+func TestVerify_RejectsRepointedSymlink(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.proto", "original")
+	write(t, dir, "b.proto", "original")
+	link := filepath.Join(dir, "link.proto")
+	if err := os.Symlink("a.proto", link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	e := snapshot(t, "dep", dir)
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("b.proto", link); err != nil {
+		t.Fatal(err)
+	}
+	err := lockfile.Verify(e, dir)
 	if err == nil {
-		t.Fatal("a symlink in a pinned tree must be an error")
+		t.Fatal("a repointed link must not verify")
 	}
 	if !strings.Contains(err.Error(), "link.proto") {
 		t.Fatalf("error must name the link, got %v", err)
+	}
+}
+
+// Something with no content at all still cannot be pinned.
+func TestSnapshot_RefusesFifo(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.proto", "original")
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o644); err != nil {
+		t.Skipf("fifos unavailable: %v", err)
+	}
+	if _, err := lockfile.Snapshot("dep", dir); err == nil {
+		t.Fatal("a fifo in a pinned tree must be an error")
 	}
 }
 

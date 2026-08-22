@@ -216,11 +216,19 @@ func Verify(entry Entry, dir string) error {
 // hashTree walks dir and returns the sha256 of every file in it, keyed by
 // slash-separated relative path.
 //
-// Only regular files are accepted. A symlink is refused rather than followed or
-// skipped: its target lies outside the hashed content, so the recorded hashes
-// would keep matching while what is actually read changes, and a link may point
-// out of the tree entirely. Every other irregular entry — a device, a socket, a
-// fifo — is refused for the same reason: it has no content to pin. File modes
+// A symlink is recorded by the TEXT OF ITS TARGET and never followed. Following
+// it would let a link out of the tree launder foreign content into a green
+// check; refusing it outright — which this did first — makes real repositories
+// unpinnable, and the first external dependency the tool was pointed at carries
+// a symlink in a directory that has nothing to do with protos. Recording the
+// target keeps both threats covered: the bytes behind the link are not part of
+// what is pinned, an added or repointed link contradicts the record, and a link
+// can never satisfy an import in the first place, because resolution reads only
+// regular files. The prefix keeps a link's record distinct from any file's, so
+// that replacing one with the other is a disagreement rather than a match.
+//
+// Every other irregular entry — a device, a socket, a fifo — is still refused:
+// it has no content to pin and does not occur in a repository tree. File modes
 // are deliberately not recorded; nothing in a fetched proto tree is executed,
 // so a mode carries no meaning worth failing a build over.
 func hashTree(dir string) (map[string]string, error) {
@@ -237,15 +245,23 @@ func hashTree(dir string) (map[string]string, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if !d.Type().IsRegular() {
-			return fmt.Errorf("%s is not a regular file (%s); a pinned tree may contain files only",
+		switch {
+		case d.Type().IsRegular():
+			sum, err := hashing.File(path)
+			if err != nil {
+				return err
+			}
+			files[slashed] = sum
+		case d.Type()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			files[slashed] = symlinkPrefix + hashing.Bytes([]byte(filepath.ToSlash(target)))
+		default:
+			return fmt.Errorf("%s is not a regular file (%s); a pinned tree may contain files and symbolic links only",
 				slashed, kindOf(d.Type()))
 		}
-		sum, err := hashing.File(path)
-		if err != nil {
-			return err
-		}
-		files[slashed] = sum
 		return nil
 	})
 	if err != nil {
@@ -253,6 +269,10 @@ func hashTree(dir string) (map[string]string, error) {
 	}
 	return files, nil
 }
+
+// symlinkPrefix marks a recorded symlink target so that it cannot collide with
+// the hash of a file's contents.
+const symlinkPrefix = "symlink:"
 
 func kindOf(m fs.FileMode) string {
 	switch {

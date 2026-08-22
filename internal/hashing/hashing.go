@@ -34,3 +34,11 @@ func File(path string) (string, error) {
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// Bytes returns the hex sha256 of bytes already in hand. It is here rather
+// than at its one call site so that there stays exactly one answer to what a
+// sha256 in this tool looks like.
+func Bytes(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
