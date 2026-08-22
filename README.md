@@ -32,6 +32,11 @@ will quietly close later.
 - **An unknown configuration key or command-line flag is an error**, naming the
   key. There is no silent skipping. This is a load-bearing property: a config
   that is quietly half-understood produces output that is quietly wrong.
+- **A migration that leaves anything undecided fails.** `stele migrate` exits
+  non-zero and names every part of a buf configuration it could not translate —
+  a schema registry reference, an unpinned `buf export`, a vendored path no
+  export accounts for. A manifest that looks migrated and is not is worse than
+  no manifest.
 - **An empty result is an error.** Neither `export` nor `generate` exits
   successfully having produced zero files; an empty `paths` match reports which
   path matched nothing.

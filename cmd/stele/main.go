@@ -21,6 +21,7 @@ Usage:
 Commands:
   export      write proto files into a directory tree, laid out by import path
   generate    run code generation plugins over this repository's protos
+  migrate     translate a buf configuration into stele.yaml
 
 Run "stele <command> --help" for the flags of a command.
 `
@@ -55,6 +56,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runExport(ctx, args[1:], stdout, stderr)
 	case "generate":
 		return runGenerate(ctx, args[1:], stdout, stderr)
+	case "migrate":
+		return runMigrate(ctx, args[1:], stdout, stderr)
 	default:
 		if strings.HasPrefix(cmd, "-") {
 			// A flag before the command is not silently ignored: it would

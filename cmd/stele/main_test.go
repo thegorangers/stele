@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/thegorangers/stele/internal/config"
 )
 
 func TestCLI(t *testing.T) {
@@ -34,6 +38,12 @@ func TestCLI(t *testing.T) {
 		{name: "generate positional argument refused", args: []string{"generate", "x"}, wantErr: `unexpected argument "x"`},
 		{name: "generate is listed in the usage", args: nil, help: true, wantHelp: "generate"},
 		{name: "positional argument refused", args: []string{"export", "--output", "o", "x"}, wantErr: `unexpected argument "x"`},
+		{name: "migrate help", args: []string{"migrate", "--help"}, help: true},
+		{name: "migrate documents write", args: []string{"migrate", "--help"}, help: true, wantHelp: "--write"},
+		{name: "migrate documents dir", args: []string{"migrate", "--help"}, help: true, wantHelp: "--dir"},
+		{name: "migrate unknown flag is named", args: []string{"migrate", "--nosuch"}, wantErr: "not defined: -nosuch"},
+		{name: "migrate positional argument refused", args: []string{"migrate", "x"}, wantErr: `unexpected argument "x"`},
+		{name: "migrate is listed in the usage", args: nil, help: true, wantHelp: "migrate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errOut strings.Builder
@@ -62,3 +72,47 @@ func TestCLI(t *testing.T) {
 }
 
 var _ io.Writer = (*strings.Builder)(nil)
+
+// TestMigrateWritesAndRefuses covers the two things the command must not get
+// wrong: it prints a manifest the tool itself can load, and an incomplete
+// migration fails rather than leaving a plausible file behind.
+func TestMigrateWritesAndRefuses(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("buf.yaml", "version: v2\nmodules: [{path: api}]\n")
+	write("buf.gen.yaml", "version: v2\nplugins: [{local: protoc-gen-go, out: gen}]\ninputs: [{directory: api}]\n")
+
+	var out, errOut strings.Builder
+	if err := run(context.Background(), []string{"migrate", "--dir", dir}, &out, &errOut); err != nil {
+		t.Fatalf("migrate: %v (%s)", err, errOut.String())
+	}
+	if !strings.Contains(out.String(), "version: 1") {
+		t.Fatalf("stdout carries no manifest:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stele.yaml")); !os.IsNotExist(err) {
+		t.Fatal("migrate wrote a file without --write")
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if err := run(context.Background(), []string{"migrate", "--dir", dir, "--write"}, &out, &errOut); err != nil {
+		t.Fatalf("migrate --write: %v", err)
+	}
+	if _, err := config.Load(filepath.Join(dir, "stele.yaml")); err != nil {
+		t.Fatalf("the written manifest does not load: %v", err)
+	}
+
+	// An incomplete migration must fail: a manifest that looks migrated and
+	// is not is worse than no manifest.
+	write("Makefile", "vendor:\n\t@buf export buf.build/example/schemas --output=third_party/proto\n")
+	out.Reset()
+	errOut.Reset()
+	err := run(context.Background(), []string{"migrate", "--dir", dir}, &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "buf.build/example/schemas") {
+		t.Fatalf("want a failure naming the untranslated reference, got %v", err)
+	}
+}
