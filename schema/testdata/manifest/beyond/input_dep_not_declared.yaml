@@ -1,0 +1,14 @@
+# beyond: an input may only name a dependency declared in deps. Same reason as
+# input_module_not_declared: a cross-reference within the document.
+version: 1
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.0.0
+generate:
+  - name: go
+    inputs:
+      - dep: other
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go

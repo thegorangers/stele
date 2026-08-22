@@ -1,0 +1,9 @@
+# stricter: yaml.v3 coerces any scalar into a string, so an unquoted numeric
+# sha is parsed as the string it was written as. The schema keeps the
+# documented rule that a sha is a string.
+version: 1
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.4.0
+    sha: 12345678901234567890

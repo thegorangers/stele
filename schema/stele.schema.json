@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.schema.json",
+  "title": "stele.yaml",
+  "description": "The stele manifest: the proto modules this repository owns, the ones it takes from elsewhere, and the code it generates from them.\n\nThis schema is not a second description of the format. A test in this repository runs one corpus of example manifests through both this schema and the real parser and fails on any disagreement, so what you read here is what the tool enforces — with the documented exceptions marked \"the parser also checks\" below, which are rules JSON Schema cannot express.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "description": "Version of the manifest format. Only 1 exists.",
+      "type": "integer",
+      "const": 1
+    },
+    "modules": {
+      "description": "The proto modules owned by this repository. Each path is an import root: imports are resolved relative to it.\n\nA manifest is not required to declare one. A repository that owns no protos declares none, and every generate input names a dependency instead.",
+      "type": ["array", "null"],
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/module" }
+    },
+    "deps": {
+      "description": "Proto modules taken from other repositories.\n\nThe parser also checks: no two entries may share a name.",
+      "type": ["array", "null"],
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/dep" }
+    },
+    "generate": {
+      "description": "The code generation targets.\n\nThe parser also checks: no two targets may share a name.",
+      "type": ["array", "null"],
+      "items": { "$ref": "#/$defs/target" }
+    }
+  },
+  "$defs": {
+    "module": {
+      "title": "module",
+      "description": "A proto module owned by this repository.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "description": "Directory of the module, relative to the manifest. It is the import root: a file under it is imported by its path relative to this directory.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["proto", "internal/proto"]
+        }
+      }
+    },
+    "dep": {
+      "title": "dependency",
+      "description": "A proto module taken from another repository.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "git", "ref"],
+      "properties": {
+        "name": {
+          "description": "Identifies the dependency inside this manifest. A generate input refers to it by this name.",
+          "type": "string",
+          "minLength": 1
+        },
+        "git": { "$ref": "#/$defs/address" },
+        "ref": {
+          "description": "The commit SHA to pin to or, for runs that update the lock, a branch or a tag to resolve.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["v1.4.0", "main", "9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d"]
+        },
+        "module": {
+          "description": "The module of the producer to take, relative to its repository root. Empty takes the producer's default module.",
+          "type": "string"
+        },
+        "paths": {
+          "$ref": "#/$defs/stringList",
+          "description": "Narrows what is taken, in coordinates relative to the root of the producer's module. Accepts a single string or a list of strings. Absent takes the whole module."
+        }
+      }
+    },
+    "address": {
+      "title": "git address",
+      "description": "Where a dependency comes from, in one of three forms:\n\n  https://git.example.com/acme/example.git\n  ssh://git@git.example.com/acme/group/example.git\n  gh:acme/example            (a shorthand)\n\nThe shorthand prefixes are configurable. Two are built in — gh: expands to github.com and glab: to gitlab.com, both over HTTPS — and a caller that configures prefixes replaces those defaults entirely, so a manifest may legitimately use a prefix this schema does not know. The transport is part of the host configuration, not of the shorthand, so the same manifest works from a workstation that clones over SSH and from CI that clones over HTTPS.\n\nThere is no git:// form on purpose: it is neither encrypted nor authenticated, and major hosts have disabled it.\n\nThe parser also checks: each segment of the repository path must be a real path element, so \".\" and \"..\" are refused.",
+      "type": "string",
+      "oneOf": [
+        {
+          "title": "https:// or ssh:// URL",
+          "pattern": "^(?:https|ssh)://(?:[^/@\\s]+@)?[^/@\\s]+/[^/\\s]+(?:/[^/\\s]+)+/?$"
+        },
+        {
+          "title": "configured shorthand",
+          "pattern": "^(?:gh|glab):[^/\\s]+(?:/[^/\\s]+)+$"
+        }
+      ],
+      "examples": [
+        "gh:acme/example",
+        "glab:acme/group/example",
+        "https://git.example.com/acme/example.git",
+        "ssh://git@git.example.com/acme/group/example.git"
+      ]
+    },
+    "target": {
+      "title": "generate target",
+      "description": "One code generation target: what to generate from, and what to run over it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "inputs", "plugins"],
+      "properties": {
+        "name": {
+          "description": "Identifies the target on the command line.",
+          "type": "string",
+          "minLength": 1
+        },
+        "inputs": {
+          "description": "The files to generate from. At least one: a target with no inputs generates from nothing.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/input" }
+        },
+        "plugins": {
+          "description": "The code generators to run over those files. At least one: a target with no plugins produces nothing.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/plugin" }
+        },
+        "managed": {
+          "description": "Asks for managed-mode file options to be synthesised into the descriptors handed to the plugins. Absent means absent: no options are synthesised at all.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["override"],
+          "properties": {
+            "override": {
+              "description": "The file options to synthesise. At least one — a managed block that overrides nothing reads as if it configured something.\n\nAt most one, too, and only because exactly one file option is currently permitted: the parser refuses the same option twice, and with one permitted spelling a second entry can only be a repeat.",
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": { "$ref": "#/$defs/override" }
+            }
+          }
+        }
+      }
+    },
+    "input": {
+      "title": "input",
+      "description": "Selects the files one generation request is built from. It names either a local module of this repository or a declared dependency, and exactly one of the two.\n\nThe dependency form is not a corner case: a repository that owns no protos generates every line it has from somebody else's. A dependency input takes the module the deps entry already named and does not narrow it further; narrowing within that module is what paths is for.\n\nThe parser also checks: module must be a path declared in modules, and dep a name declared in deps.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "module": {
+          "description": "The path of a module declared in modules. Mutually exclusive with dep.",
+          "type": "string"
+        },
+        "dep": {
+          "description": "The name of a dependency declared in deps. Mutually exclusive with module.",
+          "type": "string"
+        },
+        "paths": {
+          "$ref": "#/$defs/stringList",
+          "description": "Narrows the selection, in coordinates relative to the root of the referenced module — this repository's module for module, the producer's module named by the deps entry for dep. Accepts a single string or a list of strings."
+        }
+      },
+      "oneOf": [
+        {
+          "title": "an input from a module of this repository",
+          "required": ["module"],
+          "properties": { "module": { "minLength": 1 }, "dep": { "maxLength": 0 } }
+        },
+        {
+          "title": "an input from a declared dependency",
+          "required": ["dep"],
+          "properties": { "dep": { "minLength": 1 }, "module": { "maxLength": 0 } }
+        }
+      ]
+    },
+    "plugin": {
+      "title": "plugin",
+      "description": "One code generator invocation.\n\nA plugin either declares where it comes from or does not. Declaring it — module plus version — makes the tool responsible for the binary: it installs that exact version into its own cache and runs it, so the same manifest generates the same bytes on every machine. Leaving both out keeps the older behaviour, a name looked up on PATH, which is a necessity rather than a nicety: not every plugin is a Go program, and some cannot be installed this way at all. What the tool cannot manage, it says it did not manage.\n\nHalf a declaration is refused, and the two halves are different mistakes. A version without a module asks for a version of nothing while the tool silently runs whatever PATH holds. A module without a version asks the tool to choose, and any choice it made would be one the manifest does not record.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local", "out"],
+      "properties": {
+        "local": {
+          "description": "The name of, or the path to, an executable plugin binary. It stays the plugin's name even when module is declared: it is what the report and the errors call it.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["protoc-gen-go", "protoc-gen-go-grpc"]
+        },
+        "module": {
+          "description": "The Go module path of the command that provides the plugin, as `go install` takes it. Omitted means the binary comes from PATH.",
+          "type": "string",
+          "examples": ["google.golang.org/protobuf/cmd/protoc-gen-go"]
+        },
+        "version": {
+          "description": "The version of module to install. It must be exact — a version `go install` resolves to one build, written out in full, such as v1.36.12. Anything the module system would resolve at run time (latest, upgrade, patch, a branch name, a bare query) puts the manifest back in the business of generating different bytes on different days.\n\nThe pattern here checks the shape the parser checks: a leading v, a digit, and at least two dots. It does not check that the version exists, which only `go install` can say.",
+          "type": "string",
+          "examples": ["v1.36.12", "v1.36.12-rc.1"]
+        },
+        "out": {
+          "description": "The directory the plugin writes to, relative to the manifest.",
+          "type": "string",
+          "minLength": 1
+        },
+        "opt": {
+          "$ref": "#/$defs/stringList",
+          "description": "The plugin options, passed through as given. Accepts a single string or a list of strings.",
+          "examples": ["paths=source_relative"]
+        }
+      },
+      "oneOf": [
+        {
+          "title": "a plugin taken from PATH",
+          "properties": { "module": { "maxLength": 0 }, "version": { "maxLength": 0 } }
+        },
+        {
+          "title": "a plugin the tool installs, at an exact version",
+          "required": ["module", "version"],
+          "properties": {
+            "module": { "minLength": 1 },
+            "version": { "pattern": "^v[0-9][^.]*\\.[^.]*\\..*$" }
+          }
+        }
+      ]
+    },
+    "override": {
+      "title": "managed override",
+      "description": "One managed-mode file option.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_option", "value"],
+      "properties": {
+        "file_option": {
+          "description": "The option to synthesise. The list is short on purpose: an option accepted here but not applied would be a promise the generated bytes do not keep.",
+          "enum": ["go_package_prefix"]
+        },
+        "path": {
+          "description": "Limits the override to the files under it, in the coordinates an import statement uses. Omitted applies it to every file.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value of the option.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["example.com/acme/gen/go"]
+        }
+      }
+    },
+    "stringList": {
+      "description": "A single string or a list of strings. Both forms occur in hand-written manifests, and refusing the scalar would be a gratuitous incompatibility.",
+      "anyOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } },
+        { "type": "null" }
+      ]
+    }
+  }
+}

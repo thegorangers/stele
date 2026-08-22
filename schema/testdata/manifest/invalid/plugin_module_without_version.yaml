@@ -1,0 +1,12 @@
+# invalid: a declared module must name the exact version to install.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        out: gen/go

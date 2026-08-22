@@ -1,0 +1,4 @@
+# invalid: version 2 does not exist; only version 1 is understood.
+version: 2
+modules:
+  - path: proto

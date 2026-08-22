@@ -1,0 +1,4 @@
+# invalid: a module entry must name its path.
+version: 1
+modules:
+  - path: ""

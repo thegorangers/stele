@@ -1,0 +1,11 @@
+# invalid: an input selects nothing unless it names a module or a dep.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - paths: acme/example/v1
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go

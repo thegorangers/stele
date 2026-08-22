@@ -1,0 +1,6 @@
+# invalid: "plugins" is not a top-level key; plugins live under a generate target.
+version: 1
+modules:
+  - path: proto
+plugins:
+  - local: protoc-gen-go

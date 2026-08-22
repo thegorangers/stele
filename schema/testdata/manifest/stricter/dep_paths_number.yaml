@@ -1,0 +1,11 @@
+# stricter: paths is documented as a string or a list of strings, and the
+# schema says so. The parser is looser than its own documentation: yaml.v3
+# coerces any YAML scalar into a string, so 3 arrives as "3". The schema keeps
+# the documented rule, because a schema that accepted every scalar everywhere
+# would stop telling an editor anything about types at all.
+version: 1
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.0.0
+    paths: 3

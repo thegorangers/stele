@@ -1,0 +1,6 @@
+# invalid: the lock format version is missing.
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.4.0
+    sha: 9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d

@@ -1,0 +1,13 @@
+# invalid: v1.36 names a series, not a build.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: v1.36
+        out: gen/go

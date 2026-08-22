@@ -1,0 +1,16 @@
+# invalid: an input selects from one place; module and dep are exclusive.
+version: 1
+modules:
+  - path: proto
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.0.0
+generate:
+  - name: go
+    inputs:
+      - module: proto
+        dep: example
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go

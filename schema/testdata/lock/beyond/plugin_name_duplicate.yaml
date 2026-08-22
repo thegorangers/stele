@@ -1,0 +1,7 @@
+# beyond: two plugin records share a name and differ elsewhere.
+version: 1
+plugins:
+  - name: protoc-gen-go
+    version: v1.36.11
+  - name: protoc-gen-go
+    version: v1.36.12

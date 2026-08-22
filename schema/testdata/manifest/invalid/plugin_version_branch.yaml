@@ -1,0 +1,13 @@
+# invalid: a branch name is not an exact version.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: vmain
+        out: gen/go

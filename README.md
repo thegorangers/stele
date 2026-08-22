@@ -92,6 +92,67 @@ Authentication is delegated entirely to your system `git`: SSH agents,
 credential helpers and `insteadOf` rewrites work because it is real `git` doing
 the fetching.
 
+## Editor support
+
+`stele.yaml` and `stele.lock` have JSON Schemas in [`schema/`](schema/). Point
+your editor at one and you get completion, hovers and inline errors before you
+run anything.
+
+With the [YAML language server](https://github.com/redhat-developer/yaml-language-server)
+— what VS Code, Neovim, Helix and JetBrains editors use — add one line at the
+top of the file:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.schema.json
+version: 1
+```
+
+and, in `stele.lock`, the same line with `stele.lock.schema.json`. A checkout can
+point at the local copy instead, which needs no network:
+
+```yaml
+# yaml-language-server: $schema=./schema/stele.schema.json
+```
+
+Editors that map schemas by filename can be configured once instead. For VS
+Code, in `settings.json`:
+
+```json
+"yaml.schemas": {
+  "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.schema.json": "stele.yaml",
+  "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.lock.schema.json": "stele.lock"
+}
+```
+
+The schemas are [draft 2020-12](https://json-schema.org/draft/2020-12).
+
+### The schema is held to the parser, not written beside it
+
+A schema maintained by hand next to the code it describes is a document that
+drifts, and a description that has drifted is worse than none: it is believed.
+So the two are tied together by a test rather than by discipline.
+`schema/testdata` holds one corpus of example manifests and locks — valid ones,
+invalid ones each stating why — and `TestSchemaAgreesWithParser` runs every one
+of them through both the schema and the real loading path, failing on any
+disagreement in either direction. Adding a field to the parser without adding it
+to the schema turns that test red, and so does the reverse.
+
+Two kinds of disagreement are declared rather than fixed, and each one is a file
+in the corpus that says so:
+
+- **Rules a schema cannot express** (`testdata/*/beyond/`). Cross-references
+  within one document — an input naming a module declared above it, two
+  dependencies sharing a name — have no JSON Schema spelling. The schema says so
+  in the `description` of the field concerned, in the form "the parser also
+  checks: …", rather than staying silent and letting an editor imply the rule
+  does not exist.
+- **Where the schema is stricter than the parser** (`testdata/*/stricter/`).
+  YAML's implicit typing means `name: 12` reaches a string field as `"12"`; the
+  underlying YAML library coerces any scalar. The schema keeps the documented
+  rule that a string is a string, because a schema that accepted every scalar
+  in every field would tell an editor nothing about types at all. Manifests
+  written the documented way are unaffected.
+
 ## Requirements
 
 - Go 1.26 or newer to build.

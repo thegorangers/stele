@@ -1,0 +1,4 @@
+# invalid: version is a string; the format version is a number, not a label.
+version: "1"
+modules:
+  - path: proto

@@ -1,0 +1,10 @@
+# invalid: a generate target must be nameable on the command line.
+version: 1
+modules:
+  - path: proto
+generate:
+  - inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go

@@ -1,0 +1,12 @@
+version: 1
+deps:
+  - name: example
+    git: glab:acme/group/example
+    ref: v2.0.1
+generate:
+  - name: go
+    inputs:
+      - dep: example
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go

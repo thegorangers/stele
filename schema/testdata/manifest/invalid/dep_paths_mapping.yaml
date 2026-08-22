@@ -1,0 +1,8 @@
+# invalid: paths takes a string or a list of strings, never a mapping.
+version: 1
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.0.0
+    paths:
+      include: acme/example/v1

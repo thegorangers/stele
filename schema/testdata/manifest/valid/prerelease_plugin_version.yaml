@@ -1,0 +1,14 @@
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+        paths:
+          - acme/example/v1
+    plugins:
+      - local: protoc-gen-go
+        module: example.com/acme/protoc-gen-go
+        version: v1.36.12-rc.1
+        out: gen/go

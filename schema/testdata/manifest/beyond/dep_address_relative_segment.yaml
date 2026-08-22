@@ -1,0 +1,8 @@
+# beyond: the repository part has a relative segment. The address pattern
+# checks the shape of an address, not the meaning of each segment; the address
+# parser rejects "." and "..".
+version: 1
+deps:
+  - name: example
+    git: https://git.example.com/acme/..
+    ref: v1.0.0

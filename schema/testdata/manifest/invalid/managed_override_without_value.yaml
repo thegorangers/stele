@@ -1,0 +1,14 @@
+# invalid: an override must state the value to synthesise.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go
+    managed:
+      override:
+        - file_option: go_package_prefix

@@ -1,0 +1,10 @@
+# beyond: two dependencies share a name. uniqueItems compares whole items, and
+# these differ in ref, so only the parser sees the collision.
+version: 1
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.0.0
+  - name: example
+    git: gh:acme/example
+    ref: v2.0.0

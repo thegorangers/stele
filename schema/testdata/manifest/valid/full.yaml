@@ -1,0 +1,47 @@
+version: 1
+modules:
+  - path: proto
+  - path: internal/proto
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.4.0
+    module: proto
+    paths:
+      - acme/example/v1
+      - acme/example/v2
+  - name: other
+    git: https://git.example.com/acme/other.git
+    ref: 9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d
+  - name: internal
+    git: ssh://git@git.example.com/acme/group/internal.git
+    ref: main
+    module: schemas
+    paths: acme/internal/v1
+generate:
+  - name: go
+    inputs:
+      - module: proto
+      - dep: example
+        paths: acme/example/v1
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: v1.36.12
+        out: gen/go
+        opt: paths=source_relative
+      - local: protoc-gen-dart
+        out: gen/dart
+        opt:
+          - generate_kythe_info=false
+    managed:
+      override:
+        - file_option: go_package_prefix
+          value: example.com/acme/gen/go
+          path: acme/example/v1
+  - name: dart
+    inputs:
+      - dep: internal
+    plugins:
+      - local: protoc-gen-dart
+        out: gen/dart

@@ -1,0 +1,5 @@
+# invalid: a recorded plugin without a version records nothing.
+version: 1
+plugins:
+  - name: protoc-gen-go
+    module: google.golang.org/protobuf/cmd/protoc-gen-go

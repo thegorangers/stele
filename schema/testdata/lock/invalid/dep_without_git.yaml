@@ -1,0 +1,6 @@
+# invalid: an entry must record where the dependency came from.
+version: 1
+deps:
+  - name: example
+    ref: v1.4.0
+    sha: 9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d

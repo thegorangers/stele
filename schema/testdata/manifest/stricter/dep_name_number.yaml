@@ -1,0 +1,8 @@
+# stricter: the same coercion applies to every string field, not only to the
+# ones that take a list. A dependency named 12 is parsed as the name "12". The
+# schema insists a string be written as one.
+version: 1
+deps:
+  - name: 12
+    git: gh:acme/example
+    ref: v1.0.0

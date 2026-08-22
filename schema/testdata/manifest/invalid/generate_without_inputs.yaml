@@ -1,0 +1,10 @@
+# invalid: a target with no inputs generates from nothing.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs: []
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go

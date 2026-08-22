@@ -1,0 +1,5 @@
+# invalid: the same module path is declared twice.
+version: 1
+modules:
+  - path: proto
+  - path: proto

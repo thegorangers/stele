@@ -1,0 +1,15 @@
+# invalid: java_package is not a file option this tool synthesises.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go
+    managed:
+      override:
+        - file_option: java_package
+          value: com.example

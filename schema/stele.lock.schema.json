@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.lock.schema.json",
+  "title": "stele.lock",
+  "description": "The pinned record of what a build consumed. It is written by the tool and read by people, most often in a merge request, which is why it is small: one line of address per dependency plus the commit it resolved to, and one line per plugin.\n\nA git commit SHA is already a cryptographic hash of the content, so a pinned SHA yields byte-identical files from any remote or git refuses to hand them over. There are no per-file hashes here; a lock on disk that still carries them is read, and the fields are marked deprecated below.\n\nAs with the manifest, a test in this repository runs one corpus of examples through both this schema and the real parser and fails on any disagreement.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "description": "Version of the lock format. It is a separate number from the manifest version: the two evolve independently, and a lock is a generated file while a manifest is written by hand.",
+      "type": "integer",
+      "const": 1
+    },
+    "deps": {
+      "description": "The pinned dependencies, sorted by name, so that re-running a resolution that changed nothing produces an empty diff.\n\nThis is the full transitive closure, flat and not nested: resolution follows a producer's own manifest, so most of the files that reach the compiler come from repositories the root manifest never names. Whether an entry is direct is deliberately not recorded — the manifest already says so, and a second copy of that fact could only drift.\n\nThe parser also checks: no two entries may share a name.",
+      "type": ["array", "null"],
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/entry" }
+    },
+    "plugins": {
+      "description": "The code generation plugins the run went through, sorted by name. They are recorded for the same reason the dependencies are: a plugin's version decides the bytes it emits, so a lock that recorded only the inputs would pin half of what produced the output.\n\nThe parser also checks: no two records may share a name.",
+      "type": ["array", "null"],
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/plugin" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "title": "pinned dependency",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "git", "ref", "sha"],
+      "properties": {
+        "name": {
+          "description": "The dependency, as the manifest that requested it names it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "git": {
+          "description": "The address of the producing repository, copied from the manifest that requested it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "ref": {
+          "description": "The branch, tag or SHA the pin was resolved from. It is kept beside the SHA because a squashed merge can make a pinned commit unreachable, and the report has to be able to name the branch the pin came from instead of passing on a raw git failure.",
+          "type": "string",
+          "minLength": 1
+        },
+        "sha": {
+          "description": "The full commit the dependency resolved to. It is the pin: it names the content, not a label somebody can move onto other content.\n\nIn practice this is a 40-character hex SHA-1, and that is what the tool writes. It is not constrained to that here because the parser does not constrain it either, and a schema that refused a lock the tool would load would be the drift this schema exists to avoid.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d"]
+        },
+        "modules": {
+          "description": "Belongs to locks written before the per-file hashes were dropped. Parsed so that a lock already on disk keeps working, read by nothing, and left out the next time the lock is written.",
+          "deprecated": true,
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "manifest": {
+          "description": "Belongs to locks written before the per-file hashes were dropped. See modules.",
+          "deprecated": true,
+          "type": "string"
+        },
+        "files": {
+          "description": "Belongs to locks written before the per-file hashes were dropped. See modules.",
+          "deprecated": true,
+          "type": ["object", "null"],
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "plugin": {
+      "title": "recorded plugin",
+      "description": "One code generation plugin the run went through.\n\nAn empty module is the record's most useful state: it says the tool did not choose this binary and cannot promise the next machine will run the same one. The version is then whatever the binary reported about itself, which for a plugin that is not a Go program is \"unknown\" — an observation, not a pin.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "description": "The manifest's own spelling of the plugin.",
+          "type": "string",
+          "minLength": 1
+        },
+        "module": {
+          "description": "The Go module the plugin was installed from, when the tool installed it. Absent for a plugin taken from PATH.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The installed version, or the version observed on PATH.",
+          "type": "string",
+          "minLength": 1,
+          "examples": ["v1.36.12", "unknown"]
+        }
+      }
+    }
+  }
+}

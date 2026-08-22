@@ -1,0 +1,5 @@
+# invalid: a dependency must say which ref to resolve.
+version: 1
+deps:
+  - name: example
+    git: gh:acme/example

@@ -1,0 +1,6 @@
+# invalid: the sha is the pin; without it the entry records nothing reproducible.
+version: 1
+deps:
+  - name: example
+    git: gh:acme/example
+    ref: v1.4.0

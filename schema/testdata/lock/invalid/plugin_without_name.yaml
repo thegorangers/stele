@@ -1,0 +1,4 @@
+# invalid: a recorded plugin must carry the manifest's spelling of its name.
+version: 1
+plugins:
+  - version: v1.36.12

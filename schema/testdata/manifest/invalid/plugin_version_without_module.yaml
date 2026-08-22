@@ -1,0 +1,12 @@
+# invalid: a version can only be honoured for a plugin the tool installs itself.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        version: v1.36.12
+        out: gen/go

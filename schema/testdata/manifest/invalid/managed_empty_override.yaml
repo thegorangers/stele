@@ -1,0 +1,14 @@
+# invalid: a managed block that overrides nothing reads as if it configured
+# something.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go
+    managed:
+      override: []

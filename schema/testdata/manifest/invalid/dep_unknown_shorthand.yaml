@@ -1,0 +1,6 @@
+# invalid: "svn" is not a configured shorthand prefix, and it is not a scheme.
+version: 1
+deps:
+  - name: example
+    git: svn:acme/example
+    ref: v1.0.0

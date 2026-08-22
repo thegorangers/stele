@@ -1,0 +1,6 @@
+# invalid: "branch" is not a field of a dependency; the field is "ref".
+version: 1
+deps:
+  - name: example
+    git: gh:acme/example
+    branch: main

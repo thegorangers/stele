@@ -1,0 +1,5 @@
+# invalid: a dependency must carry a name; inputs refer to it by that name.
+version: 1
+deps:
+  - git: gh:acme/example
+    ref: v1.0.0

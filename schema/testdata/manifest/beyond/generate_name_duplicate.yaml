@@ -1,0 +1,18 @@
+# beyond: two generate targets share a name, and the items differ elsewhere, so
+# uniqueItems cannot see it.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go2

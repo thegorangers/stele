@@ -1,0 +1,10 @@
+# invalid: a plugin must be named; the name is what reports and errors call it.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - out: gen/go

@@ -1,0 +1,13 @@
+# beyond: an input may only name a module declared above it. JSON Schema has no
+# way to compare a value against a list built elsewhere in the same document,
+# so the schema accepts this and config.Load rejects it.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: other/proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go

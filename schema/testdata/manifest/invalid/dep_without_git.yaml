@@ -1,0 +1,5 @@
+# invalid: a dependency must say which repository it comes from.
+version: 1
+deps:
+  - name: example
+    ref: v1.0.0

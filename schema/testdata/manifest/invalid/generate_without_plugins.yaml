@@ -1,0 +1,9 @@
+# invalid: a target with no plugins produces nothing.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins: []

@@ -1,0 +1,19 @@
+# invalid: the same file option is overridden twice; the two entries describe
+# different output, so the second cannot simply win.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go
+    managed:
+      override:
+        - file_option: go_package_prefix
+          value: example.com/acme/gen/go
+        - file_option: go_package_prefix
+          value: example.com/acme/other
+          path: acme/example/v1

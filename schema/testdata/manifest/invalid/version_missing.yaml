@@ -1,0 +1,3 @@
+# invalid: version is missing; the manifest format version is mandatory.
+modules:
+  - path: proto
