@@ -41,6 +41,16 @@ type Options struct {
 	// written. It exists for callers that must not depend on, or touch, a
 	// working tree they do not own, such as the acceptance harness.
 	NoLock bool
+	// Plugins are the code generation plugins this run resolved, with the
+	// versions it resolved them to. They are pinned by the same rules as the
+	// dependencies: honoured without Update, rewritten with it.
+	Plugins []lockfile.Plugin
+	// PluginsAuthoritative says whether Plugins is the manifest's whole set.
+	// A run restricted to some targets knows about some plugins only, and
+	// must not delete the record of the ones it did not run; a full run
+	// replaces the set, which is the only way a plugin that is no longer used
+	// ever leaves the lock.
+	PluginsAuthoritative bool
 }
 
 // Resolve resolves the closure of opts.Manifest.
@@ -73,7 +83,10 @@ func Resolve(ctx context.Context, opts Options) (*resolve.Graph, error) {
 		if err != nil {
 			return nil, err
 		}
-		return graph, write(graph, opts.LockPath)
+		return graph, write(graph, mergePlugins(lock, opts), opts.LockPath)
+	}
+	if err := verifyPlugins(lock, opts); err != nil {
+		return nil, err
 	}
 
 	p := &pinned{lock: lock, inner: opts.Fetch, index: index(lock), used: map[string]bool{}}
@@ -108,9 +121,75 @@ func load(path string) (*lockfile.Lock, error) {
 	return l, nil
 }
 
+// mergePlugins decides the plugin set a rewritten lock carries.
+//
+// An authoritative run states the whole set. A partial one states only what it
+// ran, and the rest of the previous record is carried over unchanged rather
+// than dropped: a lock that lost entries every time somebody generated one
+// target would record less the more it was used.
+func mergePlugins(prev *lockfile.Lock, opts Options) []lockfile.Plugin {
+	if opts.PluginsAuthoritative || prev == nil {
+		return opts.Plugins
+	}
+	out := append([]lockfile.Plugin(nil), opts.Plugins...)
+	named := make(map[string]bool, len(out))
+	for _, p := range out {
+		named[p.Name] = true
+	}
+	for _, p := range prev.Plugins {
+		if !named[p.Name] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// verifyPlugins checks the plugins this run resolved against the ones the lock
+// records.
+//
+// A lock with no plugin section at all is honoured as it stands: it was
+// written before plugins were recorded, and failing every such run would
+// punish the repositories this feature is meant to help. A lock that does
+// record plugins is enforced, including for a plugin taken from PATH — an
+// unmanaged plugin whose version moved is precisely the drift that produced
+// different bytes in CI and on a laptop with nothing to show for it.
+func verifyPlugins(lock *lockfile.Lock, opts Options) error {
+	if len(lock.Plugins) == 0 {
+		return nil
+	}
+	recorded := make(map[string]lockfile.Plugin, len(lock.Plugins))
+	for _, p := range lock.Plugins {
+		recorded[p.Name] = p
+	}
+	for _, got := range opts.Plugins {
+		want, ok := recorded[got.Name]
+		if !ok {
+			return fmt.Errorf("plugin %q is not recorded in %s; re-resolve with --update", got.Name, opts.LockPath)
+		}
+		if want.Version == got.Version && want.Module == got.Module {
+			continue
+		}
+		return fmt.Errorf("plugin %q: %s records %s, this run resolved %s; "+
+			"declare module and version in the manifest so the tool installs a fixed one, "+
+			"or re-resolve with --update to record what is here",
+			got.Name, opts.LockPath, describe(want), describe(got))
+	}
+	return nil
+}
+
+// describe renders a recorded plugin for an error message, naming the module
+// when there is one so that a managed and an unmanaged entry cannot read the
+// same.
+func describe(p lockfile.Plugin) string {
+	if p.Module == "" {
+		return p.Version + " from PATH"
+	}
+	return p.Module + "@" + p.Version
+}
+
 // write records the closure that was just resolved.
-func write(g *resolve.Graph, path string) error {
-	lock := &lockfile.Lock{Version: lockfile.Version}
+func write(g *resolve.Graph, plugins []lockfile.Plugin, path string) error {
+	lock := &lockfile.Lock{Version: lockfile.Version, Plugins: plugins}
 	for _, o := range g.Deps() {
 		entry, err := lockfile.Snapshot(o.Name, o.Dir)
 		if err != nil {
