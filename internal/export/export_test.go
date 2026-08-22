@@ -425,3 +425,120 @@ func TestExport_UnreachableLockedCommitIsExplained(t *testing.T) {
 		}
 	}
 }
+
+// vendoringWorld builds the shape every export in the fleet this tool was
+// measured against actually has: a consumer pointing the command at somebody
+// else's repository. The producer declares two module roots — its own contract
+// and the vendored tree it has not stopped carrying yet — because that is what
+// a producer that has not migrated looks like, and because only one of them is
+// what the consumer asked for.
+func vendoringWorld(t *testing.T) (string, resolve.FetchFunc) {
+	t.Helper()
+
+	producer := t.TempDir()
+	write(t, producer, "stele.yaml", "version: 1\nmodules:\n  - path: api\n  - path: vendor\n")
+	write(t, producer, "api/dep/v1/b.proto", `syntax = "proto3";
+package dep.v1;
+import "third/v1/c.proto";
+message B { third.v1.C c = 1; }
+`)
+	write(t, producer, "api/dep/other/v1/d.proto", `syntax = "proto3";
+package dep.other.v1;
+message D { int32 n = 1; }
+`)
+	write(t, producer, "vendor/third/v1/c.proto", `syntax = "proto3";
+package third.v1;
+message C { int32 n = 1; }
+`)
+
+	consumer := t.TempDir()
+	write(t, consumer, "stele.yaml", `version: 1
+modules:
+  - path: api
+deps:
+  - name: dep
+    git: https://example.test/dep.git
+    ref: main
+    module: api
+    paths: [dep/v1]
+`)
+	write(t, consumer, "api/own/v1/a.proto", `syntax = "proto3";
+package own.v1;
+message A { int32 n = 1; }
+`)
+
+	fetch := func(_ context.Context, git, ref string) (string, string, error) {
+		return producer, "0123456789abcdef0123456789abcdef01234567", nil
+	}
+	return consumer, fetch
+}
+
+// The dependency entry's own paths do the narrowing: it already states which
+// part of the producer this manifest asked for, and repeating it on the
+// command line would be a second copy of that fact.
+func TestExport_DepExportsTheDependencysOwnModule(t *testing.T) {
+	dir, fetch := vendoringWorld(t)
+	out := t.TempDir()
+
+	if err := export.Run(context.Background(), export.Options{
+		Dir:            dir,
+		Output:         out,
+		Dep:            "dep",
+		ExcludeImports: true,
+		Fetch:          fetch,
+		NoLock:         true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := tree(t, out)
+	want := []string{"dep/v1/b.proto"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("exported %v, want %v", got, want)
+	}
+}
+
+// A producer's vendored tree is reachable so that its own imports resolve. It
+// is not what the consumer asked to vendor, and exporting it would put a third
+// party's files under a name that names the producer.
+func TestExport_DepDoesNotExportTheProducersOtherRoots(t *testing.T) {
+	dir, fetch := vendoringWorld(t)
+	out := t.TempDir()
+
+	if err := export.Run(context.Background(), export.Options{
+		Dir:    dir,
+		Output: out,
+		Dep:    "dep",
+		Fetch:  fetch,
+		NoLock: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// third/v1/c.proto is here as an IMPORT of what was selected, which is
+	// what the other tool does too; dep/other/v1/d.proto, which lives in the
+	// same module but outside the dependency's paths, is not.
+	got := tree(t, out)
+	want := []string{"dep/v1/b.proto", "third/v1/c.proto"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("exported %v, want %v", got, want)
+	}
+}
+
+func TestExport_UnknownDepIsAnError(t *testing.T) {
+	dir, fetch := vendoringWorld(t)
+
+	err := export.Run(context.Background(), export.Options{
+		Dir:    dir,
+		Output: t.TempDir(),
+		Dep:    "nosuch",
+		Fetch:  fetch,
+		NoLock: true,
+	})
+	if err == nil {
+		t.Fatal("a dependency the manifest does not declare must be an error")
+	}
+	if !strings.Contains(err.Error(), "nosuch") || !strings.Contains(err.Error(), "dep") {
+		t.Fatalf("the error must name what was asked for and what is available, got %v", err)
+	}
+}

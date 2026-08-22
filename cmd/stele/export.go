@@ -18,6 +18,10 @@ Usage:
 
 Flags:
   --output DIR        directory to write the tree into (required)
+  --dep NAME          export the files of this dependency instead of this
+                      manifest's own, narrowed by that dependency's own paths.
+                      This is how a producer's contract is vendored: the export
+                      is pointed at somebody else's repository.
   --path PATH         limit the export to PATH; repeatable. PATH is relative to
                       the root of the module that supplies the file — the same
                       coordinates an import statement uses — and NOT to the
@@ -55,6 +59,7 @@ func runExport(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		output   = fs.String("output", "", "directory to write the tree into")
 		dir      = fs.String("dir", ".", "directory holding stele.yaml")
 		cacheDir = fs.String("cache-dir", "", "where fetched repositories are kept")
+		dep      = fs.String("dep", "", "export the files of this dependency")
 		exclude  = fs.Bool("exclude-imports", false, "write only the selected files")
 		update   = fs.Bool("update", false, "re-resolve every ref and rewrite stele.lock")
 		paths    repeated
@@ -89,6 +94,7 @@ func runExport(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	return export.Run(ctx, export.Options{
 		Dir:            *dir,
 		Output:         *output,
+		Dep:            *dep,
 		Paths:          paths,
 		ExcludeImports: *exclude,
 		Update:         *update,

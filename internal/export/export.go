@@ -56,6 +56,15 @@ type Options struct {
 	// then narrowed here, because an import path has to mean one file for the
 	// whole build regardless of what any one command chose to emit.
 	Paths []string
+	// Dep names a dependency of the manifest whose files are to be exported
+	// instead of this manifest's own. It is what makes vendoring a producer's
+	// contract expressible: the command being replaced is pointed at somebody
+	// else's repository, never at the caller's own, and every such invocation
+	// in the fleet this tool was measured against is of that shape. The
+	// selection is the dependency entry's own `paths`, because that entry
+	// already says which part of the producer this manifest asked for;
+	// Paths narrows further within it.
+	Dep string
 	// ExcludeImports emits only the selected files, leaving the files they
 	// import to whoever consumes the output.
 	ExcludeImports bool
@@ -114,7 +123,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	selected, err := selectFiles(graph, opts.Paths)
+	selected, err := selectFiles(cfg, graph, opts.Dep, opts.Paths)
 	if err != nil {
 		return err
 	}
@@ -134,34 +143,119 @@ func Run(ctx context.Context, opts Options) error {
 	return write(graph, selected, opts.Output)
 }
 
-// selectFiles returns the import paths this manifest's own modules supply,
-// narrowed to paths.
+// selectFiles returns the import paths to write, narrowed to paths.
 //
-// Only the root manifest's files are candidates. A dependency's files reach
-// the output as imports of what was selected, if at all; exporting them
-// because they happen to be resolvable would make the output depend on the
-// closure rather than on what this repository asked for.
-func selectFiles(g *resolve.Graph, paths []string) ([]string, error) {
-	var own []string
-	for _, p := range g.ImportPaths() {
-		f, ok := g.FileFor(p)
-		if ok && f.Origin.Git == "" {
-			own = append(own, p)
+// Without a dependency named, only the root manifest's files are candidates. A
+// dependency's files reach the output as imports of what was selected, if at
+// all; exporting them because they happen to be resolvable would make the
+// output depend on the closure rather than on what this repository asked for.
+//
+// With one named, the candidates are that dependency's files and only those:
+// its own modules', not those of the producers it in turn depends on, which
+// reach the output as imports or not at all — the same rule, applied one
+// repository further out.
+func selectFiles(cfg *config.File, g *resolve.Graph, dep string, paths []string) ([]string, error) {
+	var candidates []string
+	var scope string
+	if dep == "" {
+		for _, p := range g.ImportPaths() {
+			f, ok := g.FileFor(p)
+			if ok && f.Origin.Git == "" {
+				candidates = append(candidates, p)
+			}
+		}
+		scope = "this manifest's modules"
+		if len(candidates) == 0 && len(paths) == 0 {
+			return nil, errors.New("export: this manifest's modules contain no proto files")
+		}
+	} else {
+		d, err := findDep(cfg, dep)
+		if err != nil {
+			return nil, err
+		}
+		candidates, err = depFiles(g, d)
+		if err != nil {
+			return nil, err
+		}
+		scope = fmt.Sprintf("module %q of dependency %q", d.Module, d.Name)
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("export: %s contains no proto files", scope)
+		}
+		// The dependency entry already states which part of the producer this
+		// manifest asked for. Applying it here rather than making the caller
+		// repeat it on the command line keeps one statement of that fact.
+		candidates, err = narrow(candidates, d.Paths, scope+": paths")
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	if len(paths) == 0 {
-		if len(own) == 0 {
-			return nil, errors.New("export: this manifest's modules contain no proto files")
-		}
-		return own, nil
+		return candidates, nil
 	}
+	return narrow(candidates, paths, "--path")
+}
 
+// findDep returns the dependency the manifest declares under name.
+func findDep(cfg *config.File, name string) (config.Dep, error) {
+	names := make([]string, 0, len(cfg.Deps))
+	for _, d := range cfg.Deps {
+		if d.Name == name {
+			return d, nil
+		}
+		names = append(names, d.Name)
+	}
+	if len(names) == 0 {
+		return config.Dep{}, fmt.Errorf("export: --dep %q: this manifest declares no dependencies", name)
+	}
+	return config.Dep{}, fmt.Errorf("export: --dep %q: this manifest declares: %s", name, strings.Join(names, ", "))
+}
+
+// depFiles returns the import paths supplied by the requested module of one
+// direct dependency.
+//
+// A file qualifies on two counts, and both are needed. The origin must be that
+// dependency, so that a producer reached only transitively is not exported by
+// a name the root manifest never gave it; and the import root must be the
+// module the dependency entry asked for, because resolution deliberately adds
+// every module root a producer declares — including the vendored tree it has
+// not stopped carrying yet — and those are somebody else's files, reachable so
+// that imports resolve, not files this manifest asked to vendor.
+func depFiles(g *resolve.Graph, d config.Dep) ([]string, error) {
+	var out []string
+	for _, p := range g.ImportPaths() {
+		f, ok := g.FileFor(p)
+		if !ok || f.Origin.Name != d.Name || f.Origin.Git != d.Git {
+			continue
+		}
+		root, err := resolve.ModuleRoot(f.Origin.Dir, d.Module)
+		if err != nil {
+			return nil, err
+		}
+		if filepath.Clean(f.Root) != root {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// narrow keeps the candidates a path selects, and refuses a path that selects
+// none.
+//
+// Naming what is available is not decoration: the single most likely cause is
+// a coordinate written relative to the workspace instead of the module root,
+// and seeing the available paths says so at a glance.
+func narrow(candidates, paths []string, what string) ([]string, error) {
+	if len(paths) == 0 {
+		return candidates, nil
+	}
 	matched := make(map[string]bool, len(paths))
-	keep := make(map[string]bool, len(own))
+	keep := make(map[string]bool, len(candidates))
 	for _, raw := range paths {
 		want := path.Clean(filepath.ToSlash(strings.TrimSpace(raw)))
-		for _, p := range own {
+		for _, p := range candidates {
 			if p == want || strings.HasPrefix(p, want+"/") {
 				matched[raw] = true
 				keep[p] = true
@@ -176,11 +270,8 @@ func selectFiles(g *resolve.Graph, paths []string) ([]string, error) {
 		}
 	}
 	if len(missed) > 0 {
-		// Naming what is available is not decoration: the single most likely
-		// cause is a coordinate written relative to the workspace instead of
-		// the module root, and seeing the available paths says so at a glance.
-		return nil, fmt.Errorf("export: --path matched no files: %s; this manifest's modules supply: %s",
-			strings.Join(missed, ", "), strings.Join(own, ", "))
+		return nil, fmt.Errorf("export: %s matched no files: %s; available: %s",
+			what, strings.Join(missed, ", "), strings.Join(candidates, ", "))
 	}
 
 	out := make([]string, 0, len(keep))
