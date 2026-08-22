@@ -25,6 +25,14 @@ func TestCLI(t *testing.T) {
 		{name: "output is required", args: []string{"export"}, wantErr: "--output is required"},
 		{name: "update is accepted", args: []string{"export", "--update"}, wantErr: "--output is required"},
 		{name: "update is documented", args: []string{"export", "--help"}, help: true, wantHelp: "--update"},
+		{name: "generate help", args: []string{"generate", "--help"}, help: true},
+		{name: "generate documents include-imports", args: []string{"generate", "--help"}, help: true, wantHelp: "--include-imports"},
+		{name: "generate documents update", args: []string{"generate", "--help"}, help: true, wantHelp: "--update"},
+		{name: "generate documents dir", args: []string{"generate", "--help"}, help: true, wantHelp: "--dir"},
+		{name: "generate documents cache-dir", args: []string{"generate", "--help"}, help: true, wantHelp: "--cache-dir"},
+		{name: "generate unknown flag is named", args: []string{"generate", "--nosuch"}, wantErr: "not defined: -nosuch"},
+		{name: "generate positional argument refused", args: []string{"generate", "x"}, wantErr: `unexpected argument "x"`},
+		{name: "generate is listed in the usage", args: nil, help: true, wantHelp: "generate"},
 		{name: "positional argument refused", args: []string{"export", "--output", "o", "x"}, wantErr: `unexpected argument "x"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
