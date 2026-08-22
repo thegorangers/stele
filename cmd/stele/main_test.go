@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/thegorangers/stele/internal/config"
+	"github.com/thegorangers/stele/internal/report"
 )
 
 func TestCLI(t *testing.T) {
@@ -34,6 +37,8 @@ func TestCLI(t *testing.T) {
 		{name: "generate documents update", args: []string{"generate", "--help"}, help: true, wantHelp: "--update"},
 		{name: "generate documents dir", args: []string{"generate", "--help"}, help: true, wantHelp: "--dir"},
 		{name: "generate documents cache-dir", args: []string{"generate", "--help"}, help: true, wantHelp: "--cache-dir"},
+		{name: "version is listed in the usage", args: nil, help: true, wantHelp: "version"},
+		{name: "generate documents report", args: []string{"generate", "--help"}, help: true, wantHelp: "--report"},
 		{name: "generate unknown flag is named", args: []string{"generate", "--nosuch"}, wantErr: "not defined: -nosuch"},
 		{name: "generate positional argument refused", args: []string{"generate", "x"}, wantErr: `unexpected argument "x"`},
 		{name: "generate is listed in the usage", args: nil, help: true, wantHelp: "generate"},
@@ -115,4 +120,126 @@ func TestMigrateWritesAndRefuses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "buf.build/example/schemas") {
 		t.Fatalf("want a failure naming the untranslated reference, got %v", err)
 	}
+}
+
+// TestEmitReport: the summary is always said out loud, and --report puts the
+// machine-readable copy where it was asked for. Both halves matter — the
+// stderr line is what a reader sees, the file is what a later run is diffed
+// against.
+func TestEmitReport(t *testing.T) {
+	rep := report.Build(nil)
+
+	t.Run("summary to stderr, nothing to stdout", func(t *testing.T) {
+		var out, errOut strings.Builder
+		if err := emitReport(rep, "", &out, &errOut); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(errOut.String(), "stele") {
+			t.Errorf("summary does not name stele:\n%s", errOut.String())
+		}
+		if out.Len() != 0 {
+			t.Errorf("stdout was written to without --report: %q", out.String())
+		}
+	})
+
+	t.Run("file", func(t *testing.T) {
+		var out, errOut strings.Builder
+		path := filepath.Join(t.TempDir(), "sub", "report.json")
+		if err := emitReport(rep, path, &out, &errOut); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct {
+			Components map[string]struct {
+				Version string `json:"version"`
+			} `json:"components"`
+		}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatalf("report file is not JSON: %v\n%s", err, raw)
+		}
+		if decoded.Components["protocompile"].Version == "" {
+			t.Errorf("report file omits protocompile:\n%s", raw)
+		}
+	})
+
+	t.Run("dash is stdout", func(t *testing.T) {
+		var out, errOut strings.Builder
+		if err := emitReport(rep, "-", &out, &errOut); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(out.String()), "{") {
+			t.Errorf("--report - did not write JSON to stdout: %q", out.String())
+		}
+	})
+}
+
+// TestVersionCommandReportsRealVersions is the end-to-end half of the version
+// report, and it has to be end-to-end: a test binary carries no dependency
+// metadata, so only a built binary can show that the versions deciding the
+// descriptor are actually reachable at runtime. The expected value is read
+// from go.mod, so a dependency bump cannot leave this test asserting a stale
+// number.
+func TestVersionCommandReportsRealVersions(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go toolchain unavailable; cannot build the binary under test")
+	}
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "stele")
+	build := exec.Command(goBin, "build", "-o", bin, "./cmd/stele")
+	build.Dir = root
+	build.Env = append(os.Environ(), "GOPROXY=off")
+	if b, err := build.CombinedOutput(); err != nil {
+		t.Skipf("could not build the binary under test: %v\n%s", err, b)
+	}
+
+	out, err := exec.Command(bin, "version", "--json").Output()
+	if err != nil {
+		t.Fatalf("stele version --json: %v", err)
+	}
+	var decoded struct {
+		Components map[string]struct {
+			Module  string `json:"module"`
+			Version string `json:"version"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	for _, name := range []string{"protocompile", "protobuf-go"} {
+		c := decoded.Components[name]
+		want := moduleVersionFromGoMod(t, root, c.Module)
+		if c.Version != want {
+			t.Errorf("%s reported %q, go.mod requires %q", name, c.Version, want)
+		}
+	}
+	if v := decoded.Components["stele"].Version; v == "" {
+		t.Errorf("stele reported no version of itself: %s", out)
+	}
+}
+
+// moduleVersionFromGoMod reads the version go.mod requires for a module.
+func moduleVersionFromGoMod(t *testing.T, root, module string) string {
+	t.Helper()
+	if module == "" {
+		t.Fatal("the report named no module to check against go.mod")
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 2 && fields[0] == module {
+			return fields[1]
+		}
+	}
+	t.Fatalf("go.mod does not require %s", module)
+	return ""
 }

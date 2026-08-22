@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/thegorangers/stele/internal/gen"
+	"github.com/thegorangers/stele/internal/report"
 	"github.com/thegorangers/stele/internal/resolve"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/pluginpb"
@@ -192,9 +193,52 @@ func plugin(bin, out string) string {
 
 func run(t *testing.T, dir string, fetch resolve.FetchFunc, opts gen.Options) error {
 	t.Helper()
+	_, err := runReport(t, dir, fetch, opts)
+	return err
+}
+
+func runReport(t *testing.T, dir string, fetch resolve.FetchFunc, opts gen.Options) (*report.Report, error) {
+	t.Helper()
 	opts.Dir = dir
 	opts.Fetch = fetch
 	return gen.Run(context.Background(), opts)
+}
+
+// TestRun_ReportsWhatProducedTheBytes: a run is reproducible only if what ran
+// can be named, and the plugins are only part of that. The report is built
+// from the plugins actually invoked, not from the manifest, so a target that
+// was not selected cannot contribute a plugin the run never executed.
+func TestRun_ReportsWhatProducedTheBytes(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := world(t, manifest(plugin(s.bin, "gen"), "api"))
+
+	rep, err := runReport(t, dir, fetch, gen.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep == nil {
+		t.Fatal("no report from a successful run")
+	}
+	for _, want := range []string{"stele", "protocompile", "protobuf-go", "protoc-gen-spy"} {
+		if _, ok := rep.Components[want]; !ok {
+			t.Errorf("the report does not name %s", want)
+		}
+	}
+	// A test binary carries no dependency metadata — the Go toolchain does not
+	// stamp it — so the libraries read Unknown here, with a note saying why.
+	// That the shipped binary reports their real versions is asserted where it
+	// can be: against a built binary, in TestVersionCommandReportsRealVersions.
+	for _, want := range []string{"protocompile", "protobuf-go"} {
+		c := rep.Components[want]
+		if c.Version == "" || (c.Version == report.Unknown && c.Note == "") {
+			t.Errorf("%s = %+v, want a version or an explained %q", want, c, report.Unknown)
+		}
+	}
+	// The spy is a shell script: no module metadata, and the honest answer is
+	// that the version is unknown rather than that no plugin ran.
+	if got := rep.Components["protoc-gen-spy"].Version; got != report.Unknown {
+		t.Errorf("spy version = %q, want %q", got, report.Unknown)
+	}
 }
 
 // Six repositories in the measured fleet declare two inputs. A single merged

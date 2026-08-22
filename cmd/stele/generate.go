@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"io"
 
+	"os"
+	"path/filepath"
+
 	"github.com/thegorangers/stele/internal/cachedir"
 	"github.com/thegorangers/stele/internal/gen"
+	"github.com/thegorangers/stele/internal/report"
 )
 
 const generateUsage = `stele generate runs code generation plugins over this repository's protos.
@@ -30,6 +34,10 @@ Flags:
                       the lock records and fails if a fetched tree does not
                       match the hashes recorded beside them.
   --dir DIR           directory holding stele.yaml (default ".")
+  --report FILE       write the run's version report to FILE as JSON ("-" for
+                      stdout). A one-line-per-component summary always goes to
+                      stderr; this is the copy meant to be kept and compared
+                      across runs.
   --cache-dir DIR     where fetched repositories are kept
                       (default $XDG_CACHE_HOME/stele, else ~/.cache/stele;
                       $STELE_CACHE_DIR is honoured too)
@@ -47,6 +55,7 @@ func runGenerate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		cacheDir       = fs.String("cache-dir", "", "where fetched repositories are kept")
 		includeImports = fs.Bool("include-imports", false, "generate code for imports too")
 		update         = fs.Bool("update", false, "re-resolve every ref and rewrite stele.lock")
+		reportPath     = fs.String("report", "", "write the version report here as JSON; - for stdout")
 		targets        repeated
 		help           = fs.Bool("help", false, "show this help")
 	)
@@ -71,11 +80,54 @@ func runGenerate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if err != nil {
 		return err
 	}
-	return gen.Run(ctx, gen.Options{
+	rep, err := gen.Run(ctx, gen.Options{
 		Dir:            *dir,
 		Targets:        targets,
 		IncludeImports: *includeImports,
 		Update:         *update,
 		CacheRoot:      root,
 	})
+	if err != nil {
+		return err
+	}
+	return emitReport(rep, *reportPath, stdout, stderr)
+}
+
+// emitReport says what produced the output.
+//
+// The summary goes to stderr unconditionally, because a run whose provenance
+// has to be asked for is a run whose provenance is usually not asked for, and
+// stderr keeps it out of any pipeline reading stdout. The JSON goes only where
+// it was asked for: it is the artefact a later run is diffed against, and it
+// carries no timestamp or host detail so that two runs with the same versions
+// produce the same bytes.
+//
+// A report that cannot be written is an error even though the generation
+// succeeded: the files are already on disk, and silently losing the evidence
+// about them is exactly the failure this command exists to prevent.
+func emitReport(rep *report.Report, path string, stdout, stderr io.Writer) error {
+	if rep == nil {
+		return nil
+	}
+	fmt.Fprint(stderr, rep.Summary())
+	if path == "" {
+		return nil
+	}
+	raw, err := rep.JSON()
+	if err != nil {
+		return fmt.Errorf("rendering the version report: %w", err)
+	}
+	if path == "-" {
+		_, err := stdout.Write(raw)
+		return err
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("writing the version report: %w", err)
+		}
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		return fmt.Errorf("writing the version report: %w", err)
+	}
+	return nil
 }

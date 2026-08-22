@@ -104,7 +104,7 @@ func runStele(t *testing.T, c Corpus, repo string, g Generate, out string) {
 		t.Fatal(err)
 	}
 
-	err = gen.Run(context.Background(), gen.Options{
+	_, err = gen.Run(context.Background(), gen.Options{
 		Dir:            stage,
 		IncludeImports: g.IncludeImports,
 		// Every module of these manifests is local, so nothing is fetched; a

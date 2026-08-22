@@ -33,6 +33,7 @@ import (
 	"github.com/thegorangers/stele/internal/managed"
 	"github.com/thegorangers/stele/internal/pin"
 	"github.com/thegorangers/stele/internal/plugin"
+	"github.com/thegorangers/stele/internal/report"
 	"github.com/thegorangers/stele/internal/resolve"
 	"github.com/thegorangers/stele/internal/source"
 	"google.golang.org/protobuf/types/descriptorpb"
@@ -70,8 +71,13 @@ type Options struct {
 	CacheRoot string
 }
 
-// Run generates code for the manifest at Options.Dir.
-func Run(ctx context.Context, opts Options) error {
+// Run generates code for the manifest at Options.Dir and reports the versions
+// that determined the output.
+//
+// The report is built from the plugins actually invoked rather than from the
+// manifest, so that it is evidence about this run and not about a run that
+// could have happened: a target that was not selected contributes nothing.
+func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	dir := opts.Dir
 	if dir == "" {
 		dir = "."
@@ -79,17 +85,17 @@ func Run(ctx context.Context, opts Options) error {
 
 	cfg, err := config.Load(filepath.Join(dir, ManifestName))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	targets, err := selectTargets(cfg, opts.Targets)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	fetch := opts.Fetch
 	if fetch == nil {
 		if opts.CacheRoot == "" {
-			return errors.New("generate: no cache root and no fetcher")
+			return nil, errors.New("generate: no cache root and no fetcher")
 		}
 		fetch = networkFetch(opts.CacheRoot)
 	}
@@ -103,10 +109,11 @@ func Run(ctx context.Context, opts Options) error {
 		NoLock:   opts.NoLock,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	written := 0
+	var invoked []string
 	for _, t := range targets {
 		var mcfg *managed.Config
 		if t.Managed != nil {
@@ -116,11 +123,11 @@ func Run(ctx context.Context, opts Options) error {
 		for i, in := range t.Inputs {
 			files, err := selectFiles(graph, cfg, dir, in)
 			if err != nil {
-				return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+				return nil, fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 			}
 			compiled, err := compile.Compile(ctx, graph, files)
 			if err != nil {
-				return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+				return nil, fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 			}
 			for _, group := range byDirectory(compiled) {
 				for _, p := range t.Plugins {
@@ -129,21 +136,22 @@ func Run(ctx context.Context, opts Options) error {
 						Managed:   mcfg,
 					})
 					if err != nil {
-						return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+						return nil, fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 					}
 					if opts.IncludeImports {
 						includeImports(req)
 					}
+					invoked = append(invoked, p.Local)
 					resp, err := plugin.Run(ctx, p.Local, req)
 					if err != nil {
-						return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+						return nil, fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 					}
 					if err := check(p.Local, req, resp); err != nil {
-						return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+						return nil, fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 					}
 					n, err := writeResponse(filepath.Join(dir, filepath.FromSlash(p.Out)), p.Local, resp)
 					if err != nil {
-						return fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
+						return nil, fmt.Errorf("target %q, input %d: %w", t.Name, i, err)
 					}
 					written += n
 				}
@@ -154,9 +162,9 @@ func Run(ctx context.Context, opts Options) error {
 	// produced nothing has been asked the wrong question, and reporting
 	// success would leave the author to discover that from an empty tree.
 	if written == 0 {
-		return errors.New("generate: the plugins wrote no files; a run that generates nothing is an error, not an empty success")
+		return nil, errors.New("generate: the plugins wrote no files; a run that generates nothing is an error, not an empty success")
 	}
-	return nil
+	return report.Build(invoked), nil
 }
 
 // selectTargets returns the targets to run, in manifest order.
