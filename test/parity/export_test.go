@@ -13,12 +13,23 @@ import (
 //	go test -tags parity -run TestExport_MatchesVendoredTree ./test/parity/
 func TestExport_MatchesVendoredTree(t *testing.T) {
 	corpus := loadCorpus(t)
+	compared := 0
 	for _, r := range corpus.Repos {
+		if r.Export == nil {
+			continue
+		}
+		compared++
 		t.Run(r.Dir, func(t *testing.T) {
 			repo := filepath.Join(corpus.Root, r.Dir)
 			got := t.TempDir()
-			exportPerManifest(t, repo, r, got)
+			runExport(t, corpus, repo, *r.Export, got)
 			assertTreesEqual(t, filepath.Join(repo, r.Vendored), got)
 		})
+	}
+	if compared == 0 {
+		// Every repository having no export block is a corpus that measures
+		// nothing while reporting success, which is the one outcome an
+		// acceptance test must not produce.
+		t.Fatal("no repository in the corpus has an export block; nothing was compared")
 	}
 }
