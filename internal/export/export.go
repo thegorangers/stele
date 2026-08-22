@@ -18,7 +18,7 @@ import (
 
 	"github.com/thegorangers/stele/internal/compile"
 	"github.com/thegorangers/stele/internal/config"
-	"github.com/thegorangers/stele/internal/lockfile"
+	"github.com/thegorangers/stele/internal/pin"
 	"github.com/thegorangers/stele/internal/resolve"
 	"github.com/thegorangers/stele/internal/source"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -65,18 +65,21 @@ type Options struct {
 	// CacheRoot is where fetched repositories are kept. It is required only
 	// when Fetch is nil.
 	CacheRoot string
-	// NoLock suppresses writing stele.lock. It exists for callers that must
-	// not touch the working tree, such as the acceptance harness comparing an
-	// export against a checkout it does not own.
+	// NoLock leaves stele.lock out of the run entirely: it is neither read
+	// nor written. It exists for callers that must not depend on, or touch, a
+	// working tree they do not own, such as the acceptance harness comparing
+	// an export against a checkout it did not produce.
 	NoLock bool
+	// Update re-resolves every ref to a fresh commit and rewrites the lock.
+	// It is the only thing that moves a pin.
+	Update bool
 }
 
 // Run resolves the manifest at Options.Dir and writes the selected files to
 // Options.Output.
 //
-// On success the lock is rewritten from the graph that was just resolved, so
-// that the pins a build consumed and the pins recorded cannot describe
-// different runs.
+// Resolution goes through the lock: see pin.Resolve for what a run with and
+// without Update takes from it.
 func Run(ctx context.Context, opts Options) error {
 	dir := opts.Dir
 	if dir == "" {
@@ -99,7 +102,14 @@ func Run(ctx context.Context, opts Options) error {
 		fetch = networkFetch(opts.CacheRoot)
 	}
 
-	graph, err := resolve.ResolveIn(ctx, dir, cfg, fetch)
+	graph, err := pin.Resolve(ctx, pin.Options{
+		Dir:      dir,
+		Manifest: cfg,
+		LockPath: filepath.Join(dir, LockName),
+		Fetch:    fetch,
+		Update:   opts.Update,
+		NoLock:   opts.NoLock,
+	})
 	if err != nil {
 		return err
 	}
@@ -121,13 +131,7 @@ func Run(ctx context.Context, opts Options) error {
 		return errors.New("export: nothing to write; a run that produces no files is an error, not an empty success")
 	}
 
-	if err := write(graph, selected, opts.Output); err != nil {
-		return err
-	}
-	if opts.NoLock {
-		return nil
-	}
-	return writeLock(graph, filepath.Join(dir, LockName))
+	return write(graph, selected, opts.Output)
 }
 
 // selectFiles returns the import paths this manifest's own modules supply,
@@ -254,20 +258,6 @@ func write(g *resolve.Graph, selected []string, out string) error {
 		}
 	}
 	return nil
-}
-
-// writeLock records the closure that was just resolved.
-func writeLock(g *resolve.Graph, path string) error {
-	lock := &lockfile.Lock{Version: lockfile.Version}
-	for _, o := range g.Deps() {
-		entry, err := lockfile.Snapshot(o.Name, o.Dir)
-		if err != nil {
-			return err
-		}
-		entry.Git, entry.Ref, entry.SHA = o.Git, o.Ref, o.SHA
-		lock.Deps = append(lock.Deps, entry)
-	}
-	return lockfile.Save(path, lock)
 }
 
 // networkFetch fetches repositories into a cache root.

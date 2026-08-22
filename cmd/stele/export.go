@@ -23,6 +23,10 @@ Flags:
                       coordinates an import statement uses — and NOT to the
                       workspace. A path matching nothing is an error.
   --exclude-imports   write only the selected files, not the files they import
+  --update            re-resolve every ref to the commit it names today and
+                      rewrite stele.lock. Without it a run takes the commits
+                      the lock records and fails if a fetched tree does not
+                      match the hashes recorded beside them.
   --dir DIR           directory holding stele.yaml (default ".")
   --cache-dir DIR     where fetched repositories are kept
                       (default $XDG_CACHE_HOME/stele, else ~/.cache/stele;
@@ -52,6 +56,7 @@ func runExport(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		dir      = fs.String("dir", ".", "directory holding stele.yaml")
 		cacheDir = fs.String("cache-dir", "", "where fetched repositories are kept")
 		exclude  = fs.Bool("exclude-imports", false, "write only the selected files")
+		update   = fs.Bool("update", false, "re-resolve every ref and rewrite stele.lock")
 		paths    repeated
 		help     = fs.Bool("help", false, "show this help")
 	)
@@ -86,6 +91,7 @@ func runExport(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		Output:         *output,
 		Paths:          paths,
 		ExcludeImports: *exclude,
+		Update:         *update,
 		CacheRoot:      root,
 	})
 }
