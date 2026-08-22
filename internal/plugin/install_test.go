@@ -195,3 +195,48 @@ func TestCache_EnsureWithoutNetwork(t *testing.T) {
 		}
 	}
 }
+
+// Resolve is where the two kinds of plugin meet: one the tool installs and can
+// name exactly, one it merely finds and can only describe.
+func TestCache_ResolveManagedAndPathPlugins(t *testing.T) {
+	hermeticGo(t)
+	cache := plugin.Cache{Root: t.TempDir()}
+
+	managed, err := cache.Resolve(context.Background(), "protoc-gen-fake", fakeModule, fakeVersion)
+	if err != nil {
+		t.Fatalf("Resolve managed: %v", err)
+	}
+	if managed.Origin != plugin.OriginManaged {
+		t.Errorf("origin %q, want %q", managed.Origin, plugin.OriginManaged)
+	}
+	if managed.Version != fakeVersion || managed.Module != fakeModule {
+		t.Errorf("resolved %+v, want module %s at %s", managed, fakeModule, fakeVersion)
+	}
+	if !strings.HasPrefix(managed.Path, cache.Root) {
+		t.Errorf("path %q is not in the cache %q", managed.Path, cache.Root)
+	}
+
+	// A plugin with no declared module is looked up on PATH, exactly as
+	// before, and says so.
+	dir := t.TempDir()
+	onPath := filepath.Join(dir, "protoc-gen-dart")
+	if err := os.WriteFile(onPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	found, err := cache.Resolve(context.Background(), "protoc-gen-dart", "", "")
+	if err != nil {
+		t.Fatalf("Resolve from PATH: %v", err)
+	}
+	if found.Origin != plugin.OriginPath {
+		t.Errorf("origin %q, want %q", found.Origin, plugin.OriginPath)
+	}
+	if found.Path != onPath {
+		t.Errorf("path %q, want %q", found.Path, onPath)
+	}
+	// It is not a Go binary, so there is no version to read, and the tool says
+	// so rather than inventing one.
+	if found.Version != plugin.Unknown {
+		t.Errorf("version %q, want %q", found.Version, plugin.Unknown)
+	}
+}

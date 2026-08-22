@@ -172,3 +172,74 @@ func verify(bin, module, version string) error {
 func isPathOf(pkg, main string) bool {
 	return pkg == main || strings.HasPrefix(pkg, main+"/")
 }
+
+// Origins a plugin binary can have. They are recorded, not inferred, because
+// the difference is the whole claim this tool makes about reproducibility:
+// managed means the manifest decided the version, path means the machine did.
+const (
+	OriginManaged = "managed"
+	OriginPath    = "path"
+)
+
+// Unknown is the version of a plugin whose version cannot be read. A plugin
+// that is not a Go program carries no module metadata, and there is nothing to
+// read; guessing would produce evidence that is worse than none, because it
+// would be believed.
+const Unknown = "unknown"
+
+// Binary is a plugin resolved to something runnable, with its provenance.
+type Binary struct {
+	// Name is the manifest's own spelling of the plugin.
+	Name string
+	// Path is the executable to run.
+	Path string
+	// Module is the module it was installed from, for a managed plugin, and
+	// empty for one taken from PATH.
+	Module string
+	// Version is the installed version for a managed plugin, and for a PATH
+	// plugin whatever its own metadata reports — or Unknown.
+	Version string
+	// Origin is OriginManaged or OriginPath.
+	Origin string
+}
+
+// Resolve turns one manifest plugin into a runnable binary.
+//
+// With a module, the version is the manifest's and the binary is this tool's
+// to install. Without one, the binary is whatever PATH holds: the tool finds
+// it, reads its version if it can, and reports where it came from. That second
+// case is not a leftover — a plugin written in another language cannot be
+// installed by a Go toolchain, and claiming to manage it would be a lie the
+// generated code would eventually contradict.
+func (c Cache) Resolve(ctx context.Context, name, module, version string) (Binary, error) {
+	if name == "" {
+		return Binary{}, errors.New("plugin: no plugin named")
+	}
+	if module == "" {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			if strings.ContainsRune(name, filepath.Separator) {
+				return Binary{}, fmt.Errorf("plugin %q: %w", name, err)
+			}
+			return Binary{}, fmt.Errorf("plugin %q: not found in PATH: %w; "+
+				"either install it, or declare module and version in the manifest and let stele install it",
+				name, err)
+		}
+		return Binary{Name: name, Path: path, Version: pathVersion(path), Origin: OriginPath}, nil
+	}
+	bin, err := c.Ensure(ctx, module, version)
+	if err != nil {
+		return Binary{}, fmt.Errorf("plugin %q: %w", name, err)
+	}
+	return Binary{Name: name, Path: bin, Module: module, Version: version, Origin: OriginManaged}, nil
+}
+
+// pathVersion reads the version a binary on PATH declares about itself, or
+// Unknown when it declares none.
+func pathVersion(path string) string {
+	info, err := buildinfo.ReadFile(path)
+	if err != nil || info.Main.Version == "" {
+		return Unknown
+	}
+	return info.Main.Version
+}
