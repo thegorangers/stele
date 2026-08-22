@@ -32,13 +32,18 @@ Flags:
   --update            re-resolve every ref to the commit it names today and
                       rewrite stele.lock. Without it a run takes the commits
                       the lock records and fails if a fetched tree does not
-                      match the hashes recorded beside them.
+                      match the hashes recorded beside them. For plugins it
+                      re-reads what is on PATH and records that; a plugin
+                      declared with an exact version is already pinned by the
+                      manifest, so --update only copies that version into the
+                      lock.
   --dir DIR           directory holding stele.yaml (default ".")
   --report FILE       write the run's version report to FILE as JSON ("-" for
                       stdout). A one-line-per-component summary always goes to
                       stderr; this is the copy meant to be kept and compared
                       across runs.
-  --cache-dir DIR     where fetched repositories are kept
+  --cache-dir DIR     where fetched repositories are kept, and where plugins
+                      declared with a module and version are installed
                       (default $XDG_CACHE_HOME/stele, else ~/.cache/stele;
                       $STELE_CACHE_DIR is honoured too)
 `
