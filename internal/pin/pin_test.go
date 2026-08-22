@@ -2,10 +2,10 @@ package pin_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
@@ -13,6 +13,7 @@ import (
 	"github.com/thegorangers/stele/internal/lockfile"
 	"github.com/thegorangers/stele/internal/pin"
 	"github.com/thegorangers/stele/internal/resolve"
+	"github.com/thegorangers/stele/internal/source"
 )
 
 // A manifest with no dependencies still resolves; these tests are about the
@@ -125,22 +126,6 @@ func TestResolve_LockWithoutPluginsStillHonoured(t *testing.T) {
 	}
 }
 
-// producer builds a fetchable repository: a manifest, a module root with a
-// proto in it, and the ordinary repository furniture that surrounds both.
-func producer(t *testing.T) (string, resolve.FetchFunc) {
-	t.Helper()
-	dir := t.TempDir()
-	writeFile(t, dir, "stele.yaml", "version: 1\nmodules:\n  - path: proto\n")
-	writeFile(t, dir, "proto/example/a.proto", "syntax = \"proto3\";\n")
-	writeFile(t, dir, "README.md", "before")
-	writeFile(t, dir, "Makefile", "all:\n")
-	writeFile(t, dir, "alerts/rules.yaml", "groups: []\n")
-	fetch := func(ctx context.Context, git, ref string) (string, string, error) {
-		return dir, "0123456789abcdef0123456789abcdef01234567", nil
-	}
-	return dir, fetch
-}
-
 func writeFile(t *testing.T, dir, rel, body string) {
 	t.Helper()
 	full := filepath.Join(dir, rel)
@@ -173,56 +158,130 @@ func resolveDep(t *testing.T, dir string, fetch resolve.FetchFunc, update bool) 
 	return err
 }
 
-// What a dependency costs the lock is the point of the whole change: a real
-// producer's tree is mostly files that cannot satisfy an import.
-func TestResolve_LocksOnlyWhatCanAffectTheBuild(t *testing.T) {
+// moving is a remote whose branch head moves. It answers a SHA with the tree
+// that SHA names, which is what makes the pin worth anything.
+type moving struct {
+	trees    map[string]string // sha -> tree
+	head     string
+	requests []string
+}
+
+func (m *moving) fetch(ctx context.Context, git, ref string) (string, string, error) {
+	m.requests = append(m.requests, ref)
+	sha := ref
+	if ref == "main" {
+		sha = m.head
+	}
+	dir, ok := m.trees[sha]
+	if !ok {
+		return "", "", fmt.Errorf("%w: %s", source.ErrUnreachableSHA, sha)
+	}
+	return dir, sha, nil
+}
+
+func tree(t *testing.T, body string) string {
+	t.Helper()
 	dir := t.TempDir()
-	_, fetch := producer(t)
-	if err := resolveDep(t, dir, fetch, false); err != nil {
+	writeFile(t, dir, "stele.yaml", "version: 1\nmodules:\n  - path: proto\n")
+	writeFile(t, dir, "proto/example/a.proto", body)
+	return dir
+}
+
+const (
+	shaOne = "1111111111111111111111111111111111111111"
+	shaTwo = "2222222222222222222222222222222222222222"
+)
+
+// The whole point of the lock: the ref moved, the pinned run did not.
+func TestResolve_HonoursTheLockedSHAOverAMovedRef(t *testing.T) {
+	dir := t.TempDir()
+	m := &moving{trees: map[string]string{
+		shaOne: tree(t, "syntax = \"proto3\";\n"),
+		shaTwo: tree(t, "syntax = \"proto3\";\n// moved on\n"),
+	}, head: shaOne}
+
+	if err := resolveDep(t, dir, m.fetch, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	l, err := lockfile.Load(filepath.Join(dir, "stele.lock"))
+	m.head = shaTwo
+	m.requests = nil
+	g, err := pin.Resolve(context.Background(), pin.Options{
+		Dir:      dir,
+		Manifest: consumer(t),
+		LockPath: filepath.Join(dir, "stele.lock"),
+		Fetch:    m.fetch,
+	})
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
-	if len(l.Deps) != 1 {
-		t.Fatalf("want one dependency, got %d", len(l.Deps))
+	if !reflect.DeepEqual(m.requests, []string{shaOne}) {
+		t.Fatalf("the pinned run must ask for the locked commit, asked for %v", m.requests)
 	}
-	got := make([]string, 0, len(l.Deps[0].Files))
-	for p := range l.Deps[0].Files {
-		got = append(got, p)
-	}
-	sort.Strings(got)
-	want := []string{"proto/example/a.proto", "stele.yaml"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("locked files:\n got %v\nwant %v", got, want)
+	deps := g.Deps()
+	if len(deps) != 1 || deps[0].SHA != shaOne {
+		t.Fatalf("resolved %+v, want the locked commit %s", deps, shaOne)
 	}
 }
 
-func TestResolve_ReadmeChurnDoesNotBreakAPinnedRun(t *testing.T) {
+// A squashed merge makes a pinned commit vanish. The report has to name the
+// ref the pin came from and the way out, not pass on a raw git failure.
+func TestResolve_UnreachableSHANamesTheRefAndTheWayOut(t *testing.T) {
 	dir := t.TempDir()
-	tree, fetch := producer(t)
-	if err := resolveDep(t, dir, fetch, false); err != nil {
+	m := &moving{trees: map[string]string{shaOne: tree(t, "syntax = \"proto3\";\n")}, head: shaOne}
+	if err := resolveDep(t, dir, m.fetch, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	writeFile(t, tree, "README.md", "after")
-	if err := resolveDep(t, dir, fetch, false); err != nil {
-		t.Fatalf("a producer's README changed and the pinned run broke: %v", err)
-	}
-}
+	delete(m.trees, shaOne) // the commit was rewritten away
 
-func TestResolve_ExtraProtoInAPinnedTreeIsRefused(t *testing.T) {
-	dir := t.TempDir()
-	tree, fetch := producer(t)
-	if err := resolveDep(t, dir, fetch, false); err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	writeFile(t, tree, "proto/example/sneaked.proto", "syntax = \"proto3\";\n")
-	err := resolveDep(t, dir, fetch, false)
+	err := resolveDep(t, dir, m.fetch, false)
 	if err == nil {
-		t.Fatal("a proto the lock does not list must stop the run")
+		t.Fatal("an unreachable pinned commit must stop the run")
 	}
-	if !strings.Contains(err.Error(), "sneaked.proto") {
-		t.Fatalf("error must name the file, got %v", err)
+	for _, want := range []string{shaOne, "main", "--update"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// Drift, first direction: the manifest asks for something the lock does not
+// pin.
+func TestResolve_DependencyMissingFromTheLockIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	m := &moving{trees: map[string]string{shaOne: tree(t, "syntax = \"proto3\";\n")}, head: shaOne}
+	if err := lockfile.Save(filepath.Join(dir, "stele.lock"), &lockfile.Lock{Version: lockfile.Version}); err != nil {
+		t.Fatal(err)
+	}
+	err := resolveDep(t, dir, m.fetch, false)
+	if err == nil {
+		t.Fatal("a dependency the lock does not pin must stop the run")
+	}
+	for _, want := range []string{"example.com/owner/repo.git", "main", "--update"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// Drift, the other direction: the lock pins something no manifest asks for.
+func TestResolve_DependencyNoLongerAskedForIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	m := &moving{trees: map[string]string{shaOne: tree(t, "syntax = \"proto3\";\n")}, head: shaOne}
+	if err := resolveDep(t, dir, m.fetch, false); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	_, err := pin.Resolve(context.Background(), pin.Options{
+		Dir:      dir,
+		Manifest: manifest(), // the dependency is gone from the manifest
+		LockPath: filepath.Join(dir, "stele.lock"),
+		Fetch:    m.fetch,
+	})
+	if err == nil {
+		t.Fatal("a pin nothing asks for any more must stop the run")
+	}
+	for _, want := range []string{"example", "--update"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }

@@ -60,16 +60,6 @@ type Origin struct {
 	SHA string
 	// Dir is the root of the materialised tree.
 	Dir string
-	// Modules are the module roots this tool reads in that tree: every root
-	// the producer's manifest declares, or the one the consumer asked for
-	// when the producer carries no manifest. They are slash-separated and
-	// relative to Dir. Empty for the root manifest.
-	Modules []string
-	// Manifest is the producer's own manifest relative to Dir — "stele.yaml",
-	// or the "buf.yaml" the compatibility fallback reads — and empty when it
-	// has none. It is here because it decides Modules and the producer's own
-	// dependencies, so whatever pins this tree has to pin it too.
-	Manifest string
 }
 
 // String renders the origin for an error message.
@@ -163,12 +153,6 @@ func (g *Graph) FileFor(importPath string) (Resolved, bool) {
 	return f, ok
 }
 
-// CheckFunc is called once per fetched repository, after the tool has read
-// the producer's manifest and before any of that repository's files enter the
-// graph. It is where a lock is enforced: the origin it is handed carries the
-// module roots and the manifest, which is exactly the scope a pin covers.
-type CheckFunc func(o Origin) error
-
 // Resolve resolves the closure of a manifest whose own modules are relative to
 // the working directory.
 func Resolve(ctx context.Context, root *config.File, fetch FetchFunc) (*Graph, error) {
@@ -178,12 +162,6 @@ func Resolve(ctx context.Context, root *config.File, fetch FetchFunc) (*Graph, e
 // ResolveIn resolves the closure of root, whose own modules are relative to
 // dir. The walk is breadth-first over manifests.
 func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFunc) (*Graph, error) {
-	return ResolveWith(ctx, dir, root, fetch, nil)
-}
-
-// ResolveWith is ResolveIn with a check run against every fetched repository
-// before its files are read. A nil check resolves nothing differently.
-func ResolveWith(ctx context.Context, dir string, root *config.File, fetch FetchFunc, check CheckFunc) (*Graph, error) {
 	g := &Graph{files: map[string]Resolved{}}
 
 	// The root manifest is not fetched and is not deduplicated against
@@ -216,7 +194,7 @@ func ResolveWith(ctx context.Context, dir string, root *config.File, fetch Fetch
 			}
 			origin := Origin{Name: d.Name, Git: d.Git, Ref: d.Ref, SHA: sha, Dir: treeDir}
 
-			manifest, own, manifestPath, err := manifestOf(treeDir, d.Module)
+			manifest, own, err := manifestOf(treeDir, d.Module)
 			if err != nil {
 				return nil, fmt.Errorf("dependency %q of %s: %w", d.Name, cur.origin, err)
 			}
@@ -230,16 +208,6 @@ func ResolveWith(ctx context.Context, dir string, root *config.File, fetch Fetch
 				continue
 			}
 			visited[origin.key()] = true
-			origin.Modules, err = declaredRoots(manifest)
-			if err != nil {
-				return nil, fmt.Errorf("dependency %q of %s: %w", d.Name, cur.origin, err)
-			}
-			origin.Manifest = manifestPath
-			if check != nil {
-				if err := check(origin); err != nil {
-					return nil, fmt.Errorf("dependency %q of %s: %w", d.Name, cur.origin, err)
-				}
-			}
 			g.deps = append(g.deps, origin)
 
 			// Every module root of the producer is added, not only the one
@@ -471,17 +439,15 @@ func checkRequestedModule(d config.Dep, manifest *config.File) error {
 // still claimed there is the module the dependency edge asked for, which the
 // consumer's own manifest names. Everything else the fallback admits exists
 // solely so the producer's files can compile.
-// It also reports which file it read, relative to dir, so that whatever pins
-// the tree can pin the file that decided its shape.
-func manifestOf(dir, requestedModule string) (*config.File, func(string) bool, string, error) {
+func manifestOf(dir, requestedModule string) (*config.File, func(string) bool, error) {
 	all := func(string) bool { return true }
 	if p := filepath.Join(dir, "stele.yaml"); exists(p) {
 		f, err := config.Load(p)
-		return f, all, "stele.yaml", err
+		return f, all, err
 	}
 	requested, err := cleanModulePath(requestedModule)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, err
 	}
 	onlyRequested := func(m string) bool {
 		got, err := cleanModulePath(m)
@@ -490,28 +456,13 @@ func manifestOf(dir, requestedModule string) (*config.File, func(string) bool, s
 	if p := filepath.Join(dir, "buf.yaml"); exists(p) {
 		roots, err := bufModuleRoots(p)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, err
 		}
-		return &config.File{Version: config.Version, Modules: roots}, onlyRequested, "buf.yaml", nil
+		return &config.File{Version: config.Version, Modules: roots}, onlyRequested, nil
 	}
 	// No manifest at all: the module asked for is the only root there is, and
 	// it is the one the consumer named.
-	return &config.File{Version: config.Version, Modules: []config.Module{{Path: requested}}}, all, "", nil
-}
-
-// declaredRoots is the set of module roots a producer's manifest declares,
-// cleaned. It is what the graph reads from that repository, and therefore what
-// a pin has to cover.
-func declaredRoots(manifest *config.File) ([]string, error) {
-	out := make([]string, 0, len(manifest.Modules))
-	for _, m := range manifest.Modules {
-		clean, err := cleanModulePath(m.Path)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, clean)
-	}
-	return out, nil
+	return &config.File{Version: config.Version, Modules: []config.Module{{Path: requested}}}, all, nil
 }
 
 // bufModuleRoots reads the module roots out of a buf.yaml, and nothing else.

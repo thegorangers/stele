@@ -56,9 +56,9 @@ type Options struct {
 // Resolve resolves the closure of opts.Manifest.
 //
 // With a lock present and Update unset, every dependency is materialised at the
-// commit the lock recorded — not at the commit its ref names today — and the
-// tree that comes back is verified against the recorded hashes before anything
-// reads it. With no lock, or with Update set, refs are resolved afresh and the
+// commit the lock recorded, not at the commit its ref names today. That commit
+// is the whole guarantee: git hands back the tree it names or nothing at all.
+// With no lock, or with Update set, refs are resolved afresh and the
 // lock is written from the closure that was just resolved, so that the pins a
 // build consumed and the pins recorded can never describe different runs.
 func Resolve(ctx context.Context, opts Options) (*resolve.Graph, error) {
@@ -90,7 +90,7 @@ func Resolve(ctx context.Context, opts Options) (*resolve.Graph, error) {
 	}
 
 	p := &pinned{lock: lock, inner: opts.Fetch, index: index(lock), used: map[string]bool{}}
-	graph, err := resolve.ResolveWith(ctx, dir, opts.Manifest, p.fetch, p.check)
+	graph, err := resolve.ResolveIn(ctx, dir, opts.Manifest, p.fetch)
 	if err != nil {
 		return nil, err
 	}
@@ -191,22 +191,9 @@ func describe(p lockfile.Plugin) string {
 func write(g *resolve.Graph, plugins []lockfile.Plugin, path string) error {
 	lock := &lockfile.Lock{Version: lockfile.Version, Plugins: plugins}
 	for _, o := range g.Deps() {
-		entry, err := lockfile.Snapshot(o.Name, o.Dir, scopeOf(o))
-		if err != nil {
-			return err
-		}
-		entry.Git, entry.Ref, entry.SHA = o.Git, o.Ref, o.SHA
-		lock.Deps = append(lock.Deps, entry)
+		lock.Deps = append(lock.Deps, lockfile.Entry{Name: o.Name, Git: o.Git, Ref: o.Ref, SHA: o.SHA})
 	}
 	return lockfile.Save(path, lock)
-}
-
-// scopeOf is the part of a fetched tree that can affect the build: the module
-// roots this tool reads there, and the manifest that decided them. It is one
-// function so that what a snapshot records and what a verification walks can
-// never be two different answers.
-func scopeOf(o resolve.Origin) lockfile.Scope {
-	return lockfile.Scope{Modules: o.Modules, Manifest: o.Manifest}
 }
 
 // pinned is a fetcher that answers from the lock.
@@ -254,19 +241,6 @@ func (p *pinned) fetch(ctx context.Context, git, ref string) (string, string, er
 		return "", "", err
 	}
 	return dir, sha, nil
-}
-
-// check verifies a fetched tree against its entry.
-//
-// It runs here rather than inside fetch because the scope a pin covers is not
-// known until the producer's manifest has been read, and it still runs before
-// a single file of that repository reaches the graph.
-func (p *pinned) check(o resolve.Origin) error {
-	entry, ok := p.index[key(o.Git, o.Ref)]
-	if !ok {
-		return fmt.Errorf("%s at ref %q is not recorded in the lock; re-resolve with --update", o.Git, o.Ref)
-	}
-	return lockfile.Verify(entry, o.Dir, scopeOf(o))
 }
 
 // unused reports the dependencies the lock pins that nothing asked for, sorted.

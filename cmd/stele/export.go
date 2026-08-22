@@ -29,8 +29,8 @@ Flags:
   --exclude-imports   write only the selected files, not the files they import
   --update            re-resolve every ref to the commit it names today and
                       rewrite stele.lock. Without it a run takes the commits
-                      the lock records and fails if a fetched tree does not
-                      match the hashes recorded beside them.
+                      the lock records, and a commit that is no longer on the
+                      remote is an error naming the ref it came from.
   --dir DIR           directory holding stele.yaml (default ".")
   --cache-dir DIR     where fetched repositories are kept
                       (default $XDG_CACHE_HOME/stele, else ~/.cache/stele;

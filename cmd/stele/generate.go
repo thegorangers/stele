@@ -31,8 +31,9 @@ Flags:
                       not only for the files themselves
   --update            re-resolve every ref to the commit it names today and
                       rewrite stele.lock. Without it a run takes the commits
-                      the lock records and fails if a fetched tree does not
-                      match the hashes recorded beside them. For plugins it
+                      the lock records, and a commit that is no longer on the
+                      remote is an error naming the ref it came from. For
+                      plugins it
                       re-reads what is on PATH and records that; a plugin
                       declared with an exact version is already pinned by the
                       manifest, so --update only copies that version into the

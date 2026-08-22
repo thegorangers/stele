@@ -193,7 +193,7 @@ func TestExport_WritesTheLockFromTheGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"name: dep", "ref: main", "sha: 0123456789abcdef0123456789abcdef01234567", "api/dep/v1/b.proto"} {
+	for _, want := range []string{"name: dep", "ref: main", "sha: 0123456789abcdef0123456789abcdef01234567"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("lock does not mention %q:\n%s", want, raw)
 		}
@@ -316,26 +316,6 @@ func TestExport_LockIsHonouredOverAMovedRef(t *testing.T) {
 	}
 	if got := lockedSHA(t, dir, "dep"); got != sha1 {
 		t.Fatalf("lock moved without --update: %s", got)
-	}
-}
-
-func TestExport_TamperedDependencyIsRejected(t *testing.T) {
-	dir, r := movable(t)
-	if _, err := exportOnce(t, dir, r, false); err != nil {
-		t.Fatal(err)
-	}
-	write(t, r.trees[sha1], "api/dep/v1/b.proto", `syntax = "proto3";
-package dep.v1;
-message B { string name = 1; }
-// tampered
-`)
-
-	_, err := exportOnce(t, dir, r, false)
-	if err == nil {
-		t.Fatal("tampered dependency accepted")
-	}
-	if !strings.Contains(err.Error(), "dep") || !strings.Contains(err.Error(), "api/dep/v1/b.proto") {
-		t.Fatalf("error names neither the dependency nor the file: %v", err)
 	}
 }
 
