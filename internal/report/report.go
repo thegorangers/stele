@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -44,19 +45,15 @@ import (
 // It is a value, not an absence: see the package comment.
 const Unknown = "unknown"
 
-// devel is what the Go toolchain stamps into a binary built from a checkout
-// rather than from a module version. It is reported verbatim: a development
-// build saying so is evidence, a development build claiming a release version
-// is a trap.
-const devel = "(devel)"
+// Devel is what the Go toolchain stamps into a binary it cannot version at
+// all — one built with -buildvcs=false from a checkout, and every test binary.
+// It is reported verbatim: a development build saying so is evidence, a
+// development build claiming a release version is a trap.
+const Devel = "(devel)"
 
-// version is stele's own version. A release build overrides it with
-//
-//	go build -ldflags "-X github.com/thegorangers/stele/internal/report.version=v1.2.3"
-//
-// and every other build falls back to the module metadata of the running
-// binary, which says (devel) when there is nothing better to say.
-var version string
+// DevelopmentNote is what the report says beside a stele version that is not a
+// released one. It is prose, never parsed; IsRelease is the predicate.
+const DevelopmentNote = "development build: not built from a released tag"
 
 // The modules whose versions decide the descriptor, and the names they are
 // reported under. The keys are import paths so that the lookup cannot drift
@@ -150,7 +147,11 @@ type Plugin struct {
 func Build(plugins []Plugin) *Report {
 	r := &Report{Components: make(map[string]Component, len(plugins)+3)}
 
-	r.Components["stele"] = Component{Kind: KindTool, Module: modulePath(), Version: steleVersion()}
+	stele := Component{Kind: KindTool, Module: modulePath(), Version: Version()}
+	if !IsRelease(stele.Version) {
+		stele.Note = DevelopmentNote
+	}
+	r.Components["stele"] = stele
 	for name, mod := range map[string]string{
 		"protocompile": protocompileModule,
 		"protobuf-go":  protobufGoModule,
@@ -293,16 +294,57 @@ func pluginName(bin string) string {
 	return filepath.Base(filepath.FromSlash(bin))
 }
 
-// steleVersion is the ldflags override when there is one, and the running
-// binary's own module version otherwise.
-func steleVersion() string {
-	if version != "" {
-		return version
-	}
+// Version is stele's own version, as the Go toolchain stamped it into the
+// running binary.
+//
+// There is deliberately no -ldflags override. The toolchain already knows this
+// fact and records it without being asked: a binary built at a tag carries the
+// tag, one built anywhere else carries a pseudo-version, one built from a
+// modified tree carries +dirty, and one built with -buildvcs=false carries
+// (devel). An -X flag would be a second, independent copy of the same fact —
+// one that is right only when whoever ran the build remembered to pass it, and
+// silently wrong when they did not. The failure mode of forgetting the flag is
+// a release that claims to be a development build; the failure mode of passing
+// it by hand is a development build that claims to be a release, which is
+// worse. Removing the flag removes both.
+//
+// What replaces the flag is a check, not a promise: the release workflow builds
+// the tag and then refuses to publish unless the binary reports exactly that
+// tag. See RELEASING.md.
+func Version() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
 		return info.Main.Version
 	}
-	return devel
+	return Devel
+}
+
+// pseudoVersion matches the form the Go toolchain synthesises for a commit
+// that no tag names: a timestamp and a twelve-character revision prefix in the
+// pre-release field. It is a real, resolvable version and not a release.
+var pseudoVersion = regexp.MustCompile(`[0-9]{14}-[0-9a-f]{12}$`)
+
+// IsRelease reports whether v names a released artefact rather than some state
+// of somebody's working tree.
+//
+// It is false for (devel), for a pseudo-version, and for anything the toolchain
+// marked +dirty — the three ways a build can happen away from a tag. It says
+// nothing about whether the tag was a good one.
+func IsRelease(v string) bool {
+	if v == "" || v == Devel {
+		return false
+	}
+	if !strings.HasPrefix(v, "v") {
+		return false
+	}
+	if i := strings.IndexByte(v, '+'); i >= 0 {
+		// The only build metadata the toolchain adds on its own is +dirty;
+		// +incompatible belongs to a module path, not to this binary.
+		if v[i+1:] == "dirty" {
+			return false
+		}
+		v = v[:i]
+	}
+	return !pseudoVersion.MatchString(v)
 }
 
 // modulePath is the module path of the running binary, for the same reason a

@@ -182,3 +182,55 @@ func TestBuild_SaysWhereAPluginCameFrom(t *testing.T) {
 		t.Errorf("the summary does not say where the plugins came from:\n%s", s)
 	}
 }
+
+// TestIsRelease is the predicate the release workflow rests on: a published
+// artefact must never be reported as a release when it was not built from a
+// tag, and must never be reported as a development build when it was. Every
+// string here is one the Go toolchain actually stamps — verified against
+// go1.26 by building this repository at a tag, away from a tag, with a
+// modified tree, and with -buildvcs=false.
+func TestIsRelease(t *testing.T) {
+	releases := []string{
+		"v0.1.0",
+		"v1.2.3",
+		"v1.0.0-rc.1",
+		"v2.0.0-beta1",
+	}
+	for _, v := range releases {
+		if !report.IsRelease(v) {
+			t.Errorf("IsRelease(%q) = false, want true: it names a tag", v)
+		}
+	}
+
+	development := []string{
+		"",
+		report.Devel,
+		// What go build stamps on a commit no tag names.
+		"v0.0.0-20260823183642-7c47cad85fcf",
+		"v0.1.1-0.20260823183642-7c47cad85fcf",
+		// What it stamps when the working tree differs from the commit.
+		"v0.1.0+dirty",
+		"v0.0.0-20260823183642-7c47cad85fcf+dirty",
+		// Not a version at all.
+		"1.2.3",
+		"unknown",
+	}
+	for _, v := range development {
+		if report.IsRelease(v) {
+			t.Errorf("IsRelease(%q) = true, want false: it does not name a tag", v)
+		}
+	}
+}
+
+// TestBuild_MarksADevelopmentBuild: the report must say plainly when the
+// binary is not a released one. The test binary this runs in is exactly such a
+// build, which is why the assertion can be made without constructing anything.
+func TestBuild_MarksADevelopmentBuild(t *testing.T) {
+	c := report.Build(nil).Components["stele"]
+	if report.IsRelease(c.Version) {
+		t.Skipf("this test binary reports %q, a release; nothing to assert", c.Version)
+	}
+	if c.Note != report.DevelopmentNote {
+		t.Errorf("note = %q, want %q: a development build must say so", c.Note, report.DevelopmentNote)
+	}
+}

@@ -17,6 +17,10 @@ are handed — protocompile and protobuf-go — because a change in any of them
 changes the output with no plugin moving. The plugins themselves are versioned
 per run, by stele generate, since only a run knows which ones it invoked.
 
+stele's own version is the one the Go toolchain stamped into this binary. A
+build that is not a released one — a checkout, a modified tree, a binary built
+without VCS information — says so beside the version rather than pretending.
+
 Usage:
   stele version [flags]
 
