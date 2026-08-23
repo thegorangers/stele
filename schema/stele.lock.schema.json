@@ -15,7 +15,7 @@
       "const": 1
     },
     "deps": {
-      "description": "The pinned dependencies, sorted by name, so that re-running a resolution that changed nothing produces an empty diff.\n\nThis is the full transitive closure, flat and not nested: resolution follows a producer's own manifest, so most of the files that reach the compiler come from repositories the root manifest never names. Whether an entry is direct is deliberately not recorded — the manifest already says so, and a second copy of that fact could only drift.\n\nThe parser also checks: no two entries may share a name.",
+      "description": "The pinned dependencies, sorted by name, so that re-running a resolution that changed nothing produces an empty diff.\n\nThis is the full transitive closure, flat and not nested: resolution follows a producer's own manifest, so most of the files that reach the compiler come from repositories the root manifest never names. Whether an entry is direct is deliberately not recorded — the manifest already says so, and a second copy of that fact could only drift.\n\nThe parser also checks: no two entries may pin the same (git, ref). That pair, not the name, is what identifies an entry — a name is chosen by the manifest that requests a dependency, so one name may legitimately appear twice in a flat closure, once per requesting manifest. Addresses are recorded as each manifest wrote them and are not normalised: ssh:// and https:// forms of one repository stay two entries, because the transport is an environment's choice (a workstation clones over ssh where CI clones over https) and because two hosts serving one path are not provably one repository.",
       "type": [
         "array",
         "null"
@@ -50,12 +50,12 @@
       ],
       "properties": {
         "name": {
-          "description": "The dependency, as the manifest that requested it names it.",
+          "description": "What the manifest that requested this dependency calls it. It describes the entry; it does not identify it, and it may repeat across entries.",
           "type": "string",
           "minLength": 1
         },
         "git": {
-          "description": "The address of the producing repository, copied from the manifest that requested it.",
+          "description": "The address of the producing repository, copied verbatim from the manifest that requested it, transport included. With the ref, it is the key an entry is identified and looked up by.",
           "type": "string",
           "minLength": 1
         },

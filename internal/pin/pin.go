@@ -264,8 +264,12 @@ func (p *pinned) fetch(ctx context.Context, git, ref string) (string, string, er
 // unused reports the dependencies the lock pins that nothing asked for, sorted.
 func (p *pinned) unused() []string {
 	var out []string
+	seen := map[string]bool{}
 	for _, e := range p.lock.Deps {
-		if !p.used[key(e.Git, e.Ref)] {
+		// Names may repeat across entries; the same name reported twice would
+		// read as two problems where there is one.
+		if !p.used[key(e.Git, e.Ref)] && !seen[e.Name] {
+			seen[e.Name] = true
 			out = append(out, e.Name)
 		}
 	}

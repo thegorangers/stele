@@ -1,0 +1,14 @@
+# Two entries carry one name. A name is chosen by the manifest that requests a
+# dependency, and a flat transitive closure holds requests made by manifests
+# belonging to other people, so one name covering two requests is ordinary.
+# What identifies an entry is (git, ref), and here the two differ.
+version: 1
+deps:
+  - name: place
+    git: ssh://git@git.example.com/acme/place.git
+    ref: main
+    sha: 9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d
+  - name: place
+    git: https://git.example.com/acme/place.git
+    ref: main
+    sha: 9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d

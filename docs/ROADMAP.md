@@ -22,10 +22,12 @@ not yet enough to hand to someone who has not been in the room.
 Every one of these was found by running the tool, not by reading it. They are first
 because each has already cost someone time.
 
-- **#1 `--update` writes a lock the tool then refuses to read.** A transitive
-  dependency addressed differently by a neighbour's manifest produces a second entry
-  under the same name, and loading fails with `duplicate dependency name`. The tool
-  corrupts its own state; this is the most serious of the four.
+- ~~**#1 `--update` writes a lock the tool then refuses to read.**~~ Fixed. A lock
+  entry is identified by `(git, ref)`, as the pinned run always looked it up; a
+  repeated name is ordinary and no longer refused, and one request pinned to two
+  commits is the error, named at write time as well as at read time. Addresses are
+  recorded as each manifest wrote them and are not normalised — see the decision
+  recorded in `internal/lockfile/lock.go`.
 - **#2 `migrate` emits `ssh://` addresses that fail in CI.** It carries over what the
   source `Makefile` used, but a typical CI image has no ssh binary — access is an
   `insteadOf` rewrite over https. Every migration hits this.

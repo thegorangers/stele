@@ -141,7 +141,10 @@ var origins = []string{OriginManaged, OriginURL, OriginFile, OriginPath}
 
 // Entry is one pinned dependency: where it came from, and which commit.
 type Entry struct {
-	// Name identifies the dependency, as in the manifest that requested it.
+	// Name is what the manifest that requested this dependency calls it. It
+	// describes the entry; it does not identify it. Names are chosen per
+	// manifest, so one repository reached through two manifests may carry two
+	// names, and one name may cover two repositories. See validate.
 	Name string `yaml:"name"`
 	// Git is the address of the producing repository.
 	Git string `yaml:"git"`
@@ -204,7 +207,32 @@ func (l *Lock) validate() error {
 	case l.Version != Version:
 		return fmt.Errorf("version: %d is not supported; expected %d", l.Version, Version)
 	}
-	seen := make(map[string]bool, len(l.Deps))
+	// What identifies an entry is (git, ref), not the name.
+	//
+	// Two addresses that resolve to one repository are deliberately NOT
+	// merged, and the tool does not normalise ssh:// against https:// here.
+	// It cannot prove they are the same repository — a fork at the same path
+	// on another host is not — and, more concretely, the transport is an
+	// environment's choice rather than part of what a dependency is: a
+	// workstation clones over ssh where CI clones over https with a token.
+	// Rewriting one manifest's address into another's would hand CI an
+	// address its image cannot use. So the lock records each request as the
+	// manifest that made it wrote it.
+	//
+	// The consequence is that one name can appear twice, and that is correct
+	// rather than tolerated: a name is chosen by the manifest requesting the
+	// dependency, and a flat transitive closure holds the requests of
+	// manifests belonging to other people. Requiring names to be unique made
+	// a lock's validity depend on strangers' naming, with no repair available
+	// to anybody in the closure except editing a generated file by hand —
+	// which is exactly the corruption reported in issue #1. What must not
+	// repeat is the key, because the pinned run looks entries up by it and
+	// two answers to one lookup is an ambiguous pin.
+	//
+	// The manifest is the other case and keeps its rule: there a name IS a
+	// key, because a target's inputs name a dependency by it, and one
+	// manifest is written by one set of people who can settle a collision.
+	seen := make(map[string]int, len(l.Deps))
 	for i, e := range l.Deps {
 		switch {
 		case e.Name == "":
@@ -218,10 +246,14 @@ func (l *Lock) validate() error {
 			// without one degrades that report to a raw git error.
 			return fmt.Errorf("deps[%d].ref: missing for dependency %q", i, e.Name)
 		}
-		if seen[e.Name] {
-			return fmt.Errorf("deps[%d].name: duplicate dependency name %q", i, e.Name)
+		if j, ok := seen[request(e.Git, e.Ref)]; ok {
+			prev := l.Deps[j]
+			return fmt.Errorf("deps[%d]: %s at ref %q is pinned twice, by deps[%d] (name %q, sha %s) and deps[%d] (name %q, sha %s); "+
+				"a lock cannot answer one request with two commits. Delete the entry that does not belong and re-resolve with --update, "+
+				"which rewrites the whole file from one resolution",
+				i, e.Git, e.Ref, j, prev.Name, prev.SHA, i, e.Name, e.SHA)
 		}
-		seen[e.Name] = true
+		seen[request(e.Git, e.Ref)] = i
 	}
 	seenPlugins := make(map[string]bool, len(l.Plugins))
 	for i, p := range l.Plugins {
@@ -242,10 +274,17 @@ func (l *Lock) validate() error {
 	return nil
 }
 
+// request is the key an entry is identified by: the address and the ref, as
+// the manifest making the request wrote them. It is the same key the pinned
+// resolution looks entries up by.
+func request(git, ref string) string { return git + "@" + ref }
+
 // Save writes lock to path.
 //
-// Entries are sorted by name, so that re-running a resolution that changed
-// nothing produces an identical file and an empty diff.
+// Entries are sorted by name and then by (git, ref), so that re-running a
+// resolution that changed nothing produces an identical file and an empty
+// diff. The lock is validated before it is written: this tool does not emit a
+// file it would refuse to read.
 func Save(path string, lock *Lock) error {
 	out := Lock{
 		Version: lock.Version,
@@ -259,8 +298,25 @@ func Save(path string, lock *Lock) error {
 	if out.Version == 0 {
 		out.Version = Version
 	}
-	sort.Slice(out.Deps, func(i, j int) bool { return out.Deps[i].Name < out.Deps[j].Name })
+	// By name, then by the key, because a name may legitimately repeat and
+	// sorting on it alone would leave the order of those entries to the sort
+	// — which is not stable — and so leave the file's bytes to chance.
+	sort.Slice(out.Deps, func(i, j int) bool {
+		a, b := out.Deps[i], out.Deps[j]
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return request(a.Git, a.Ref) < request(b.Git, b.Ref)
+	})
 	sort.Slice(out.Plugins, func(i, j int) bool { return out.Plugins[i].Name < out.Plugins[j].Name })
+
+	// A writer must never produce a file this package would refuse to read.
+	// That was the whole of issue #1: --update wrote a lock, and the next run
+	// could not load it. Validating here holds the invariant for every writer
+	// there will ever be, instead of for the ones somebody remembered.
+	if err := out.validate(); err != nil {
+		return fmt.Errorf("%s: refusing to write a lock this tool could not read: %w", path, err)
+	}
 
 	var buf bytes.Buffer
 	buf.WriteString("# Generated by stele. Edited by the tool, reviewed by people.\n")

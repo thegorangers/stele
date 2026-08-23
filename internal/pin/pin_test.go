@@ -382,3 +382,128 @@ func TestResolve_PathPluginDriftIsAnError(t *testing.T) {
 		}
 	}
 }
+
+// fleet is a remote holding several repositories, answering by address and
+// ref. Unlike moving it is asked for more than one repository, which is what
+// a transitive closure needs.
+type fleet struct {
+	trees map[string]string // git@ref -> tree
+	shas  map[string]string // git@ref -> sha
+}
+
+func (f *fleet) fetch(ctx context.Context, git, ref string) (string, string, error) {
+	k := git + "@" + ref
+	dir, ok := f.trees[k]
+	if !ok {
+		// A pinned run asks by SHA; answer from whichever ref names it.
+		for kk, sha := range f.shas {
+			if sha == ref {
+				return f.trees[kk], sha, nil
+			}
+		}
+		return "", "", fmt.Errorf("%w: %s", source.ErrUnreachableSHA, k)
+	}
+	return dir, f.shas[k], nil
+}
+
+// The defect of issue #1, as it happened: the root manifest addresses a
+// producer over ssh://, and a neighbour's own manifest addresses the same
+// producer over https://. --update must not write a lock this tool then
+// refuses to read.
+func TestResolve_UpdateWritesALockThisToolCanRead(t *testing.T) {
+	dir := t.TempDir()
+
+	place := t.TempDir()
+	writeFile(t, place, "stele.yaml", "version: 1\nmodules:\n  - path: proto\n")
+	writeFile(t, place, "proto/place/a.proto", "syntax = \"proto3\";\n")
+
+	neighbour := t.TempDir()
+	writeFile(t, neighbour, "stele.yaml", "version: 1\nmodules:\n  - path: proto\n"+
+		"deps:\n  - name: place\n    git: https://git.example.com/acme/place.git\n    ref: main\n    module: proto\n")
+	writeFile(t, neighbour, "proto/neighbour/b.proto", "syntax = \"proto3\";\n")
+
+	const (
+		ssh   = "ssh://git@git.example.com/acme/place.git"
+		https = "https://git.example.com/acme/place.git"
+		nb    = "ssh://git@git.example.com/acme/neighbour.git"
+	)
+	f := &fleet{
+		trees: map[string]string{ssh + "@main": place, https + "@main": place, nb + "@main": neighbour},
+		shas:  map[string]string{ssh + "@main": shaOne, https + "@main": shaOne, nb + "@main": shaTwo},
+	}
+
+	root := &config.File{
+		Version: 1,
+		Modules: []config.Module{{Path: "."}},
+		Deps: []config.Dep{
+			{Name: "place", Git: ssh, Ref: "main", Module: "proto"},
+			{Name: "neighbour", Git: nb, Ref: "main", Module: "proto"},
+		},
+	}
+	opts := pin.Options{
+		Dir:      dir,
+		Manifest: root,
+		LockPath: filepath.Join(dir, "stele.lock"),
+		Fetch:    f.fetch,
+	}
+	updated := opts
+	updated.Update = true
+	if _, err := pin.Resolve(context.Background(), updated); err != nil {
+		t.Fatalf("Resolve --update: %v", err)
+	}
+	if _, err := lockfile.Load(opts.LockPath); err != nil {
+		t.Fatalf("the lock --update just wrote does not load: %v", err)
+	}
+	// And the run that follows it, which is what a person actually types next.
+	if _, err := pin.Resolve(context.Background(), opts); err != nil {
+		t.Fatalf("Resolve over the lock --update wrote: %v", err)
+	}
+}
+
+// The same disagreement in its other shape: one repository asked for under
+// two refs that name one commit. The lock is keyed by (git, ref), so both
+// requests have to be recorded, or the next run cannot find the one that was
+// dropped.
+func TestResolve_UpdateRecordsEveryRefAskedFor(t *testing.T) {
+	dir := t.TempDir()
+
+	place := t.TempDir()
+	writeFile(t, place, "stele.yaml", "version: 1\nmodules:\n  - path: proto\n")
+	writeFile(t, place, "proto/place/a.proto", "syntax = \"proto3\";\n")
+
+	neighbour := t.TempDir()
+	writeFile(t, neighbour, "stele.yaml", "version: 1\nmodules:\n  - path: proto\n"+
+		"deps:\n  - name: place\n    git: ssh://git@git.example.com/acme/place.git\n    ref: v1.0.0\n    module: proto\n")
+	writeFile(t, neighbour, "proto/neighbour/b.proto", "syntax = \"proto3\";\n")
+
+	const (
+		p  = "ssh://git@git.example.com/acme/place.git"
+		nb = "ssh://git@git.example.com/acme/neighbour.git"
+	)
+	f := &fleet{
+		trees: map[string]string{p + "@main": place, p + "@v1.0.0": place, nb + "@main": neighbour},
+		shas:  map[string]string{p + "@main": shaOne, p + "@v1.0.0": shaOne, nb + "@main": shaTwo},
+	}
+	root := &config.File{
+		Version: 1,
+		Modules: []config.Module{{Path: "."}},
+		Deps: []config.Dep{
+			{Name: "place", Git: p, Ref: "main", Module: "proto"},
+			{Name: "neighbour", Git: nb, Ref: "main", Module: "proto"},
+		},
+	}
+	opts := pin.Options{
+		Dir:      dir,
+		Manifest: root,
+		LockPath: filepath.Join(dir, "stele.lock"),
+		Fetch:    f.fetch,
+	}
+	updated := opts
+	updated.Update = true
+	if _, err := pin.Resolve(context.Background(), updated); err != nil {
+		t.Fatalf("Resolve --update: %v", err)
+	}
+	if _, err := pin.Resolve(context.Background(), opts); err != nil {
+		t.Fatalf("Resolve over the lock --update wrote: %v", err)
+	}
+}

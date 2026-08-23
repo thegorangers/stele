@@ -296,3 +296,64 @@ func TestLoad_AcceptsALockWrittenBeforeThePinnedPluginsWereDropped(t *testing.T)
 		}
 	}
 }
+
+// writeLock puts a lock body on disk and returns its path.
+func writeLock(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stele.lock")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A repeated name is not a conflict. Names are chosen per manifest, and a flat
+// transitive closure holds requests made by manifests belonging to other
+// people.
+func TestLoad_ARepeatedNameIsNotAConflict(t *testing.T) {
+	path := writeLock(t, "version: 1\ndeps:\n"+
+		"  - name: place\n    git: ssh://git@git.example.com/acme/place.git\n    ref: main\n    sha: "+exampleSHA+"\n"+
+		"  - name: place\n    git: https://git.example.com/acme/place.git\n    ref: main\n    sha: "+exampleSHA+"\n")
+	l, err := lockfile.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(l.Deps) != 2 {
+		t.Fatalf("Load kept %d entries, want 2", len(l.Deps))
+	}
+}
+
+// What is a conflict is one request pinned to two commits: the pinned run
+// looks entries up by (git, ref) and cannot be answered with two. The error
+// has to name both entries and the way out, not merely say something repeats.
+func TestLoad_OneRequestPinnedTwiceNamesBothEntries(t *testing.T) {
+	other := "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
+	path := writeLock(t, "version: 1\ndeps:\n"+
+		"  - name: place\n    git: gh:acme/place\n    ref: main\n    sha: "+exampleSHA+"\n"+
+		"  - name: elsewhere\n    git: gh:acme/place\n    ref: main\n    sha: "+other+"\n")
+	_, err := lockfile.Load(path)
+	if err == nil {
+		t.Fatal("one request pinned to two commits must be refused")
+	}
+	for _, want := range []string{"deps[0]", "deps[1]", "place", "elsewhere", exampleSHA, other, "gh:acme/place", "main", "--update"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// The invariant issue #1 broke: nothing in this package may emit a file it
+// would refuse to read.
+func TestSave_RefusesALockItCouldNotRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stele.lock")
+	err := lockfile.Save(path, &lockfile.Lock{Version: lockfile.Version, Deps: []lockfile.Entry{
+		{Name: "place", Git: "gh:acme/place", Ref: "main", SHA: exampleSHA},
+		{Name: "elsewhere", Git: "gh:acme/place", Ref: "main", SHA: "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"},
+	}})
+	if err == nil {
+		t.Fatal("Save wrote a lock Load would reject")
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Error("Save left a file behind")
+	}
+}

@@ -75,6 +75,11 @@ func (o Origin) String() string {
 // repository, and any import path it shares with itself is a conflict.
 func (o Origin) key() string { return o.Git + "@" + o.SHA }
 
+// request identifies a dependency request as a manifest states it: an address
+// and a ref. It is the lock's key, and this is the one place the two notions
+// must agree.
+func request(git, ref string) string { return git + "@" + ref }
+
 // Resolved is one proto file the build may import.
 type Resolved struct {
 	// ImportPath is the path an import statement names, relative to the module
@@ -179,6 +184,7 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 	}
 	queue := []pending{{rootOrigin, root}}
 	visited := map[string]bool{}
+	requested := map[string]bool{}
 
 	for len(queue) > 0 {
 		cur := queue[0]
@@ -204,11 +210,23 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 			if err := checkRequestedModule(d, manifest); err != nil {
 				return nil, fmt.Errorf("dependency %q of %s: %w", d.Name, cur.origin, err)
 			}
+			// Every distinct request is recorded, even one leading to a
+			// repository already walked. The lock is keyed by (git, ref) —
+			// that is what a manifest states and what the pinned run looks
+			// up — so a request left unrecorded would be a request the next
+			// run cannot answer, and --update would not fix it because
+			// --update is what dropped it. Two refs that name one commit are
+			// two requests; so are two addresses of one repository.
+			if !requested[request(d.Git, d.Ref)] {
+				requested[request(d.Git, d.Ref)] = true
+				g.deps = append(g.deps, origin)
+			}
+			// Walking, unlike recording, is per commit: the tree is the same
+			// whichever request reached it.
 			if visited[origin.key()] {
 				continue
 			}
 			visited[origin.key()] = true
-			g.deps = append(g.deps, origin)
 
 			// Every module root of the producer is added, not only the one
 			// asked for. That is the whole point of reading the manifest: the
