@@ -139,15 +139,15 @@ will quietly close later.
      or `unknown`, and the report and `stele plugins list` label it `path`. The
      tool does not pretend to manage what it did not choose.
 
-  Every run records the tier and its identifying data in `stele.lock` —
-  `module@version`, or the `url`, `sha256` and the `os`/`arch` of the download
-  entry that was used, or the declared `path`, or just the name — beside the
-  dependency commits, because a run is only reproducible if
-  what generated it is pinned too. A recorded plugin that no longer matches the
-  manifest is reported as drift, and the digest is checked on every use, not
-  only on the run that downloaded it. A download recorded for another platform
-  is not read as drift: it is another machine's entry, and what ran here is
-  pinned by the manifest's digest for this platform either way.
+  `stele.lock` records only the tiers the manifest does not pin — a declared
+  `path`, and a bare name found on `PATH` — with the version the binary claims
+  about itself. A lock exists to record what a run resolved where the manifest
+  did not determine it; for `module`/`version` and for a per-platform `url` and
+  `sha256` the manifest already names the exact thing, and a copy of that in
+  the lock could only drift from the original. An unpinned plugin whose version
+  moved is reported as drift and `--update` records what is here. The digest of
+  a downloaded plugin is checked on every use, not only on the run that
+  downloaded it, and it is checked against the manifest.
 - **Fetching a plugin needs the network once.** The first use of a version or a
   digest fetches it; every later run, in any repository, takes it from the cache
   and needs neither the network nor a toolchain. `stele plugins install` exists
@@ -185,7 +185,8 @@ Three sentences, because this is the part it is worth being blunt about.
 - **A `path` or `PATH` plugin is trusted as it is, with no pinning.** `stele`
   did not choose that binary, cannot say which build it is beyond what the
   binary says about itself, and does not verify it against anything. It runs
-  what is there, records the tier so a reader can see that, and makes no
+  what is there, records the tier and what the binary claimed so a reader can
+  see that — and so the next run can say if it moved — and makes no
   reproducibility claim about it.
 
 ## Editor support

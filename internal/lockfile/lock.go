@@ -54,61 +54,80 @@ type Lock struct {
 	Version int `yaml:"version"`
 	// Deps are the pinned dependencies, in a stable order.
 	Deps []Entry `yaml:"deps"`
-	// Plugins are the code generation plugins the run went through, in a
-	// stable order. They are here for the same reason the dependencies are:
-	// the version of a plugin decides the bytes it emits, so a lock that
-	// recorded only the inputs would pin half of what produced the output.
-	// Unlike a dependency, a plugin version is derivable from nothing else,
-	// which is why this section stays while the file hashes go.
+	// Plugins are the code generation plugins this run observed rather than
+	// resolved from a pin, in a stable order. A lock records what the
+	// manifest does not determine: a plugin declared as module@version, or as
+	// a per-platform url and sha256, is already named exactly by the
+	// manifest, and a copy of that here could only drift from the original.
+	// What is left is the unpinned tiers — an explicit path, and a bare name
+	// found on PATH — where the manifest pins nothing and what ran is
+	// whatever the machine had. Comparing that observation on the next run is
+	// the only way anyone learns the binary moved under them.
 	Plugins []Plugin `yaml:"plugins,omitempty"`
 }
 
-// Plugin is one recorded code generation plugin.
+// Plugin is one observed code generation plugin.
 //
-// Origin says which tier of the manifest the binary came from, and the fields
-// beside it are what identifies it on that tier: module and version when the
-// tool installed it, url and sha256 when it downloaded and verified it, path
-// when the manifest pointed at a file, and nothing but the name when it was
-// found on PATH. Recording the tier is the point: it is the difference between
-// a run another machine can reproduce and one it cannot, and a reader of a
-// merge request should not have to infer it from which fields are empty.
-//
-// Version is what the binary said about itself where the manifest did not say
-// it: for an explicit path and for a PATH lookup it is read from the binary's
-// own build metadata when there is any, and "unknown" when there is not. That
-// is an observation, not a pin — the origin beside it is what says so; the
-// pin, where there is one, is the version or the sha256.
+// Origin says which of the unpinned tiers the binary came from: file when the
+// manifest pointed at a path, path when a bare name was found on PATH. Version
+// is what the binary said about itself — read from its own build metadata when
+// there is any, and "unknown" when there is not. It is an observation, not a
+// pin, and the origin beside it is what says so.
 type Plugin struct {
 	// Name is the manifest's own spelling of the plugin.
 	Name string `yaml:"name"`
 	// Origin is one of the origins below. It is omitted for a lock written
 	// before origins were recorded, which is read as "not stated".
 	Origin string `yaml:"origin,omitempty"`
-	// Module is the Go module the plugin was installed from, when the tool
-	// installed it.
-	Module string `yaml:"module,omitempty"`
-	// Version is the installed version, the version observed in a binary the
-	// machine chose, or "unknown".
+	// Version is the version observed in the binary the machine chose, or
+	// "unknown".
 	Version string `yaml:"version"`
-	// OS and Arch are the platform of the download entry that was used. A
-	// digest pins bytes and bytes are per-platform, so a record without them
-	// would say which bytes ran without saying which machine they ran on, and
-	// a lock reviewed on one machine could not be read on another.
-	OS   string `yaml:"os,omitempty"`
-	Arch string `yaml:"arch,omitempty"`
-	// URL is where a downloaded plugin came from.
-	URL string `yaml:"url,omitempty"`
-	// SHA256 is the digest that download was verified against. It is the pin.
-	SHA256 string `yaml:"sha256,omitempty"`
-	// ArchivePath is the member taken from a downloaded archive, if any.
-	ArchivePath string `yaml:"archive_path,omitempty"`
 	// Path is the manifest's own spelling of an explicit path.
 	Path string `yaml:"path,omitempty"`
+
+	// The fields below identify a plugin on the tiers the manifest pins. They
+	// belong to locks written before those tiers stopped being recorded: they
+	// are parsed so that a lock already on disk keeps working, are read only
+	// to recognise such a record, and are left out the next time the lock is
+	// written. Do not use them for anything else.
+	DeprecatedModule      string `yaml:"module,omitempty"`
+	DeprecatedOS          string `yaml:"os,omitempty"`
+	DeprecatedArch        string `yaml:"arch,omitempty"`
+	DeprecatedURL         string `yaml:"url,omitempty"`
+	DeprecatedSHA256      string `yaml:"sha256,omitempty"`
+	DeprecatedArchivePath string `yaml:"archive_path,omitempty"`
 }
 
-// Origins a recorded plugin can have. They are the manifest's four tiers, and
-// the spellings are the resolver's own, so that a lock, a report and an error
-// message never call the same thing by two names.
+// MarshalYAML emits the observation, dropping whatever a previous format
+// recorded beside it.
+func (p Plugin) MarshalYAML() (any, error) {
+	return struct {
+		Name    string `yaml:"name"`
+		Origin  string `yaml:"origin,omitempty"`
+		Version string `yaml:"version"`
+		Path    string `yaml:"path,omitempty"`
+	}{p.Name, p.Origin, p.Version, p.Path}, nil
+}
+
+// observation reports whether this record is one the lock keeps. A plugin the
+// manifest pins is the manifest's business; only the unpinned tiers are an
+// observation this file has anything to add about. A record written before
+// origins were stated has to be recognised by its fields instead.
+func (p Plugin) observation() bool {
+	switch p.Origin {
+	case OriginFile, OriginPath:
+		return true
+	case OriginManaged, OriginURL:
+		return false
+	}
+	return p.DeprecatedModule == "" && p.DeprecatedSHA256 == ""
+}
+
+// Origins a plugin can have. They are the manifest's four tiers, and the
+// spellings are the resolver's own, so that a lock, a report and an error
+// message never call the same thing by two names. Only the two unpinned ones
+// are written here; the other two are still accepted, because locks that name
+// them exist on disk.
 const (
 	OriginManaged = "managed"
 	OriginURL     = "url"
@@ -214,15 +233,6 @@ func (l *Lock) validate() error {
 		case p.Origin != "" && !slices.Contains(origins, p.Origin):
 			return fmt.Errorf("plugins[%d].origin: %q is not an origin this tool records for plugin %q (known: %s)",
 				i, p.Origin, p.Name, strings.Join(origins, ", "))
-		case p.Origin == OriginURL && (p.URL == "" || p.SHA256 == ""):
-			// A url record without both halves would claim a pin it does not
-			// have, which is worse than recording no origin at all.
-			return fmt.Errorf("plugins[%d]: plugin %q is recorded as %s but does not carry both a url and a sha256",
-				i, p.Name, OriginURL)
-		case p.Origin == OriginURL && (p.OS == "" || p.Arch == ""):
-			return fmt.Errorf("plugins[%d]: plugin %q is recorded as %s but names no platform; "+
-				"a digest pins bytes, and bytes are per-platform, so the record has to say which os and arch it used",
-				i, p.Name, OriginURL)
 		}
 		if seenPlugins[p.Name] {
 			return fmt.Errorf("plugins[%d].name: duplicate plugin name %q", i, p.Name)
@@ -240,7 +250,11 @@ func Save(path string, lock *Lock) error {
 	out := Lock{
 		Version: lock.Version,
 		Deps:    append([]Entry(nil), lock.Deps...),
-		Plugins: append([]Plugin(nil), lock.Plugins...),
+	}
+	for _, p := range lock.Plugins {
+		if p.observation() {
+			out.Plugins = append(out.Plugins, p)
+		}
 	}
 	if out.Version == 0 {
 		out.Version = Version

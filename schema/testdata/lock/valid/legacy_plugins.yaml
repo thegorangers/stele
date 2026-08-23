@@ -1,0 +1,17 @@
+# A lock written before the pinned plugin tiers were dropped. It is still read,
+# so the schema still describes those fields, marked deprecated; rewriting the
+# lock leaves the pinned records out.
+version: 1
+plugins:
+  - name: protoc-gen-dart
+    origin: url
+    version: unknown
+    os: linux
+    arch: amd64
+    url: https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz
+    sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    archive_path: bin/protoc-gen-dart
+  - name: protoc-gen-go
+    origin: managed
+    module: google.golang.org/protobuf/cmd/protoc-gen-go
+    version: v1.36.12

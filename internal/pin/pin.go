@@ -144,15 +144,17 @@ func mergePlugins(prev *lockfile.Lock, opts Options) []lockfile.Plugin {
 	return out
 }
 
-// verifyPlugins checks the plugins this run resolved against the ones the lock
-// records.
+// verifyPlugins checks the observations this run made against the ones the
+// lock records.
 //
-// A lock with no plugin section at all is honoured as it stands: it was
-// written before plugins were recorded, and failing every such run would
-// punish the repositories this feature is meant to help. A lock that does
-// record plugins is enforced, including for a plugin taken from PATH — an
-// unmanaged plugin whose version moved is precisely the drift that produced
-// different bytes in CI and on a laptop with nothing to show for it.
+// A lock with no plugin section at all is honoured as it stands: it may have
+// been written before plugins were recorded, or by a manifest whose plugins
+// are all pinned, and neither is drift. What is enforced is an observation
+// that changed — a plugin taken from a path or from PATH whose version moved
+// is precisely the drift that produced different bytes in CI and on a laptop
+// with nothing to show for it. A plugin the manifest pins is not compared
+// here at all: the manifest names it exactly, and the pin is checked where it
+// is used.
 func verifyPlugins(lock *lockfile.Lock, opts Options) error {
 	if len(lock.Plugins) == 0 {
 		return nil
@@ -161,30 +163,16 @@ func verifyPlugins(lock *lockfile.Lock, opts Options) error {
 	for _, p := range lock.Plugins {
 		recorded[p.Name] = p
 	}
-	for _, got := range opts.Plugins {
+	for _, got := range observed(opts.Plugins) {
 		want, ok := recorded[got.Name]
 		if !ok {
 			return fmt.Errorf("plugin %q is not recorded in %s; re-resolve with --update", got.Name, opts.LockPath)
 		}
-		// What is compared is what identifies the binary on its tier: the
-		// version and module of an installed one, the digest of a downloaded
-		// one, the declared path of one the manifest points at. The origin is
-		// compared only when the lock states it, so that a lock written
-		// before origins were recorded is not read as drift it is not.
-		// A downloaded plugin is pinned per platform: the lock holds the entry
-		// whichever machine last recorded it used, and this machine may be a
-		// different one. Comparing across platforms would report drift on
-		// every mixed-platform team, and drift that fires on a correct
-		// manifest teaches people to re-resolve until it stops. What ran here
-		// is still pinned — by the digest in the manifest, checked before the
-		// download was unpacked — so nothing is unverified; it is only the
-		// lock that has nothing comparable to say.
-		if want.Origin == lockfile.OriginURL && got.Origin == lockfile.OriginURL &&
-			(want.OS != got.OS || want.Arch != got.Arch) {
-			continue
-		}
-		if want.Version == got.Version && want.Module == got.Module &&
-			want.SHA256 == got.SHA256 && want.Path == got.Path &&
+		// What is compared is the observation: the version the binary claims,
+		// and the declared path it was found at. The origin is compared only
+		// when the lock states it, so that a lock written before origins were
+		// recorded is not read as drift it is not.
+		if want.Version == got.Version && want.Path == got.Path &&
 			(want.Origin == "" || want.Origin == got.Origin) {
 			continue
 		}
@@ -196,20 +184,25 @@ func verifyPlugins(lock *lockfile.Lock, opts Options) error {
 	return nil
 }
 
-// describe renders a recorded plugin for an error message, naming the module
-// when there is one so that a managed and an unmanaged entry cannot read the
-// same.
-func describe(p lockfile.Plugin) string {
-	switch {
-	case p.SHA256 != "":
-		return p.URL + " at sha256:" + p.SHA256 + " for " + p.OS + "/" + p.Arch
-	case p.Path != "":
-		return p.Version + " from the path " + p.Path
-	case p.Module == "":
-		return p.Version + " from PATH"
-	default:
-		return p.Module + "@" + p.Version
+// observed keeps the plugins the lock has anything to say about: the ones no
+// pin in the manifest determines.
+func observed(ps []lockfile.Plugin) []lockfile.Plugin {
+	out := make([]lockfile.Plugin, 0, len(ps))
+	for _, p := range ps {
+		if p.Origin == lockfile.OriginFile || p.Origin == lockfile.OriginPath {
+			out = append(out, p)
+		}
 	}
+	return out
+}
+
+// describe renders an observed plugin for an error message, naming the path it
+// was found at when the manifest gave one.
+func describe(p lockfile.Plugin) string {
+	if p.Path != "" {
+		return p.Version + " from the path " + p.Path
+	}
+	return p.Version + " from PATH"
 }
 
 // write records the closure that was just resolved.

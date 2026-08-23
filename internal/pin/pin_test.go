@@ -44,7 +44,7 @@ func resolveWith(t *testing.T, dir string, plugins []lockfile.Plugin, authoritat
 
 func TestResolve_WritesPluginsToANewLock(t *testing.T) {
 	dir := t.TempDir()
-	want := []lockfile.Plugin{{Name: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11"}}
+	want := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginPath, Version: "v1.36.11"}}
 	if err := resolveWith(t, dir, want, true, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -61,12 +61,12 @@ func TestResolve_WritesPluginsToANewLock(t *testing.T) {
 // one the lock records, and nothing says so.
 func TestResolve_PluginDriftIsAnError(t *testing.T) {
 	dir := t.TempDir()
-	locked := []lockfile.Plugin{{Name: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11"}}
+	locked := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginPath, Version: "v1.36.11"}}
 	if err := resolveWith(t, dir, locked, true, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	drifted := []lockfile.Plugin{{Name: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.6"}}
+	drifted := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginPath, Version: "v1.36.6"}}
 	err := resolveWith(t, dir, drifted, true, false)
 	if err == nil {
 		t.Fatal("Resolve: expected an error about the plugin version")
@@ -92,20 +92,20 @@ func TestResolve_PluginDriftIsAnError(t *testing.T) {
 func TestResolve_PartialRunKeepsTheOtherPlugins(t *testing.T) {
 	dir := t.TempDir()
 	both := []lockfile.Plugin{
-		{Name: "protoc-gen-dart", Version: "unknown"},
-		{Name: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11"},
+		{Name: "protoc-gen-dart", Origin: lockfile.OriginPath, Version: "unknown"},
+		{Name: "protoc-gen-go", Origin: lockfile.OriginPath, Version: "v1.36.11"},
 	}
 	if err := resolveWith(t, dir, both, true, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	one := []lockfile.Plugin{{Name: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.12"}}
+	one := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginPath, Version: "v1.36.12"}}
 	if err := resolveWith(t, dir, one, false, true); err != nil {
 		t.Fatalf("Resolve --update for one target: %v", err)
 	}
 	l, _ := lockfile.Load(filepath.Join(dir, "stele.lock"))
 	want := []lockfile.Plugin{
-		{Name: "protoc-gen-dart", Version: "unknown"},
-		{Name: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.12"},
+		{Name: "protoc-gen-dart", Origin: lockfile.OriginPath, Version: "unknown"},
+		{Name: "protoc-gen-go", Origin: lockfile.OriginPath, Version: "v1.36.12"},
 	}
 	if !reflect.DeepEqual(l.Plugins, want) {
 		t.Errorf("plugins:\n got %+v\nwant %+v", l.Plugins, want)
@@ -120,7 +120,7 @@ func TestResolve_LockWithoutPluginsStillHonoured(t *testing.T) {
 	if err := lockfile.Save(filepath.Join(dir, "stele.lock"), &lockfile.Lock{Version: lockfile.Version}); err != nil {
 		t.Fatal(err)
 	}
-	plugins := []lockfile.Plugin{{Name: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11"}}
+	plugins := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginPath, Version: "v1.36.11"}}
 	if err := resolveWith(t, dir, plugins, true, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -286,69 +286,99 @@ func TestResolve_DependencyNoLongerAskedForIsAnError(t *testing.T) {
 	}
 }
 
-// For a downloaded plugin the digest is the pin, so a changed digest is
-// exactly the drift a changed version is for a managed one. A lock written
-// before origins were recorded must not be read as drift, because nothing
-// about the binary it names has changed.
-func TestResolve_PluginDigestDriftIsAnError(t *testing.T) {
-	dir := t.TempDir()
-	locked := []lockfile.Plugin{{
-		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
-		OS: "linux", Arch: "amd64",
-		URL: "https://example.com/dart.tar.gz", SHA256: "aa", ArchivePath: "bin/protoc-gen-dart",
-	}}
-	if err := resolveWith(t, dir, locked, true, false); err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	drifted := []lockfile.Plugin{{
-		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
-		OS: "linux", Arch: "amd64",
-		URL: "https://example.com/dart.tar.gz", SHA256: "bb", ArchivePath: "bin/protoc-gen-dart",
-	}}
-	err := resolveWith(t, dir, drifted, true, false)
-	if err == nil {
-		t.Fatal("Resolve: expected the changed digest to be reported")
-	}
-	for _, want := range []string{"protoc-gen-dart", "aa", "bb"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
-		}
-	}
-}
-
 func TestResolve_ALockWithoutOriginsIsNotDrift(t *testing.T) {
 	dir := t.TempDir()
-	old := []lockfile.Plugin{{Name: "protoc-gen-go", Module: "example.com/x", Version: "v1.0.0"}}
+	old := []lockfile.Plugin{{Name: "protoc-gen-go", Version: "v1.0.0"}}
 	if err := resolveWith(t, dir, old, true, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	now := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginManaged, Module: "example.com/x", Version: "v1.0.0"}}
+	now := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginPath, Version: "v1.0.0"}}
 	if err := resolveWith(t, dir, now, true, false); err != nil {
 		t.Fatalf("Resolve over a lock written before origins were recorded: %v", err)
 	}
 }
 
-// A downloaded plugin is pinned per platform, so a lock written on one machine
-// records another machine's bytes. Comparing this machine's digest against it
-// would report drift on every mixed-platform team and teach everyone to run
-// --update until it stopped complaining. The record for another platform is
-// left alone: it is not evidence about this run, and it is not drift either.
-func TestResolve_APluginLockedOnAnotherPlatformIsNotDrift(t *testing.T) {
+// A plugin the manifest pins — module@version, or a url with its digest — is
+// already exactly named by the manifest. Recording it here would be a second
+// copy of that fact, and a second copy can only drift from the first, so the
+// lock says nothing about it.
+func TestResolve_PinnedPluginsAreNotRecorded(t *testing.T) {
 	dir := t.TempDir()
-	locked := []lockfile.Plugin{{
-		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
-		OS: "linux", Arch: "amd64",
-		URL: "https://example.com/dart-linux-x64.tar.gz", SHA256: "aa", ArchivePath: "bin/protoc-gen-dart",
-	}}
-	if err := resolveWith(t, dir, locked, true, false); err != nil {
+	pinned := []lockfile.Plugin{
+		{Name: "protoc-gen-go", Origin: lockfile.OriginManaged, Version: "v1.0.0"},
+		{Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown"},
+	}
+	if err := resolveWith(t, dir, pinned, true, false); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	elsewhere := []lockfile.Plugin{{
-		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
-		OS: "darwin", Arch: "arm64",
-		URL: "https://example.com/dart-macos-arm64.tar.gz", SHA256: "bb", ArchivePath: "bin/protoc-gen-dart",
-	}}
-	if err := resolveWith(t, dir, elsewhere, true, false); err != nil {
-		t.Fatalf("a plugin recorded for another platform must not be read as drift: %v", err)
+	l, err := lockfile.Load(filepath.Join(dir, "stele.lock"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(l.Plugins) != 0 {
+		t.Fatalf("the lock records pinned plugins: %+v", l.Plugins)
+	}
+	// And the next run, whose manifest may legitimately name a different
+	// version or another platform's digest, is not drift against a record
+	// that no longer exists.
+	moved := []lockfile.Plugin{
+		{Name: "protoc-gen-go", Origin: lockfile.OriginManaged, Version: "v2.0.0"},
+		{Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown"},
+	}
+	if err := resolveWith(t, dir, moved, true, false); err != nil {
+		t.Fatalf("a pinned plugin must not be compared against the lock: %v", err)
+	}
+}
+
+// A lock on disk that still lists pinned plugins keeps loading, and --update
+// rewrites it without them, leaving the observations alone.
+func TestResolve_OldLockWithPinnedPluginsIsRewrittenClean(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stele.lock")
+	body := "version: 1\nplugins:\n" +
+		"  - name: protoc-gen-go\n    origin: managed\n    module: example.com/x\n    version: v1.0.0\n" +
+		"  - name: protoc-gen-found\n    origin: path\n    version: v0.3.0\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := []lockfile.Plugin{
+		{Name: "protoc-gen-go", Origin: lockfile.OriginManaged, Version: "v1.0.0"},
+		{Name: "protoc-gen-found", Origin: lockfile.OriginPath, Version: "v0.3.0"},
+	}
+	if err := resolveWith(t, dir, now, true, false); err != nil {
+		t.Fatalf("an existing lock must keep working: %v", err)
+	}
+	if err := resolveWith(t, dir, now, true, true); err != nil {
+		t.Fatalf("Resolve --update: %v", err)
+	}
+	l, err := lockfile.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []lockfile.Plugin{{Name: "protoc-gen-found", Origin: lockfile.OriginPath, Version: "v0.3.0"}}
+	if !reflect.DeepEqual(l.Plugins, want) {
+		t.Errorf("plugins after --update:\n got %+v\nwant %+v", l.Plugins, want)
+	}
+}
+
+// What the lock does carry is the unpinned tiers, where the manifest pins
+// nothing and what ran is whatever the machine had. A binary that moved under
+// the run is the drift that produced different bytes in CI and on a laptop
+// with nothing to show for it.
+func TestResolve_PathPluginDriftIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	found := []lockfile.Plugin{{Name: "protoc-gen-found", Origin: lockfile.OriginPath, Version: "v0.3.0"}}
+	if err := resolveWith(t, dir, found, true, false); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	moved := []lockfile.Plugin{{Name: "protoc-gen-found", Origin: lockfile.OriginPath, Version: "v0.4.0"}}
+	err := resolveWith(t, dir, moved, true, false)
+	if err == nil {
+		t.Fatal("a plugin that moved under the run must stop it")
+	}
+	for _, want := range []string{"protoc-gen-found", "v0.3.0", "v0.4.0", "--update"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }

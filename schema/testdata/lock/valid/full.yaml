@@ -10,8 +10,10 @@ deps:
     ref: main
     sha: 1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d
 plugins:
-  - name: protoc-gen-go
-    module: google.golang.org/protobuf/cmd/protoc-gen-go
-    version: v1.36.12
   - name: protoc-gen-dart
+    origin: path
     version: unknown
+  - name: protoc-gen-house
+    origin: file
+    version: v0.3.0
+    path: tools/protoc-gen-house

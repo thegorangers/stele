@@ -263,15 +263,20 @@ func downloads(p config.Plugin) []plugin.Download {
 	return out
 }
 
-// lockedPlugins renders the resolved binaries as lock entries, sorted by name
-// so that the same run always writes the same bytes.
+// lockedPlugins renders the resolved binaries the lock has anything to say
+// about, sorted by name so that the same run always writes the same bytes.
+//
+// Only the unpinned tiers are recorded. A plugin declared as module@version,
+// or as a per-platform url and sha256, is already named exactly by the
+// manifest; the lock would only be carrying a second copy of that fact.
 func lockedPlugins(binaries map[string]plugin.Binary) []lockfile.Plugin {
 	out := make([]lockfile.Plugin, 0, len(binaries))
 	for _, b := range binaries {
+		if b.Origin != plugin.OriginFile && b.Origin != plugin.OriginPath {
+			continue
+		}
 		out = append(out, lockfile.Plugin{
-			Name: b.Name, Origin: b.Origin, Module: b.Module, Version: b.Version,
-			URL: b.URL, SHA256: b.SHA256, ArchivePath: b.ArchivePath,
-			OS: b.OS, Arch: b.Arch, Path: b.Declared,
+			Name: b.Name, Origin: b.Origin, Version: b.Version, Path: b.Declared,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

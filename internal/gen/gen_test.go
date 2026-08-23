@@ -640,10 +640,11 @@ func TestRun_PluginDeclaredByPath(t *testing.T) {
 	}
 }
 
-// A downloaded plugin is pinned to bytes, and bytes are per-platform. The run
-// records the entry it actually used, platform included: a lock reviewed on
-// one machine has to say which machine produced it.
-func TestRun_RecordsTheDownloadedPluginsPlatform(t *testing.T) {
+// A downloaded plugin is pinned by the manifest: the digest for this platform
+// is written there, and it is checked on every use. The lock has nothing to
+// add, so it says nothing — a manifest whose plugins are all pinned produces a
+// lock with no plugins section at all.
+func TestRun_PinnedPluginsAreNotRecordedInTheLock(t *testing.T) {
 	s := newSpy(t, "ok")
 	body, err := os.ReadFile(s.bin)
 	if err != nil {
@@ -667,12 +668,14 @@ func TestRun_RecordsTheDownloadedPluginsPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := []lockfile.Plugin{{
-		Name: "protoc-gen-spy", Origin: lockfile.OriginURL, Version: "unknown",
-		OS: runtime.GOOS, Arch: runtime.GOARCH,
-		URL: srv.URL + "/protoc-gen-spy", SHA256: sum,
-	}}
-	if !reflect.DeepEqual(l.Plugins, want) {
-		t.Fatalf("plugins:\n got %+v\nwant %+v", l.Plugins, want)
+	if len(l.Plugins) != 0 {
+		t.Fatalf("the lock copies what the manifest already pins: %+v", l.Plugins)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "stele.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "plugins:") {
+		t.Fatalf("the lock still has a plugins section:\n%s", b)
 	}
 }
