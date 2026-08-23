@@ -63,7 +63,7 @@ func parseVars(lines []string) makeVars {
 		if m == nil {
 			continue
 		}
-		name, value := m[1], strings.TrimSpace(stripComment(m[3]))
+		name, value := m[1], strings.TrimSpace(stripMakeComment(m[3]))
 		if prev, seen := vars[name]; seen && prev != value {
 			ambiguous[name] = true
 		}
@@ -73,16 +73,6 @@ func parseVars(lines []string) makeVars {
 		delete(vars, name)
 	}
 	return vars
-}
-
-// stripComment removes a trailing make comment. A `#` inside a variable value
-// is a comment in make unless it is escaped, and none of the measured files
-// escape one.
-func stripComment(s string) string {
-	if i := strings.Index(s, "#"); i >= 0 {
-		return s[:i]
-	}
-	return s
 }
 
 // expand resolves the variable references in s. It reports false rather than
@@ -178,7 +168,11 @@ func parseInstalls(makefile []byte) (map[string][]goInstall, []string) {
 
 	out := map[string][]goInstall{}
 	var unparsed []string
-	for _, line := range logicalLines(string(makefile)) {
+	logical, err := logicalLines(string(makefile))
+	if err != nil {
+		return out, []string{err.Error()}
+	}
+	for _, line := range logical {
 		if !strings.Contains(line, "go install") {
 			continue
 		}

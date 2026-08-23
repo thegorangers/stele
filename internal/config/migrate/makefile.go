@@ -42,7 +42,11 @@ func parseExports(makefile []byte) ([]bufExport, []string, error) {
 		out      []bufExport
 		unparsed []string
 	)
-	for _, line := range logicalLines(string(makefile)) {
+	lines, err := logicalLines(string(makefile))
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, line := range lines {
 		if !strings.Contains(line, "buf export") {
 			continue
 		}
@@ -185,27 +189,190 @@ func (e *bufExport) parseTarget() error {
 	return nil
 }
 
-// logicalLines joins backslash continuations, which every measured Makefile
-// uses to spread one invocation over several lines.
-func logicalLines(s string) []string {
+// makeRecipePrefix is the character that marks a recipe line. .RECIPEPREFIX
+// can change it; a Makefile that does is refused rather than read with every
+// recipe mistaken for a make line.
+const makeRecipePrefix = "\t"
+
+// logicalLines joins backslash continuations and removes comments, returning
+// one string per logical line.
+//
+// Fidelity, and its limits. This is not a Make parser and deliberately is not
+// one: a second implementation of Make's expander would be its own source of
+// bugs. It models exactly the two comment rules that decide whether a line is
+// an invocation, both checked against GNU Make 4.4.1 rather than assumed:
+//
+//   - Outside a recipe, `#` starts a make comment even inside quotes — Make
+//     has no quoting at this level (`V = 'a#b'` really does leave `V = 'a`).
+//     `\#` is a literal hash. The comment runs to the end of the *logical*
+//     line: a backslash at the end of a comment line continues the comment,
+//     so the line after it is swallowed too.
+//   - Inside a recipe (a line beginning with a tab), the text goes to the
+//     shell, so `#` is a *shell* comment: it starts one only at a word
+//     boundary and only outside quotes — `--path 'example/a#b'` and the `#` of
+//     `repo.git#subdir=api` are data — and it ends at the newline, because
+//     in the shell a backslash inside a comment continues nothing.
+//
+// Beyond that it does not go, and what it cannot model it refuses:
+// .RECIPEPREFIX is an error, because it moves the boundary the whole model
+// rests on. Known limits, stated rather than guessed at: a tab-indented line
+// outside any rule is read as a recipe, and the body of a define/endef block
+// is read by the rule its own indentation suggests rather than by how the
+// variable is later used.
+func logicalLines(s string) ([]string, error) {
+	physical := strings.Split(s, "\n")
+	for _, line := range physical {
+		if strings.HasPrefix(line, ".RECIPEPREFIX") {
+			return nil, fmt.Errorf(".RECIPEPREFIX changes which lines are recipes; this reader understands only the default tab")
+		}
+	}
 	var (
-		out []string
-		cur strings.Builder
+		out    []string
+		cur    strings.Builder
+		recipe bool
+		open   bool
 	)
-	for _, line := range strings.Split(s, "\n") {
-		if t := strings.TrimRight(line, " \t"); strings.HasSuffix(t, `\`) {
+	end := func() {
+		text := cur.String()
+		cur.Reset()
+		open = false
+		if recipe {
+			text = strings.ReplaceAll(stripShellComments(text), "\n", " ")
+		} else {
+			text = stripMakeComment(text)
+		}
+		out = append(out, text)
+	}
+	for _, line := range physical {
+		if !open {
+			recipe = strings.HasPrefix(line, makeRecipePrefix)
+			open = true
+		}
+		t := strings.TrimRight(line, " \t")
+		if continued(t) {
 			cur.WriteString(strings.TrimSuffix(t, `\`))
-			cur.WriteString(" ")
+			// A recipe keeps its line boundary: a shell comment ends there.
+			// Outside a recipe Make replaces the continuation with a space,
+			// and a comment reaches across it.
+			if recipe {
+				cur.WriteString("\n")
+			} else {
+				cur.WriteString(" ")
+			}
 			continue
 		}
 		cur.WriteString(line)
-		out = append(out, cur.String())
-		cur.Reset()
+		end()
 	}
 	if cur.Len() > 0 {
-		out = append(out, cur.String())
+		end()
 	}
-	return out
+	return out, nil
+}
+
+// continued reports whether a line ends in a continuation. An even number of
+// trailing backslashes escapes itself and continues nothing.
+func continued(t string) bool {
+	n := 0
+	for i := len(t) - 1; i >= 0 && t[i] == '\\'; i-- {
+		n++
+	}
+	return n%2 == 1
+}
+
+// stripMakeComment removes a make comment from a logical line outside any
+// recipe. Quotes do not protect a `#` here; a backslash does.
+func stripMakeComment(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			if i+1 < len(s) && s[i+1] == '#' {
+				b.WriteString("#")
+				i++
+				continue
+			}
+			if i+1 < len(s) && s[i+1] == '\\' {
+				b.WriteString(`\\`)
+				i++
+				continue
+			}
+			b.WriteString(`\`)
+		case '#':
+			return b.String()
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+// stripShellComments removes the shell comments of a recipe. Newlines mark
+// where one physical line ends; a comment ends with it.
+func stripShellComments(s string) string {
+	var (
+		b     strings.Builder
+		quote byte
+		prev  byte = '\n' // the start of the text is a word boundary
+	)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if quote == '"' && c == '\\' && i+1 < len(s) {
+				b.WriteByte(c)
+				i++
+				b.WriteByte(s[i])
+				prev = 'x'
+				continue
+			}
+			b.WriteByte(c)
+			if c == quote {
+				quote = 0
+			}
+			prev = c
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+			b.WriteByte(c)
+		case '\\':
+			b.WriteByte(c)
+			if i+1 < len(s) {
+				i++
+				b.WriteByte(s[i])
+			}
+			prev = 'x'
+			continue
+		case '#':
+			if !wordBoundary(prev) {
+				b.WriteByte(c)
+				break
+			}
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+			if i < len(s) {
+				b.WriteByte('\n')
+			}
+			prev = '\n'
+			continue
+		default:
+			b.WriteByte(c)
+		}
+		prev = c
+	}
+	return b.String()
+}
+
+// wordBoundary reports whether a `#` following c begins a word, which is
+// where the shell starts a comment.
+func wordBoundary(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', ';', '|', '&', '(':
+		return true
+	}
+	return false
 }
 
 // fields splits a shell-ish command line, honouring single and double quotes.

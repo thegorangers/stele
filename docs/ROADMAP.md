@@ -48,8 +48,22 @@ because each has already cost someone time.
   error. The rule is stated in `internal/resolve/resolve.go` (`resolveFiles`) and in
   the README, and is held by a test that resolves one closure under every permutation
   of its dependencies.
-- **#4 `migrate` parses Makefile comments as invocations**, producing spurious
-  "could not translate" reports that train people to ignore the report.
+- ~~**#4 `migrate` parses Makefile comments as invocations.**~~ Fixed. A comment
+  documenting an example invocation was read as one, and its prose apostrophe was
+  reported as an unterminated quote — an item in a report whose only value is that
+  it is trusted enough to be read. The Makefile reader now removes comments before
+  looking for an invocation, honouring the two rules that differ and were checked
+  against GNU Make 4.4.1 rather than assumed: outside a recipe `#` starts a comment
+  even inside quotes and runs to the end of the *logical* line, so a backslash
+  continues the comment; inside a recipe the text goes to the shell, so `#` opens a
+  comment only at a word boundary outside quotes — leaving `repo.git#subdir=api`
+  and `--path 'a#b'` intact — and ends at the newline. It is not a Make parser and
+  says so: `.RECIPEPREFIX`, which moves the boundary the model rests on, is refused
+  outright rather than mis-read. The limits are stated in
+  `internal/config/migrate/makefile.go` (`logicalLines`). Across the 12 migratable
+  repositories of the measured fleet the unresolved reports are byte-identical
+  before and after; on the repository that produced the defect exactly one item
+  disappears, the false one, and the other twelve remain.
 
 ## Milestone 2 — releases
 
