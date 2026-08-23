@@ -216,7 +216,7 @@ func TestSaveLoad_PluginTiers(t *testing.T) {
 		Version: lockfile.Version,
 		Plugins: []lockfile.Plugin{
 			{Name: "protoc-gen-go", Origin: "managed", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11"},
-			{Name: "protoc-gen-dart", Origin: "url", URL: "https://example.com/dart.tar.gz", SHA256: "abc", ArchivePath: "bin/protoc-gen-dart", Version: "unknown"},
+			{Name: "protoc-gen-dart", Origin: "url", OS: "linux", Arch: "amd64", URL: "https://example.com/dart.tar.gz", SHA256: "abc", ArchivePath: "bin/protoc-gen-dart", Version: "unknown"},
 			{Name: "protoc-gen-house", Origin: "file", Path: "tools/protoc-gen-house", Version: "unknown"},
 			{Name: "protoc-gen-found", Origin: "path", Version: "unknown"},
 		},
@@ -229,7 +229,7 @@ func TestSaveLoad_PluginTiers(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	want := []lockfile.Plugin{
-		{Name: "protoc-gen-dart", Origin: "url", URL: "https://example.com/dart.tar.gz", SHA256: "abc", ArchivePath: "bin/protoc-gen-dart", Version: "unknown"},
+		{Name: "protoc-gen-dart", Origin: "url", OS: "linux", Arch: "amd64", URL: "https://example.com/dart.tar.gz", SHA256: "abc", ArchivePath: "bin/protoc-gen-dart", Version: "unknown"},
 		{Name: "protoc-gen-found", Origin: "path", Version: "unknown"},
 		{Name: "protoc-gen-go", Origin: "managed", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11"},
 		{Name: "protoc-gen-house", Origin: "file", Path: "tools/protoc-gen-house", Version: "unknown"},
@@ -247,5 +247,53 @@ func TestLoad_PluginOriginValidated(t *testing.T) {
 	}
 	if _, err := lockfile.Load(path); err == nil || !strings.Contains(err.Error(), "telepathy") {
 		t.Fatalf("Load: expected a complaint naming the origin, got %v", err)
+	}
+}
+
+// A downloaded plugin is pinned to bytes, and bytes are per-platform. The lock
+// records which platform's entry this run used, so that a lock reviewed on one
+// machine says which machine produced it.
+func TestSaveLoad_PluginDownloadRecordsThePlatform(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stele.lock")
+	in := &lockfile.Lock{
+		Version: lockfile.Version,
+		Plugins: []lockfile.Plugin{{
+			Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
+			OS: "linux", Arch: "amd64",
+			URL: "https://example.com/dart-linux-x64.tar.gz", SHA256: "abc",
+			ArchivePath: "bin/protoc-gen-dart",
+		}},
+	}
+	if err := lockfile.Save(path, in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "os: linux") || !strings.Contains(string(b), "arch: amd64") {
+		t.Errorf("the lock does not name the platform:\n%s", b)
+	}
+	out, err := lockfile.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !reflect.DeepEqual(out.Plugins, in.Plugins) {
+		t.Errorf("plugins:\n got %+v\nwant %+v", out.Plugins, in.Plugins)
+	}
+}
+
+// A url record without a platform would say which bytes ran without saying
+// which machine they ran on, which is the half-record this shape exists to
+// prevent.
+func TestLoad_PluginDownloadWithoutAPlatformIsRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stele.lock")
+	body := "version: 1\nplugins:\n  - name: protoc-gen-dart\n    origin: url\n    version: unknown\n" +
+		"    url: https://example.com/dart\n    sha256: abc\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockfile.Load(path); err == nil || !strings.Contains(err.Error(), "platform") {
+		t.Fatalf("Load: expected a complaint about the missing platform, got %v", err)
 	}
 }

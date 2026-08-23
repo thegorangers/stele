@@ -1,5 +1,6 @@
-# valid: a plugin that is not a Go program, pinned to the digest of a
-# published release archive.
+# valid: a plugin that is not a Go program, pinned to the digest of a published
+# release archive — one entry per platform, because a digest pins bytes and
+# bytes are per-platform.
 version: 1
 modules:
   - path: proto
@@ -9,7 +10,15 @@ generate:
       - module: proto
     plugins:
       - local: protoc-gen-dart
-        url: https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz
-        sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        archive_path: bin/protoc-gen-dart
+        downloads:
+          - os: linux
+            arch: amd64
+            url: https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz
+            sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+            archive_path: bin/protoc-gen-dart
+          - os: darwin
+            arch: arm64
+            url: https://example.com/releases/v1.2.3/protoc-gen-dart-macos-arm64.tar.gz
+            sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+            archive_path: bin/protoc-gen-dart
         out: lib/gen

@@ -1,0 +1,22 @@
+# beyond: two entries for one platform are two answers to a question with one
+# answer. JSON Schema can require the items to be unique but not to be unique
+# in os and arch alone, so only the parser refuses this.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: dart
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-dart
+        downloads:
+          - os: linux
+            arch: amd64
+            url: https://example.com/first
+            sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+          - os: linux
+            arch: amd64
+            url: https://example.com/second
+            sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+        out: lib/gen

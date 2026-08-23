@@ -3,10 +3,15 @@ package gen_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -632,5 +637,42 @@ func TestRun_PluginDeclaredByPath(t *testing.T) {
 	}
 	if warn.Len() != 0 {
 		t.Errorf("a relative path warned: %q", warn.String())
+	}
+}
+
+// A downloaded plugin is pinned to bytes, and bytes are per-platform. The run
+// records the entry it actually used, platform included: a lock reviewed on
+// one machine has to say which machine produced it.
+func TestRun_RecordsTheDownloadedPluginsPlatform(t *testing.T) {
+	s := newSpy(t, "ok")
+	body, err := os.ReadFile(s.bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(body)
+	sum := hex.EncodeToString(digest[:])
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
+	defer srv.Close()
+
+	plugins := "      - local: protoc-gen-spy\n        downloads:\n" +
+		"          - os: " + runtime.GOOS + "\n            arch: " + runtime.GOARCH + "\n" +
+		"            url: " + srv.URL + "/protoc-gen-spy\n            sha256: " + sum + "\n" +
+		"        out: gen\n        opt: [mode=text]\n"
+	dir, fetch := world(t, manifest(plugins, "api"))
+
+	if err := run(t, dir, fetch, gen.Options{CacheRoot: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := lockfile.Load(filepath.Join(dir, "stele.lock"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []lockfile.Plugin{{
+		Name: "protoc-gen-spy", Origin: lockfile.OriginURL, Version: "unknown",
+		OS: runtime.GOOS, Arch: runtime.GOARCH,
+		URL: srv.URL + "/protoc-gen-spy", SHA256: sum,
+	}}
+	if !reflect.DeepEqual(l.Plugins, want) {
+		t.Fatalf("plugins:\n got %+v\nwant %+v", l.Plugins, want)
 	}
 }

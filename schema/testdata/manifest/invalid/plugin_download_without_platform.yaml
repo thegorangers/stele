@@ -1,0 +1,15 @@
+# invalid: an entry without an os and an arch says which bytes to run but not
+# which machine they run on, which is what a single-url form got wrong.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: dart
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-dart
+        downloads:
+          - url: https://example.com/protoc-gen-dart
+            sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        out: lib/gen

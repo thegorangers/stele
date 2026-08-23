@@ -545,9 +545,10 @@ generate:
 	}
 }
 
-// A plugin that is not a Go program can still be pinned: it declares the URL
-// of a published binary and the sha256 the download must have. A third form
-// names a path, which pins nothing but at least says where the binary is.
+// A plugin that is not a Go program can still be pinned, but the bytes it is
+// pinned to are per-platform: one digest cannot name the linux/amd64 binary
+// and the darwin/arm64 one at once. So the download tier is a list, one entry
+// per platform, spelled the way Go spells it.
 func TestLoad_PluginTiers(t *testing.T) {
 	f := mustLoad(t, `
 version: 1
@@ -563,9 +564,17 @@ generate:
         version: v1.36.11
         out: gen
       - local: protoc-gen-dart
-        url: https://example.com/protoc-gen-dart-linux-x64.tar.gz
-        sha256: 0000000000000000000000000000000000000000000000000000000000000000
-        archive_path: bin/protoc-gen-dart
+        downloads:
+          - os: linux
+            arch: amd64
+            url: https://example.com/protoc-gen-dart-linux-x64.tar.gz
+            sha256: 0000000000000000000000000000000000000000000000000000000000000000
+            archive_path: bin/protoc-gen-dart
+          - os: darwin
+            arch: arm64
+            url: https://example.com/protoc-gen-dart-macos-arm64.tar.gz
+            sha256: 1111111111111111111111111111111111111111111111111111111111111111
+            archive_path: bin/protoc-gen-dart
         out: lib
       - local: protoc-gen-house
         path: tools/protoc-gen-house
@@ -576,11 +585,22 @@ generate:
 	want := []config.Plugin{
 		{Local: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11", Out: "gen"},
 		{
-			Local:       "protoc-gen-dart",
-			URL:         "https://example.com/protoc-gen-dart-linux-x64.tar.gz",
-			SHA256:      "0000000000000000000000000000000000000000000000000000000000000000",
-			ArchivePath: "bin/protoc-gen-dart",
-			Out:         "lib",
+			Local: "protoc-gen-dart",
+			Downloads: []config.Download{
+				{
+					OS: "linux", Arch: "amd64",
+					URL:         "https://example.com/protoc-gen-dart-linux-x64.tar.gz",
+					SHA256:      "0000000000000000000000000000000000000000000000000000000000000000",
+					ArchivePath: "bin/protoc-gen-dart",
+				},
+				{
+					OS: "darwin", Arch: "arm64",
+					URL:         "https://example.com/protoc-gen-dart-macos-arm64.tar.gz",
+					SHA256:      "1111111111111111111111111111111111111111111111111111111111111111",
+					ArchivePath: "bin/protoc-gen-dart",
+				},
+			},
+			Out: "lib",
 		},
 		{Local: "protoc-gen-house", Path: "tools/protoc-gen-house", Out: "house"},
 		{Local: "protoc-gen-found", Out: "found"},
@@ -605,13 +625,17 @@ generate:
         out: gen
 ` + lines
 	}
+	const oneDownload = "        downloads:\n" +
+		"          - os: linux\n            arch: amd64\n" +
+		"            url: https://example.com/x\n" +
+		"            sha256: 0000000000000000000000000000000000000000000000000000000000000000\n"
 	for _, tc := range []struct {
 		name, lines, want string
 	}{
 		{
-			name:  "module and url",
-			lines: "        module: example.com/x\n        version: v1.0.0\n        url: https://example.com/x\n        sha256: 00\n",
-			want:  `plugin "protoc-gen-x" declares both module and url`,
+			name:  "module and downloads",
+			lines: "        module: example.com/x\n        version: v1.0.0\n" + oneDownload,
+			want:  `plugin "protoc-gen-x" declares both module and downloads`,
 		},
 		{
 			name:  "module and path",
@@ -619,29 +643,48 @@ generate:
 			want:  `plugin "protoc-gen-x" declares both module and path`,
 		},
 		{
-			name:  "url and path",
-			lines: "        url: https://example.com/x\n        sha256: 00\n        path: tools/x\n",
-			want:  `plugin "protoc-gen-x" declares both url and path`,
+			name:  "downloads and path",
+			lines: oneDownload + "        path: tools/x\n",
+			want:  `plugin "protoc-gen-x" declares both downloads and path`,
+		},
+		{
+			name:  "empty list",
+			lines: "        downloads: []\n",
+			want:  "downloads: declared with no entries",
 		},
 		{
 			name:  "url without sha256",
-			lines: "        url: https://example.com/x\n",
-			want:  "sha256: missing",
+			lines: "        downloads:\n          - os: linux\n            arch: amd64\n            url: https://example.com/x\n",
+			want:  "downloads[0].sha256: missing",
 		},
 		{
 			name:  "sha256 without url",
-			lines: "        sha256: 0000000000000000000000000000000000000000000000000000000000000000\n",
-			want:  "sha256: declared without a url",
+			lines: "        downloads:\n          - os: linux\n            arch: amd64\n            sha256: 0000000000000000000000000000000000000000000000000000000000000000\n",
+			want:  "downloads[0].url: missing",
 		},
 		{
 			name:  "sha256 not a hash",
-			lines: "        url: https://example.com/x\n        sha256: nonsense\n",
-			want:  "sha256: ",
+			lines: "        downloads:\n          - os: linux\n            arch: amd64\n            url: https://example.com/x\n            sha256: nonsense\n",
+			want:  "downloads[0].sha256: ",
 		},
 		{
-			name:  "archive_path without url",
-			lines: "        archive_path: bin/x\n",
-			want:  "archive_path: declared without a url",
+			name:  "no os",
+			lines: "        downloads:\n          - arch: amd64\n            url: https://example.com/x\n            sha256: 0000000000000000000000000000000000000000000000000000000000000000\n",
+			want:  "downloads[0].os: missing",
+		},
+		{
+			name:  "no arch",
+			lines: "        downloads:\n          - os: linux\n            url: https://example.com/x\n            sha256: 0000000000000000000000000000000000000000000000000000000000000000\n",
+			want:  "downloads[0].arch: missing",
+		},
+		{
+			name: "the same platform twice",
+			lines: "        downloads:\n" +
+				"          - os: linux\n            arch: amd64\n            url: https://example.com/a\n" +
+				"            sha256: 0000000000000000000000000000000000000000000000000000000000000000\n" +
+				"          - os: linux\n            arch: amd64\n            url: https://example.com/b\n" +
+				"            sha256: 1111111111111111111111111111111111111111111111111111111111111111\n",
+			want: "downloads[1]: linux/amd64 is already declared by downloads[0]",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

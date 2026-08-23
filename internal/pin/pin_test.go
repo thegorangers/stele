@@ -294,6 +294,7 @@ func TestResolve_PluginDigestDriftIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	locked := []lockfile.Plugin{{
 		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
+		OS: "linux", Arch: "amd64",
 		URL: "https://example.com/dart.tar.gz", SHA256: "aa", ArchivePath: "bin/protoc-gen-dart",
 	}}
 	if err := resolveWith(t, dir, locked, true, false); err != nil {
@@ -301,6 +302,7 @@ func TestResolve_PluginDigestDriftIsAnError(t *testing.T) {
 	}
 	drifted := []lockfile.Plugin{{
 		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
+		OS: "linux", Arch: "amd64",
 		URL: "https://example.com/dart.tar.gz", SHA256: "bb", ArchivePath: "bin/protoc-gen-dart",
 	}}
 	err := resolveWith(t, dir, drifted, true, false)
@@ -323,5 +325,30 @@ func TestResolve_ALockWithoutOriginsIsNotDrift(t *testing.T) {
 	now := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginManaged, Module: "example.com/x", Version: "v1.0.0"}}
 	if err := resolveWith(t, dir, now, true, false); err != nil {
 		t.Fatalf("Resolve over a lock written before origins were recorded: %v", err)
+	}
+}
+
+// A downloaded plugin is pinned per platform, so a lock written on one machine
+// records another machine's bytes. Comparing this machine's digest against it
+// would report drift on every mixed-platform team and teach everyone to run
+// --update until it stopped complaining. The record for another platform is
+// left alone: it is not evidence about this run, and it is not drift either.
+func TestResolve_APluginLockedOnAnotherPlatformIsNotDrift(t *testing.T) {
+	dir := t.TempDir()
+	locked := []lockfile.Plugin{{
+		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
+		OS: "linux", Arch: "amd64",
+		URL: "https://example.com/dart-linux-x64.tar.gz", SHA256: "aa", ArchivePath: "bin/protoc-gen-dart",
+	}}
+	if err := resolveWith(t, dir, locked, true, false); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	elsewhere := []lockfile.Plugin{{
+		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
+		OS: "darwin", Arch: "arm64",
+		URL: "https://example.com/dart-macos-arm64.tar.gz", SHA256: "bb", ArchivePath: "bin/protoc-gen-dart",
+	}}
+	if err := resolveWith(t, dir, elsewhere, true, false); err != nil {
+		t.Fatalf("a plugin recorded for another platform must not be read as drift: %v", err)
 	}
 }

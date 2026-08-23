@@ -1,5 +1,5 @@
 # invalid: a plugin comes from exactly one place, and this one declares both a
-# module and a url.
+# module and a downloads list.
 version: 1
 modules:
   - path: proto
@@ -11,6 +11,9 @@ generate:
       - local: protoc-gen-go
         module: google.golang.org/protobuf/cmd/protoc-gen-go
         version: v1.36.12
-        url: https://example.com/protoc-gen-go
-        sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        downloads:
+          - os: linux
+            arch: amd64
+            url: https://example.com/protoc-gen-go
+            sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         out: gen/go

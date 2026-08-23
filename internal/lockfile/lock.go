@@ -73,9 +73,11 @@ type Lock struct {
 // a run another machine can reproduce and one it cannot, and a reader of a
 // merge request should not have to infer it from which fields are empty.
 //
-// Version is "unknown" wherever no version can be had — which is every tier
-// but the first. That is an observation, not a pin; the pin, where there is
-// one, is the sha256.
+// Version is what the binary said about itself where the manifest did not say
+// it: for an explicit path and for a PATH lookup it is read from the binary's
+// own build metadata when there is any, and "unknown" when there is not. That
+// is an observation, not a pin — the origin beside it is what says so; the
+// pin, where there is one, is the version or the sha256.
 type Plugin struct {
 	// Name is the manifest's own spelling of the plugin.
 	Name string `yaml:"name"`
@@ -85,9 +87,15 @@ type Plugin struct {
 	// Module is the Go module the plugin was installed from, when the tool
 	// installed it.
 	Module string `yaml:"module,omitempty"`
-	// Version is the installed version, or the version observed on PATH, or
-	// "unknown".
+	// Version is the installed version, the version observed in a binary the
+	// machine chose, or "unknown".
 	Version string `yaml:"version"`
+	// OS and Arch are the platform of the download entry that was used. A
+	// digest pins bytes and bytes are per-platform, so a record without them
+	// would say which bytes ran without saying which machine they ran on, and
+	// a lock reviewed on one machine could not be read on another.
+	OS   string `yaml:"os,omitempty"`
+	Arch string `yaml:"arch,omitempty"`
 	// URL is where a downloaded plugin came from.
 	URL string `yaml:"url,omitempty"`
 	// SHA256 is the digest that download was verified against. It is the pin.
@@ -210,6 +218,10 @@ func (l *Lock) validate() error {
 			// A url record without both halves would claim a pin it does not
 			// have, which is worse than recording no origin at all.
 			return fmt.Errorf("plugins[%d]: plugin %q is recorded as %s but does not carry both a url and a sha256",
+				i, p.Name, OriginURL)
+		case p.Origin == OriginURL && (p.OS == "" || p.Arch == ""):
+			return fmt.Errorf("plugins[%d]: plugin %q is recorded as %s but names no platform; "+
+				"a digest pins bytes, and bytes are per-platform, so the record has to say which os and arch it used",
 				i, p.Name, OriginURL)
 		}
 		if seenPlugins[p.Name] {

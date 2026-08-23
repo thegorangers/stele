@@ -5,7 +5,9 @@
   "description": "The pinned record of what a build consumed. It is written by the tool and read by people, most often in a merge request, which is why it is small: one line of address per dependency plus the commit it resolved to, and one line per plugin.\n\nA git commit SHA is already a cryptographic hash of the content, so a pinned SHA yields byte-identical files from any remote or git refuses to hand them over. There are no per-file hashes here; a lock on disk that still carries them is read, and the fields are marked deprecated below.\n\nAs with the manifest, a test in this repository runs one corpus of examples through both this schema and the real parser and fails on any disagreement.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version"],
+  "required": [
+    "version"
+  ],
   "properties": {
     "version": {
       "description": "Version of the lock format. It is a separate number from the manifest version: the two evolve independently, and a lock is a generated file while a manifest is written by hand.",
@@ -14,15 +16,25 @@
     },
     "deps": {
       "description": "The pinned dependencies, sorted by name, so that re-running a resolution that changed nothing produces an empty diff.\n\nThis is the full transitive closure, flat and not nested: resolution follows a producer's own manifest, so most of the files that reach the compiler come from repositories the root manifest never names. Whether an entry is direct is deliberately not recorded — the manifest already says so, and a second copy of that fact could only drift.\n\nThe parser also checks: no two entries may share a name.",
-      "type": ["array", "null"],
+      "type": [
+        "array",
+        "null"
+      ],
       "uniqueItems": true,
-      "items": { "$ref": "#/$defs/entry" }
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
     },
     "plugins": {
       "description": "The code generation plugins the run went through, sorted by name. They are recorded for the same reason the dependencies are: a plugin's version decides the bytes it emits, so a lock that recorded only the inputs would pin half of what produced the output.\n\nThe parser also checks: no two records may share a name.",
-      "type": ["array", "null"],
+      "type": [
+        "array",
+        "null"
+      ],
       "uniqueItems": true,
-      "items": { "$ref": "#/$defs/plugin" }
+      "items": {
+        "$ref": "#/$defs/plugin"
+      }
     }
   },
   "$defs": {
@@ -30,7 +42,12 @@
       "title": "pinned dependency",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "git", "ref", "sha"],
+      "required": [
+        "name",
+        "git",
+        "ref",
+        "sha"
+      ],
       "properties": {
         "name": {
           "description": "The dependency, as the manifest that requested it names it.",
@@ -51,13 +68,20 @@
           "description": "The full commit the dependency resolved to. It is the pin: it names the content, not a label somebody can move onto other content.\n\nIn practice this is a 40-character hex SHA-1, and that is what the tool writes. It is not constrained to that here because the parser does not constrain it either, and a schema that refused a lock the tool would load would be the drift this schema exists to avoid.",
           "type": "string",
           "minLength": 1,
-          "examples": ["9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d"]
+          "examples": [
+            "9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d"
+          ]
         },
         "modules": {
           "description": "Belongs to locks written before the per-file hashes were dropped. Parsed so that a lock already on disk keeps working, read by nothing, and left out the next time the lock is written.",
           "deprecated": true,
-          "type": ["array", "null"],
-          "items": { "type": "string" }
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         },
         "manifest": {
           "description": "Belongs to locks written before the per-file hashes were dropped. See modules.",
@@ -67,17 +91,25 @@
         "files": {
           "description": "Belongs to locks written before the per-file hashes were dropped. See modules.",
           "deprecated": true,
-          "type": ["object", "null"],
-          "additionalProperties": { "type": "string" }
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },
     "plugin": {
       "title": "recorded plugin",
-      "description": "One code generation plugin the run went through.\n\nThe origin says which tier of the manifest the binary came from, and the fields beside it are what identifies it on that tier: module and version when the tool installed it, url and sha256 when it downloaded and verified it, path when the manifest pointed at a file, and nothing but the name when it was found on PATH. Recording the tier is the point: it is the difference between a run another machine can reproduce and one it cannot, and a reader of a merge request should not have to infer it from which fields are empty.\n\nThe version is \"unknown\" wherever no version can be had, which is every tier but the first. That is an observation, not a pin; the pin, where there is one, is the sha256.",
+      "description": "One code generation plugin the run went through.\n\nThe origin says which tier of the manifest the binary came from, and the fields beside it are what identifies it on that tier: module and version when the tool installed it, url, sha256 and the platform they are for when it downloaded and verified it, path when the manifest pointed at a file, and nothing but the name when it was found on PATH. Recording the tier is the point: it is the difference between a run another machine can reproduce and one it cannot, and a reader of a merge request should not have to infer it from which fields are empty.\n\nThe version is what the binary said about itself where the manifest did not say it: for a path and for a PATH lookup it is read from the binary’s own build metadata when there is any, and \"unknown\" when there is not. That is an observation, not a pin — the origin beside it is what says so; the pin, where there is one, is the version or the sha256.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version"],
+      "required": [
+        "name",
+        "version"
+      ],
       "properties": {
         "name": {
           "description": "The manifest's own spelling of the plugin.",
@@ -86,7 +118,12 @@
         },
         "origin": {
           "description": "Which tier the binary came from. Absent in a lock written before origins were recorded, which is read as \"not stated\" rather than as drift.",
-          "enum": ["managed", "url", "file", "path"]
+          "enum": [
+            "managed",
+            "url",
+            "file",
+            "path"
+          ]
         },
         "module": {
           "description": "The Go module the plugin was installed from, when the tool installed it.",
@@ -96,7 +133,20 @@
           "description": "The installed version, the version observed on PATH, or \"unknown\".",
           "type": "string",
           "minLength": 1,
-          "examples": ["v1.36.12", "unknown"]
+          "examples": [
+            "v1.36.12",
+            "unknown"
+          ]
+        },
+        "os": {
+          "description": "The GOOS of the download entry that was used, spelled as Go spells it. A digest pins bytes and bytes are per-platform, so a record naming the digest but not the platform says which bytes ran without saying which machine they ran on.",
+          "type": "string",
+          "minLength": 1
+        },
+        "arch": {
+          "description": "The GOARCH of the download entry that was used, spelled as Go spells it.",
+          "type": "string",
+          "minLength": 1
         },
         "url": {
           "description": "Where a downloaded plugin came from.",
@@ -115,13 +165,37 @@
           "type": "string"
         }
       },
-      "if": { "properties": { "origin": { "const": "url" } }, "required": ["origin"] },
-      "then": {
-        "description": "A record that claims the download tier must carry both halves of the pin; one half would claim a pin it does not have.",
-        "required": ["url", "sha256"],
+      "if": {
         "properties": {
-          "url": { "minLength": 1 },
-          "sha256": { "minLength": 1 }
+          "origin": {
+            "const": "url"
+          }
+        },
+        "required": [
+          "origin"
+        ]
+      },
+      "then": {
+        "description": "A record that claims the download tier must carry both halves of the pin and the platform they are for: one half would claim a pin it does not have, and no platform would leave the reader unable to tell which machine produced the lock.",
+        "required": [
+          "url",
+          "sha256",
+          "os",
+          "arch"
+        ],
+        "properties": {
+          "url": {
+            "minLength": 1
+          },
+          "sha256": {
+            "minLength": 1
+          },
+          "os": {
+            "minLength": 1
+          },
+          "arch": {
+            "minLength": 1
+          }
         }
       }
     }

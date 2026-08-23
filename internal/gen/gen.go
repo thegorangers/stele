@@ -170,6 +170,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 						Name: bin.Name, Path: bin.Path, Module: bin.Module,
 						Version: bin.Version, Origin: bin.Origin,
 						URL: bin.URL, SHA256: bin.SHA256,
+						OS: bin.OS, Arch: bin.Arch,
 					})
 					resp, err := plugin.Run(ctx, bin.Path, req)
 					if err != nil {
@@ -200,7 +201,11 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 // binary it is. Two targets naming the same plugin at the same version are one
 // binary; the same name at two versions is two, and must not collapse.
 func pluginKey(p config.Plugin) string {
-	return strings.Join([]string{p.Local, p.Module, p.Version, p.URL, p.SHA256, p.ArchivePath, p.Path}, "\x00")
+	parts := []string{p.Local, p.Module, p.Version, p.Path}
+	for _, d := range p.Downloads {
+		parts = append(parts, d.OS, d.Arch, d.URL, d.SHA256, d.ArchivePath)
+	}
+	return strings.Join(parts, "\x00")
 }
 
 // resolvePlugins turns every plugin of the selected targets into a runnable
@@ -222,14 +227,13 @@ func resolvePlugins(ctx context.Context, dir string, targets []config.GenTarget,
 				return nil, fmt.Errorf("target %q, plugin %q: it declares %s@%s, which this tool installs into its own cache, "+
 					"but this run was given no cache root", t.Name, p.Local, p.Module, p.Version)
 			}
-			if p.URL != "" && cache.Root == "" {
-				return nil, fmt.Errorf("target %q, plugin %q: it declares a url, which this tool downloads into its own cache, "+
+			if len(p.Downloads) > 0 && cache.Root == "" {
+				return nil, fmt.Errorf("target %q, plugin %q: it declares downloads, which this tool fetches into its own cache, "+
 					"but this run was given no cache root", t.Name, p.Local)
 			}
 			bin, err := cache.Resolve(ctx, plugin.Spec{
 				Name: p.Local, Module: p.Module, Version: p.Version,
-				URL: p.URL, SHA256: p.SHA256, ArchivePath: p.ArchivePath,
-				Path: p.Path, Dir: dir,
+				Downloads: downloads(p), Path: p.Path, Dir: dir,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("target %q: %w", t.Name, err)
@@ -243,6 +247,22 @@ func resolvePlugins(ctx context.Context, dir string, targets []config.GenTarget,
 	return out, nil
 }
 
+// downloads translates the manifest's download entries into the resolver's.
+// The two types are separate so that the resolver does not depend on the
+// manifest parser, which is what lets a plugin be resolved from anywhere.
+func downloads(p config.Plugin) []plugin.Download {
+	if len(p.Downloads) == 0 {
+		return nil
+	}
+	out := make([]plugin.Download, 0, len(p.Downloads))
+	for _, d := range p.Downloads {
+		out = append(out, plugin.Download{
+			OS: d.OS, Arch: d.Arch, URL: d.URL, SHA256: d.SHA256, ArchivePath: d.ArchivePath,
+		})
+	}
+	return out
+}
+
 // lockedPlugins renders the resolved binaries as lock entries, sorted by name
 // so that the same run always writes the same bytes.
 func lockedPlugins(binaries map[string]plugin.Binary) []lockfile.Plugin {
@@ -250,7 +270,8 @@ func lockedPlugins(binaries map[string]plugin.Binary) []lockfile.Plugin {
 	for _, b := range binaries {
 		out = append(out, lockfile.Plugin{
 			Name: b.Name, Origin: b.Origin, Module: b.Module, Version: b.Version,
-			URL: b.URL, SHA256: b.SHA256, ArchivePath: b.ArchivePath, Path: b.Declared,
+			URL: b.URL, SHA256: b.SHA256, ArchivePath: b.ArchivePath,
+			OS: b.OS, Arch: b.Arch, Path: b.Declared,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

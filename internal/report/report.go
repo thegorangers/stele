@@ -97,6 +97,11 @@ type Component struct {
 	// without recording which bytes they were.
 	URL    string `json:"url,omitempty"`
 	SHA256 string `json:"sha256,omitempty"`
+	// OS and Arch are the platform of the download entry that was used. A
+	// digest names bytes and bytes are per-platform, so the report says which
+	// platform's bytes these were.
+	OS   string `json:"os,omitempty"`
+	Arch string `json:"arch,omitempty"`
 	// Note says why a version is Unknown. It is prose for a human reading the
 	// evidence, never parsed.
 	Note string `json:"note,omitempty"`
@@ -132,6 +137,8 @@ type Plugin struct {
 	Origin  string
 	URL     string
 	SHA256  string
+	OS      string
+	Arch    string
 }
 
 // Build assembles the report for a run that invoked the named plugins.
@@ -230,7 +237,10 @@ func (r *Report) Summary() string {
 // describePlugin reads a plugin's module metadata, reporting honestly when
 // there is none to read.
 func describePlugin(p Plugin) Component {
-	c := Component{Kind: KindPlugin, Version: Unknown, Origin: p.Origin, URL: p.URL, SHA256: p.SHA256}
+	c := Component{
+		Kind: KindPlugin, Version: Unknown, Origin: p.Origin,
+		URL: p.URL, SHA256: p.SHA256, OS: p.OS, Arch: p.Arch,
+	}
 	bin := p.Path
 	if bin == "" {
 		bin = p.Name
@@ -263,6 +273,15 @@ func describePlugin(p Plugin) Component {
 	if c.Version == "" {
 		c.Version = Unknown
 		c.Note = "the binary carries a module path but no version"
+		return c
+	}
+	if p.Origin == OriginFile || p.Origin == OriginPath {
+		// The tiers where the machine chose the binary. The version is real —
+		// it was read out of the artefact that ran — but it is an observation
+		// of this machine, not something the manifest pinned, and a reader
+		// asking whether another machine would run the same bytes must not
+		// have to infer that from the origin alone.
+		c.Note = "observed in the binary this machine had; the manifest pins no version on this tier"
 	}
 	return c
 }

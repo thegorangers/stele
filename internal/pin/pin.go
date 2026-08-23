@@ -171,6 +171,18 @@ func verifyPlugins(lock *lockfile.Lock, opts Options) error {
 		// one, the declared path of one the manifest points at. The origin is
 		// compared only when the lock states it, so that a lock written
 		// before origins were recorded is not read as drift it is not.
+		// A downloaded plugin is pinned per platform: the lock holds the entry
+		// whichever machine last recorded it used, and this machine may be a
+		// different one. Comparing across platforms would report drift on
+		// every mixed-platform team, and drift that fires on a correct
+		// manifest teaches people to re-resolve until it stops. What ran here
+		// is still pinned — by the digest in the manifest, checked before the
+		// download was unpacked — so nothing is unverified; it is only the
+		// lock that has nothing comparable to say.
+		if want.Origin == lockfile.OriginURL && got.Origin == lockfile.OriginURL &&
+			(want.OS != got.OS || want.Arch != got.Arch) {
+			continue
+		}
 		if want.Version == got.Version && want.Module == got.Module &&
 			want.SHA256 == got.SHA256 && want.Path == got.Path &&
 			(want.Origin == "" || want.Origin == got.Origin) {
@@ -190,7 +202,7 @@ func verifyPlugins(lock *lockfile.Lock, opts Options) error {
 func describe(p lockfile.Plugin) string {
 	switch {
 	case p.SHA256 != "":
-		return p.URL + " at sha256:" + p.SHA256
+		return p.URL + " at sha256:" + p.SHA256 + " for " + p.OS + "/" + p.Arch
 	case p.Path != "":
 		return p.Version + " from the path " + p.Path
 	case p.Module == "":

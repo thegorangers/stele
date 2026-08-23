@@ -4,5 +4,7 @@ version: 1
 plugins:
   - name: protoc-gen-dart
     origin: url
+    os: linux
+    arch: amd64
     url: https://example.com/protoc-gen-dart
     version: unknown

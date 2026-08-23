@@ -311,3 +311,32 @@ func TestCache_ResolveMissingPathNamesWhereItLooked(t *testing.T) {
 		t.Errorf("error %q does not say where it looked", err)
 	}
 }
+
+// A plugin named by an explicit path and a plugin found on PATH are the same
+// epistemic situation: the machine chose the binary, not the manifest. So both
+// report whatever the binary says about itself. It is an observation, not a
+// pin — the tier is what says that — but throwing it away when a plugin moves
+// from PATH into the manifest loses information for no reason.
+func TestCache_ResolvePathReadsBuildMetadata(t *testing.T) {
+	hermeticGo(t)
+	cache := plugin.Cache{Root: t.TempDir()}
+	bin, err := cache.Ensure(context.Background(), fakeModule, fakeVersion)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	got, err := plugin.Cache{}.Resolve(context.Background(), plugin.Spec{
+		Name: "protoc-gen-fake",
+		Path: bin,
+		Dir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Origin != plugin.OriginFile {
+		t.Errorf("origin %q, want %q", got.Origin, plugin.OriginFile)
+	}
+	if got.Version != fakeVersion {
+		t.Errorf("version %q, want %q read from the binary's own build metadata", got.Version, fakeVersion)
+	}
+}

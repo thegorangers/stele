@@ -9,6 +9,9 @@ generate:
       - module: proto
     plugins:
       - local: protoc-gen-dart
-        url: https://example.com/protoc-gen-dart
-        sha256: e3b0c442
+        downloads:
+          - os: linux
+            arch: amd64
+            url: https://example.com/protoc-gen-dart
+            sha256: e3b0c442
         out: lib/gen

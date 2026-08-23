@@ -1,0 +1,17 @@
+# invalid: platform is not a key of a download entry; the platform is stated as
+# os and arch, in Go's own spelling, because that is what the tool compares
+# against runtime.GOOS and runtime.GOARCH.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: dart
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-dart
+        downloads:
+          - platform: linux-x64
+            url: https://example.com/protoc-gen-dart
+            sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        out: lib/gen

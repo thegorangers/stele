@@ -68,8 +68,10 @@ will quietly close later.
          out: gen
      ```
 
-  2. **`url` + `sha256`** — `stele` downloads the binary, or an archive holding
-     it, into its own cache and verifies the digest **before** the bytes are
+  2. **`downloads`** — one entry per platform, each naming a `url` and the
+     `sha256` the download must have. `stele` takes the entry matching the
+     machine it is running on, downloads the binary or an archive holding it
+     into its own cache, and verifies the digest **before** the bytes are
      unpacked, made executable, run, or admitted to the cache. This is what
      makes a plugin that is not a Go program genuinely pinnable: most of them,
      `protoc-gen-dart` included, publish release binaries. A digest is a pin of
@@ -79,11 +81,33 @@ will quietly close later.
      ```yaml
      plugins:
        - local: protoc-gen-dart
-         url: https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz
-         sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-         archive_path: bin/protoc-gen-dart
+         downloads:
+           - os: linux
+             arch: amd64
+             url: https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz
+             sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+             archive_path: bin/protoc-gen-dart
+           - os: darwin
+             arch: arm64
+             url: https://example.com/releases/v1.2.3/protoc-gen-dart-macos-arm64.tar.gz
+             sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+             archive_path: bin/protoc-gen-dart
          out: lib/gen
      ```
+
+     It is a list, and there is no single-URL shorthand, because a digest pins
+     bytes and bytes are per-platform. One address cannot serve `linux/amd64`
+     and `darwin/arm64`, so a single-URL form would work for whoever wrote the
+     manifest and push the first colleague on another OS back onto an unpinned
+     `PATH` lookup — undoing the entire point of the tier.
+
+     `os` and `arch` are Go's own spellings, `GOOS` and `GOARCH`, because that
+     is what they are compared against: `runtime.GOOS` and `runtime.GOARCH`,
+     with no translation in between. Exactly one entry may match the running
+     platform. Two matching entries are refused naming both. A platform no entry
+     covers is refused too, naming the platform and listing the ones the
+     manifest does cover — never a silent fallback to `PATH`, which is how the
+     un-pinned binary gets back in.
 
      `.tar.gz`, `.tgz` and `.zip` are unpacked, and `archive_path` must name the
      member: an archive is not a program, and guessing which of its files is one
@@ -94,8 +118,11 @@ will quietly close later.
 
   3. **`path`** — an explicit path to a binary, interpreted **relative to the
      manifest**, not to wherever you ran the tool from. It says where the binary
-     is and nothing about which build it is: no version is pinned, and the
-     version is reported as `unknown`. An absolute path is accepted, because you
+     is and nothing about which build it is: no version is pinned. If the binary
+     carries Go build metadata, the version in it is reported as an
+     observation — the same reading a `PATH` plugin gets, because it is the same
+     situation: the machine chose the binary, not the manifest. With no metadata
+     the version is `unknown`. An absolute path is accepted, because you
      may genuinely be pointing at a system binary, but it is reported as a
      warning: in a file that is committed and shared, it resolves on exactly one
      machine.
@@ -113,11 +140,14 @@ will quietly close later.
      tool does not pretend to manage what it did not choose.
 
   Every run records the tier and its identifying data in `stele.lock` —
-  `module@version`, or `url` and `sha256`, or the declared `path`, or just the
-  name — beside the dependency commits, because a run is only reproducible if
+  `module@version`, or the `url`, `sha256` and the `os`/`arch` of the download
+  entry that was used, or the declared `path`, or just the name — beside the
+  dependency commits, because a run is only reproducible if
   what generated it is pinned too. A recorded plugin that no longer matches the
   manifest is reported as drift, and the digest is checked on every use, not
-  only on the run that downloaded it.
+  only on the run that downloaded it. A download recorded for another platform
+  is not read as drift: it is another machine's entry, and what ran here is
+  pinned by the manifest's digest for this platform either way.
 - **Fetching a plugin needs the network once.** The first use of a version or a
   digest fetches it; every later run, in any repository, takes it from the cache
   and needs neither the network nor a toolchain. `stele plugins install` exists
@@ -137,6 +167,26 @@ will quietly close later.
 Authentication is delegated entirely to your system `git`: SSH agents,
 credential helpers and `insteadOf` rewrites work because it is real `git` doing
 the fetching.
+
+## Trust
+
+Three sentences, because this is the part it is worth being blunt about.
+
+- **For a downloaded plugin, the URL is only where to look; the digest is the
+  guarantee.** The `sha256` is checked against the bytes as they arrive, before
+  they are unpacked, made executable, run, or admitted to the cache, and it is
+  re-checked on every later use. A server that serves something else fails the
+  check and nothing runs. Anyone who can change the manifest can change the
+  digest, so the manifest is the thing to review.
+- **Redirects are followed with Go's defaults.** `stele` uses the standard
+  library HTTP client as it comes: up to ten redirects, and no pinning of the
+  host, certificate or final address. The address is not a trust boundary — the
+  digest is — so where a redirect ends up does not change what can run.
+- **A `path` or `PATH` plugin is trusted as it is, with no pinning.** `stele`
+  did not choose that binary, cannot say which build it is beyond what the
+  binary says about itself, and does not verify it against anything. It runs
+  what is there, records the tier so a reader can see that, and makes no
+  reproducibility claim about it.
 
 ## Editor support
 

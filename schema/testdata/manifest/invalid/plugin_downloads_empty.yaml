@@ -1,0 +1,13 @@
+# invalid: a download tier with no platforms in it pins nothing, and read as
+# "no downloads" it would leave the plugin to be found on PATH.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: dart
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-dart
+        downloads: []
+        out: lib/gen

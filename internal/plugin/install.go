@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -180,8 +181,8 @@ func isPathOf(pkg, main string) bool {
 const (
 	// OriginManaged: installed from module@version by the Go toolchain.
 	OriginManaged = "managed"
-	// OriginURL: downloaded from a declared url and verified against a
-	// declared sha256.
+	// OriginURL: downloaded from the declared url for this platform and
+	// verified against its declared sha256.
 	OriginURL = "url"
 	// OriginFile: an explicit path in the manifest, relative to it.
 	OriginFile = "file"
@@ -203,8 +204,10 @@ type Spec struct {
 	Name string
 	// Module and Version are the managed tier.
 	Module, Version string
-	// URL, SHA256 and ArchivePath are the download tier.
-	URL, SHA256, ArchivePath string
+	// Downloads is the download tier: the published binaries of this plugin,
+	// one entry per platform. The entry for the running platform is the one
+	// that is fetched.
+	Downloads []Download
 	// Path is the explicit-path tier, as written in the manifest.
 	Path string
 	// Dir is the directory of the manifest. It is what Path is relative to,
@@ -222,11 +225,18 @@ type Binary struct {
 	// Module is the module it was installed from, for a managed plugin, and
 	// empty otherwise.
 	Module string
-	// Version is the installed version for a managed plugin, and for a PATH
-	// plugin whatever its own metadata reports — or Unknown.
+	// Version is the installed version for a managed plugin, and for a plugin
+	// the machine chose — an explicit path or a PATH lookup — whatever the
+	// binary's own metadata reports, or Unknown. On those tiers it is an
+	// observation, not a pin; Origin is what says which it is.
 	Version string
 	// URL and SHA256 are what a downloaded plugin was pinned to.
 	URL, SHA256 string
+	// OS and Arch are the platform of the download entry that was used. They
+	// are recorded because a digest pins bytes and bytes are per-platform: a
+	// record naming the digest but not the platform says which bytes ran
+	// without saying which machine they ran on.
+	OS, Arch string
 	// ArchivePath is the member taken from a downloaded archive, if any.
 	ArchivePath string
 	// Declared is the path as the manifest wrote it, for the file tier. Path
@@ -257,8 +267,16 @@ func (c Cache) Resolve(ctx context.Context, s Spec) (Binary, error) {
 			return Binary{}, fmt.Errorf("plugin %q: %w", s.Name, err)
 		}
 		return Binary{Name: s.Name, Path: bin, Module: s.Module, Version: s.Version, Origin: OriginManaged}, nil
-	case s.URL != "":
-		bin, err := c.EnsureURL(ctx, s.URL, s.SHA256, s.ArchivePath)
+	case len(s.Downloads) > 0:
+		// The platform is chosen before anything is fetched, and an
+		// unmatched platform stops the resolution here. It does not fall
+		// through to the PATH lookup below: a plugin the manifest pins on one
+		// machine and finds on PATH on another is not pinned at all.
+		d, err := Select(s.Name, s.Downloads, runtime.GOOS, runtime.GOARCH)
+		if err != nil {
+			return Binary{}, err
+		}
+		bin, err := c.EnsureURL(ctx, d.URL, d.SHA256, d.ArchivePath)
 		if err != nil {
 			return Binary{}, fmt.Errorf("plugin %q: %w", s.Name, err)
 		}
@@ -267,8 +285,8 @@ func (c Cache) Resolve(ctx context.Context, s Spec) (Binary, error) {
 		// number in the report that nothing published ever used.
 		return Binary{
 			Name: s.Name, Path: bin, Version: Unknown,
-			URL: s.URL, SHA256: strings.ToLower(s.SHA256), ArchivePath: s.ArchivePath,
-			Origin: OriginURL,
+			URL: d.URL, SHA256: strings.ToLower(d.SHA256), ArchivePath: d.ArchivePath,
+			OS: d.OS, Arch: d.Arch, Origin: OriginURL,
 		}, nil
 	case s.Path != "":
 		return resolvePath(s)
@@ -315,16 +333,22 @@ func resolvePath(s Spec) (Binary, error) {
 		return Binary{}, fmt.Errorf("plugin %q: path %s resolves to the directory %s, not to a binary",
 			s.Name, s.Path, abs)
 	}
-	// A path says where the binary is and nothing about which build it is.
-	// There is no version to pin and none is claimed.
+	// A path pins nothing: the manifest says where the binary is, not which
+	// build it is. But the binary may still say something about itself, and a
+	// plugin named by a path and a plugin found on PATH are the same
+	// epistemic situation — the machine chose it either way — so both are read
+	// the same way. What comes back is an observation, and the origin beside
+	// it is what says it is not a pin.
 	return Binary{
-		Name: s.Name, Path: abs, Declared: s.Path, Version: Unknown,
+		Name: s.Name, Path: abs, Declared: s.Path, Version: pathVersion(abs),
 		Origin: OriginFile, Warning: warning,
 	}, nil
 }
 
-// pathVersion reads the version a binary on PATH declares about itself, or
-// Unknown when it declares none.
+// pathVersion reads the version a binary declares about itself, or Unknown
+// when it declares none. It is used for both tiers the manifest does not pin —
+// an explicit path and a PATH lookup — because they are the same situation and
+// reporting them differently would lose information for no reason.
 func pathVersion(path string) string {
 	info, err := buildinfo.ReadFile(path)
 	if err != nil || info.Main.Version == "" {

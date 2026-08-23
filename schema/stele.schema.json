@@ -5,7 +5,9 @@
   "description": "The stele manifest: the proto modules this repository owns, the ones it takes from elsewhere, and the code it generates from them.\n\nThis schema is not a second description of the format. A test in this repository runs one corpus of example manifests through both this schema and the real parser and fails on any disagreement, so what you read here is what the tool enforces — with the documented exceptions marked \"the parser also checks\" below, which are rules JSON Schema cannot express.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version"],
+  "required": [
+    "version"
+  ],
   "properties": {
     "version": {
       "description": "Version of the manifest format. Only 1 exists.",
@@ -14,20 +16,35 @@
     },
     "modules": {
       "description": "The proto modules owned by this repository. Each path is an import root: imports are resolved relative to it.\n\nA manifest is not required to declare one. A repository that owns no protos declares none, and every generate input names a dependency instead.",
-      "type": ["array", "null"],
+      "type": [
+        "array",
+        "null"
+      ],
       "uniqueItems": true,
-      "items": { "$ref": "#/$defs/module" }
+      "items": {
+        "$ref": "#/$defs/module"
+      }
     },
     "deps": {
       "description": "Proto modules taken from other repositories.\n\nThe parser also checks: no two entries may share a name.",
-      "type": ["array", "null"],
+      "type": [
+        "array",
+        "null"
+      ],
       "uniqueItems": true,
-      "items": { "$ref": "#/$defs/dep" }
+      "items": {
+        "$ref": "#/$defs/dep"
+      }
     },
     "generate": {
       "description": "The code generation targets.\n\nThe parser also checks: no two targets may share a name.",
-      "type": ["array", "null"],
-      "items": { "$ref": "#/$defs/target" }
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/target"
+      }
     }
   },
   "$defs": {
@@ -36,13 +53,18 @@
       "description": "A proto module owned by this repository.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["path"],
+      "required": [
+        "path"
+      ],
       "properties": {
         "path": {
           "description": "Directory of the module, relative to the manifest. It is the import root: a file under it is imported by its path relative to this directory.",
           "type": "string",
           "minLength": 1,
-          "examples": ["proto", "internal/proto"]
+          "examples": [
+            "proto",
+            "internal/proto"
+          ]
         }
       }
     },
@@ -51,19 +73,29 @@
       "description": "A proto module taken from another repository.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "git", "ref"],
+      "required": [
+        "name",
+        "git",
+        "ref"
+      ],
       "properties": {
         "name": {
           "description": "Identifies the dependency inside this manifest. A generate input refers to it by this name.",
           "type": "string",
           "minLength": 1
         },
-        "git": { "$ref": "#/$defs/address" },
+        "git": {
+          "$ref": "#/$defs/address"
+        },
         "ref": {
           "description": "The commit SHA to pin to or, for runs that update the lock, a branch or a tag to resolve.",
           "type": "string",
           "minLength": 1,
-          "examples": ["v1.4.0", "main", "9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d"]
+          "examples": [
+            "v1.4.0",
+            "main",
+            "9f4c2b1a5d7e3f6081b2c4d5e6f708192a3b4c5d"
+          ]
         },
         "module": {
           "description": "The module of the producer to take, relative to its repository root. Empty takes the producer's default module.",
@@ -101,7 +133,11 @@
       "description": "One code generation target: what to generate from, and what to run over it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "inputs", "plugins"],
+      "required": [
+        "name",
+        "inputs",
+        "plugins"
+      ],
       "properties": {
         "name": {
           "description": "Identifies the target on the command line.",
@@ -112,26 +148,37 @@
           "description": "The files to generate from. At least one: a target with no inputs generates from nothing.",
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/input" }
+          "items": {
+            "$ref": "#/$defs/input"
+          }
         },
         "plugins": {
           "description": "The code generators to run over those files. At least one: a target with no plugins produces nothing.",
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/plugin" }
+          "items": {
+            "$ref": "#/$defs/plugin"
+          }
         },
         "managed": {
           "description": "Asks for managed-mode file options to be synthesised into the descriptors handed to the plugins. Absent means absent: no options are synthesised at all.",
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
-          "required": ["override"],
+          "required": [
+            "override"
+          ],
           "properties": {
             "override": {
               "description": "The file options to synthesise. At least one — a managed block that overrides nothing reads as if it configured something.\n\nAt most one, too, and only because exactly one file option is currently permitted: the parser refuses the same option twice, and with one permitted spelling a second entry can only be a repeat.",
               "type": "array",
               "minItems": 1,
               "maxItems": 1,
-              "items": { "$ref": "#/$defs/override" }
+              "items": {
+                "$ref": "#/$defs/override"
+              }
             }
           }
         }
@@ -159,58 +206,82 @@
       "oneOf": [
         {
           "title": "an input from a module of this repository",
-          "required": ["module"],
-          "properties": { "module": { "minLength": 1 }, "dep": { "maxLength": 0 } }
+          "required": [
+            "module"
+          ],
+          "properties": {
+            "module": {
+              "minLength": 1
+            },
+            "dep": {
+              "maxLength": 0
+            }
+          }
         },
         {
           "title": "an input from a declared dependency",
-          "required": ["dep"],
-          "properties": { "dep": { "minLength": 1 }, "module": { "maxLength": 0 } }
+          "required": [
+            "dep"
+          ],
+          "properties": {
+            "dep": {
+              "minLength": 1
+            },
+            "module": {
+              "maxLength": 0
+            }
+          }
         }
       ]
     },
     "plugin": {
       "title": "plugin",
-      "description": "One code generator invocation.\n\nWhere the binary comes from is declared, and there are four ways to declare it, ordered by how much of the answer the manifest gives:\n\n  1. module + version — the tool installs that exact version into its own cache with the Go toolchain and verifies the installed binary's own build metadata against it. Only a Go program can be had this way.\n  2. url + sha256 — the tool downloads the binary, or an archive holding it named by archive_path, into its own cache and verifies the digest before anything is unpacked or run. This is what makes a plugin that is not a Go program genuinely pinnable.\n  3. path — an explicit path to a binary, relative to this manifest. It says where the binary is and nothing about which build it is: no version is pinned and none is claimed.\n  4. none of the above — the name is looked up on PATH, as it always was. The tool did not choose that binary and does not pretend it did.\n\nExactly one may be declared. Two would be two answers to a question with one answer.\n\nHalf a declaration is refused, and the halves are different mistakes. A version without a module asks for a version of nothing while the tool silently runs whatever PATH holds. A module without a version asks the tool to choose, and any choice it made would be one the manifest does not record. A url without a sha256 is an address, not a pin: whatever the server serves would be run.\n\nThe parser also checks: an absolute path is accepted and warned about, because in a committed manifest it resolves on one machine only.",
+      "description": "One code generator invocation.\n\nWhere the binary comes from is declared, and there are four ways to declare it, ordered by how much of the answer the manifest gives:\n\n  1. module + version — the tool installs that exact version into its own cache with the Go toolchain and verifies the installed binary's own build metadata against it. Only a Go program can be had this way.\n  2. downloads — one entry per platform, each naming a url and the sha256 the download must have. The tool takes the entry matching the machine it runs on, fetches it into its own cache, and verifies the digest before anything is unpacked or run. This is what makes a plugin that is not a Go program genuinely pinnable.\n\n     It is a list, and there is no single-url shorthand, because a digest pins bytes and bytes are per-platform: one url cannot serve linux/amd64 and darwin/arm64. A shorthand would work for whoever wrote the manifest and push the next developer on a different OS back onto an unpinned PATH lookup.\n  3. path — an explicit path to a binary, relative to this manifest. It says where the binary is and nothing about which build it is: no version is pinned and none is claimed.\n  4. none of the above — the name is looked up on PATH, as it always was. The tool did not choose that binary and does not pretend it did.\n\nExactly one may be declared. Two would be two answers to a question with one answer.\n\nHalf a declaration is refused, and the halves are different mistakes. A version without a module asks for a version of nothing while the tool silently runs whatever PATH holds. A module without a version asks the tool to choose, and any choice it made would be one the manifest does not record. A url without a sha256 is an address, not a pin: whatever the server serves would be run. A download entry without an os and an arch says which bytes to run but not which machine they run on.\n\nThe parser also checks: an absolute path is accepted and warned about, because in a committed manifest it resolves on one machine only.\n\nThe parser also checks what the schema cannot: that no two download entries claim the same platform, and that a machine no entry covers is refused rather than quietly falling back to PATH.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["local", "out"],
+      "required": [
+        "local",
+        "out"
+      ],
       "properties": {
         "local": {
           "description": "The name of, or the path to, an executable plugin binary. It stays the plugin's name whichever tier is declared: it is what the report and the errors call it.",
           "type": "string",
           "minLength": 1,
-          "examples": ["protoc-gen-go", "protoc-gen-go-grpc"]
+          "examples": [
+            "protoc-gen-go",
+            "protoc-gen-go-grpc"
+          ]
         },
         "module": {
           "description": "The Go module path of the command that provides the plugin, as `go install` takes it.",
           "type": "string",
-          "examples": ["google.golang.org/protobuf/cmd/protoc-gen-go"]
+          "examples": [
+            "google.golang.org/protobuf/cmd/protoc-gen-go"
+          ]
         },
         "version": {
           "description": "The version of module to install. It must be exact — a version `go install` resolves to one build, written out in full, such as v1.36.12. Anything the module system would resolve at run time (latest, upgrade, patch, a branch name, a bare query) puts the manifest back in the business of generating different bytes on different days.\n\nThe pattern here checks the shape the parser checks: a leading v, a digit, and at least two dots. It does not check that the version exists, which only `go install` can say.",
           "type": "string",
-          "examples": ["v1.36.12", "v1.36.12-rc.1"]
+          "examples": [
+            "v1.36.12",
+            "v1.36.12-rc.1"
+          ]
         },
-        "url": {
-          "description": "Where a published plugin binary, or an archive holding one, is downloaded from. Meaningless without sha256: an address says where the bytes came from, not which bytes they were.",
-          "type": "string",
-          "examples": ["https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz"]
-        },
-        "sha256": {
-          "description": "The digest the download must have, as 64 hex characters. It is checked against the bytes as downloaded, before they are unpacked, made executable, run, or admitted to the cache.",
-          "type": "string",
-          "examples": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
-        },
-        "archive_path": {
-          "description": "The member to take when the download is an archive, in the archive's own coordinates. Required when the url names a .tar.gz, .tgz or .zip, and refused otherwise: an archive is not a program, and guessing which of its files is one is a guess the digest cannot protect anyone from.\n\nThe parser also checks this pairing, which JSON Schema cannot: whether a url names an archive is a fact about the address, not about which fields are present.",
-          "type": "string",
-          "examples": ["bin/protoc-gen-dart"]
+        "downloads": {
+          "description": "The published binaries of this plugin, one entry per platform. Exactly one entry may match the machine the tool runs on; two matching entries are refused naming both, and a machine no entry covers is refused naming the platforms that are covered — never a silent fallback to PATH, which is how the un-pinned binary gets back in.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/download"
+          }
         },
         "path": {
           "description": "An explicit path to a binary, interpreted relative to the directory of this manifest — not to the directory the tool was invoked from, which would mean a different binary depending on where it was run.",
           "type": "string",
-          "examples": ["tools/protoc-gen-house"]
+          "examples": [
+            "tools/protoc-gen-house"
+          ]
         },
         "out": {
           "description": "The directory the plugin writes to, relative to the manifest.",
@@ -220,54 +291,88 @@
         "opt": {
           "$ref": "#/$defs/stringList",
           "description": "The plugin options, passed through as given. Accepts a single string or a list of strings.",
-          "examples": ["paths=source_relative"]
+          "examples": [
+            "paths=source_relative"
+          ]
         }
       },
       "oneOf": [
         {
           "title": "a plugin taken from PATH",
           "properties": {
-            "module": { "maxLength": 0 },
-            "version": { "maxLength": 0 },
-            "url": { "maxLength": 0 },
-            "sha256": { "maxLength": 0 },
-            "archive_path": { "maxLength": 0 },
-            "path": { "maxLength": 0 }
+            "module": {
+              "maxLength": 0
+            },
+            "version": {
+              "maxLength": 0
+            },
+            "downloads": {
+              "maxItems": 0
+            },
+            "path": {
+              "maxLength": 0
+            }
           }
         },
         {
           "title": "a plugin the tool installs, at an exact version",
-          "required": ["module", "version"],
+          "required": [
+            "module",
+            "version"
+          ],
           "properties": {
-            "module": { "minLength": 1 },
-            "version": { "pattern": "^v[0-9][^.]*\\.[^.]*\\..*$" },
-            "url": { "maxLength": 0 },
-            "sha256": { "maxLength": 0 },
-            "archive_path": { "maxLength": 0 },
-            "path": { "maxLength": 0 }
+            "module": {
+              "minLength": 1
+            },
+            "version": {
+              "pattern": "^v[0-9][^.]*\\.[^.]*\\..*$"
+            },
+            "downloads": {
+              "maxItems": 0
+            },
+            "path": {
+              "maxLength": 0
+            }
           }
         },
         {
-          "title": "a plugin the tool downloads, pinned to a digest",
-          "required": ["url", "sha256"],
+          "title": "a plugin the tool downloads, pinned to a digest per platform",
+          "required": [
+            "downloads"
+          ],
           "properties": {
-            "url": { "minLength": 1 },
-            "sha256": { "pattern": "^[0-9a-fA-F]{64}$" },
-            "module": { "maxLength": 0 },
-            "version": { "maxLength": 0 },
-            "path": { "maxLength": 0 }
+            "downloads": {
+              "minItems": 1
+            },
+            "module": {
+              "maxLength": 0
+            },
+            "version": {
+              "maxLength": 0
+            },
+            "path": {
+              "maxLength": 0
+            }
           }
         },
         {
           "title": "a plugin at a path in this repository",
-          "required": ["path"],
+          "required": [
+            "path"
+          ],
           "properties": {
-            "path": { "minLength": 1 },
-            "module": { "maxLength": 0 },
-            "version": { "maxLength": 0 },
-            "url": { "maxLength": 0 },
-            "sha256": { "maxLength": 0 },
-            "archive_path": { "maxLength": 0 }
+            "path": {
+              "minLength": 1
+            },
+            "module": {
+              "maxLength": 0
+            },
+            "version": {
+              "maxLength": 0
+            },
+            "downloads": {
+              "maxItems": 0
+            }
           }
         }
       ]
@@ -277,11 +382,16 @@
       "description": "One managed-mode file option.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["file_option", "value"],
+      "required": [
+        "file_option",
+        "value"
+      ],
       "properties": {
         "file_option": {
           "description": "The option to synthesise. The list is short on purpose: an option accepted here but not applied would be a promise the generated bytes do not keep.",
-          "enum": ["go_package_prefix"]
+          "enum": [
+            "go_package_prefix"
+          ]
         },
         "path": {
           "description": "Limits the override to the files under it, in the coordinates an import statement uses. Omitted applies it to every file.",
@@ -291,17 +401,84 @@
           "description": "The value of the option.",
           "type": "string",
           "minLength": 1,
-          "examples": ["example.com/acme/gen/go"]
+          "examples": [
+            "example.com/acme/gen/go"
+          ]
         }
       }
     },
     "stringList": {
       "description": "A single string or a list of strings. Both forms occur in hand-written manifests, and refusing the scalar would be a gratuitous incompatibility.",
       "anyOf": [
-        { "type": "string" },
-        { "type": "array", "items": { "type": "string" } },
-        { "type": "null" }
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "null"
+        }
       ]
+    },
+    "download": {
+      "title": "download",
+      "description": "One published binary of a plugin, for one platform.\n\nos and arch are Go's own spellings — GOOS and GOARCH — because that is what the tool compares them against: runtime.GOOS and runtime.GOARCH, with no translation in between. Accepting a publisher's spelling (x64, macos, aarch64) would need a table nobody can audit, and a table is where a platform gets matched to the wrong bytes while the digest verifies them happily.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "arch",
+        "url",
+        "sha256"
+      ],
+      "properties": {
+        "os": {
+          "description": "The GOOS the binary is for, spelled as Go spells it.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "linux",
+            "darwin",
+            "windows"
+          ]
+        },
+        "arch": {
+          "description": "The GOARCH the binary is for, spelled as Go spells it.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "amd64",
+            "arm64"
+          ]
+        },
+        "url": {
+          "description": "Where this platform's binary, or an archive holding it, is downloaded from. Meaningless without sha256: an address says where the bytes came from, not which bytes they were.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz"
+          ]
+        },
+        "sha256": {
+          "description": "The digest this download must have, as 64 hex characters. It is checked against the bytes as downloaded, before they are unpacked, made executable, run, or admitted to the cache.",
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "examples": [
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          ]
+        },
+        "archive_path": {
+          "description": "The member to take when this download is an archive, in the archive's own coordinates. Required when the url names a .tar.gz, .tgz or .zip, and refused otherwise: an archive is not a program, and guessing which of its files is one is a guess the digest cannot protect anyone from.\n\nThe parser checks that pairing, which JSON Schema cannot: whether a url names an archive is a fact about the address, not about which fields are present.",
+          "type": "string",
+          "examples": [
+            "bin/protoc-gen-dart"
+          ]
+        }
+      }
     }
   }
 }

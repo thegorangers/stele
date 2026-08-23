@@ -1,0 +1,10 @@
+# invalid: a digest pins bytes and bytes are per-platform, so a download record
+# that names no platform says which bytes ran without saying which machine ran
+# them, and cannot be read on any other machine.
+version: 1
+plugins:
+  - name: protoc-gen-dart
+    origin: url
+    version: unknown
+    url: https://example.com/protoc-gen-dart
+    sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855

@@ -132,13 +132,23 @@ type Input struct {
 //  1. Module plus Version. The tool installs that exact version into its own
 //     cache and verifies the installed binary's own build metadata against it.
 //     Only a Go program can be had this way.
-//  2. URL plus SHA256. The tool downloads the binary — or an archive holding
-//     it, named by ArchivePath — into its own cache and verifies the hash
-//     before anything is run. This is what makes a plugin that is not a Go
-//     program genuinely pinnable, and most of them publish release binaries.
+//
+//  2. Downloads. One entry per platform, each naming a url and the sha256 the
+//     download must have. The tool takes the entry matching the machine it is
+//     running on, downloads it — or an archive holding the binary, named by
+//     ArchivePath — into its own cache, and verifies the digest before
+//     anything is run. This is what makes a plugin that is not a Go program
+//     genuinely pinnable, and most of them publish release binaries.
+//
+//     It is a list because a digest pins bytes and bytes are per-platform: one
+//     url cannot serve linux/amd64 and darwin/arm64, and a single-url form
+//     would work for whoever wrote the manifest and push the next developer
+//     back onto an unpinned PATH lookup.
+//
 //  3. Path. An explicit path to a binary, relative to the manifest. It says
 //     where the binary is and nothing about which build it is: no version can
 //     be pinned, and none is claimed.
+//
 //  4. None of the above: the name is looked up on PATH, as it always was. The
 //     tool did not choose that binary and does not pretend it did.
 //
@@ -158,18 +168,10 @@ type Plugin struct {
 	// generating different bytes on different days, which is the whole
 	// problem a declared version exists to remove.
 	Version string `yaml:"version"`
-	// URL is where a published plugin binary, or an archive holding one, is
-	// downloaded from. It is meaningless without SHA256: an address alone
-	// says where the bytes came from, not which bytes they were.
-	URL string `yaml:"url"`
-	// SHA256 is the hex digest the download must have. It is checked before
-	// the download is unpacked, run, or admitted to the cache.
-	SHA256 string `yaml:"sha256"`
-	// ArchivePath names the member to take when the download is an archive,
-	// in the archive's own coordinates. An archive with no member named is
-	// refused: guessing which of its files is the plugin would be a guess the
-	// hash cannot protect anyone from.
-	ArchivePath string `yaml:"archive_path"`
+	// Downloads are the published binaries of this plugin, one entry per
+	// platform. Exactly one entry may match the machine the tool runs on; no
+	// matching entry is an error, never a fallback to PATH.
+	Downloads []Download `yaml:"downloads"`
 	// Path is an explicit path to a binary, interpreted relative to the
 	// directory of the manifest. An absolute path is accepted and reported:
 	// in a file that is committed and shared, it resolves on one machine.
@@ -179,3 +181,31 @@ type Plugin struct {
 	// Opt are the plugin options. Accepts a single string or a list of strings.
 	Opt []string `yaml:"opt"`
 }
+
+// Download is one published binary of a plugin, for one platform.
+//
+// OS and Arch are Go's own spellings — GOOS and GOARCH — because that is what
+// the tool compares them against. Accepting a publisher's spelling instead
+// (x64, macos, aarch64) would need a translation table, and a table nobody can
+// audit is a place for a platform to be matched to the wrong bytes.
+type Download struct {
+	// OS is the GOOS the binary is for, as runtime.GOOS spells it.
+	OS string `yaml:"os"`
+	// Arch is the GOARCH the binary is for, as runtime.GOARCH spells it.
+	Arch string `yaml:"arch"`
+	// URL is where the binary, or an archive holding it, is downloaded from.
+	// It is meaningless without SHA256: an address alone says where the bytes
+	// came from, not which bytes they were.
+	URL string `yaml:"url"`
+	// SHA256 is the hex digest the download must have. It is checked before
+	// the download is unpacked, run, or admitted to the cache.
+	SHA256 string `yaml:"sha256"`
+	// ArchivePath names the member to take when the download is an archive,
+	// in the archive's own coordinates. An archive with no member named is
+	// refused: guessing which of its files is the plugin would be a guess the
+	// hash cannot protect anyone from.
+	ArchivePath string `yaml:"archive_path"`
+}
+
+// Platform is the entry's platform as an error message writes it.
+func (d Download) Platform() string { return d.OS + "/" + d.Arch }

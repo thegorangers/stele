@@ -228,23 +228,30 @@ func (in *Input) UnmarshalYAML(n *yaml.Node) error {
 // UnmarshalYAML decodes a plugin, normalising opt to a list.
 func (p *Plugin) UnmarshalYAML(n *yaml.Node) error {
 	var aux struct {
-		Local       string     `yaml:"local"`
-		Module      string     `yaml:"module"`
-		Version     string     `yaml:"version"`
-		URL         string     `yaml:"url"`
-		SHA256      string     `yaml:"sha256"`
-		ArchivePath string     `yaml:"archive_path"`
-		Path        string     `yaml:"path"`
-		Out         string     `yaml:"out"`
-		Opt         stringList `yaml:"opt"`
+		Local     string      `yaml:"local"`
+		Module    string      `yaml:"module"`
+		Version   string      `yaml:"version"`
+		Downloads *[]Download `yaml:"downloads"`
+		Path      string      `yaml:"path"`
+		Out       string      `yaml:"out"`
+		Opt       stringList  `yaml:"opt"`
 	}
 	if err := decodeStrict(n, &aux); err != nil {
 		return err
 	}
 	*p = Plugin{
 		Local: aux.Local, Module: aux.Module, Version: aux.Version,
-		URL: aux.URL, SHA256: aux.SHA256, ArchivePath: aux.ArchivePath, Path: aux.Path,
-		Out: aux.Out, Opt: aux.Opt,
+		Path: aux.Path, Out: aux.Out, Opt: aux.Opt,
+	}
+	if aux.Downloads != nil {
+		// An explicitly empty list is kept as an empty non-nil slice so that
+		// validation can refuse it by name. Read as "no downloads" it would be
+		// a plugin that quietly fell through to a PATH lookup, which is the
+		// one thing the download tier exists to prevent.
+		p.Downloads = *aux.Downloads
+		if p.Downloads == nil {
+			p.Downloads = []Download{}
+		}
 	}
 	return nil
 }
@@ -252,9 +259,9 @@ func (p *Plugin) UnmarshalYAML(n *yaml.Node) error {
 // Tiers a plugin's binary can be declared on, named so that an error can say
 // which two a manifest asked for at once.
 const (
-	tierModule = "module"
-	tierURL    = "url"
-	tierPath   = "path"
+	tierModule    = "module"
+	tierDownloads = "downloads"
+	tierPath      = "path"
 )
 
 // tiers returns the tiers this plugin declares, in the order they are
@@ -267,8 +274,8 @@ func (p *Plugin) tiers() []string {
 	if p.Module != "" || p.Version != "" {
 		out = append(out, tierModule)
 	}
-	if p.URL != "" || p.SHA256 != "" || p.ArchivePath != "" {
-		out = append(out, tierURL)
+	if p.Downloads != nil {
+		out = append(out, tierDownloads)
 	}
 	if p.Path != "" {
 		out = append(out, tierPath)
@@ -301,8 +308,8 @@ func (p *Plugin) validateSource(i, j int) error {
 		// A bare name, looked up on PATH. Nothing is pinned and nothing is
 		// claimed to be.
 		return nil
-	case declared[0] == tierURL:
-		return p.validateURL(i, j)
+	case declared[0] == tierDownloads:
+		return p.validateDownloads(i, j)
 	case declared[0] == tierPath:
 		return nil
 	}
@@ -321,24 +328,55 @@ func (p *Plugin) validateSource(i, j int) error {
 	return nil
 }
 
-// validateURL checks a download declaration. The address and the hash are one
-// statement in two fields: an address without a hash pins nothing, and a hash
-// without an address describes bytes the tool will never fetch.
-func (p *Plugin) validateURL(i, j int) error {
-	switch {
-	case p.URL == "" && p.SHA256 != "":
-		return fmt.Errorf("generate[%d].plugins[%d].sha256: declared without a url for plugin %q; "+
-			"a hash pins the bytes of a download, and there is nothing here to download", i, j, p.Local)
-	case p.URL == "":
-		return fmt.Errorf("generate[%d].plugins[%d].archive_path: declared without a url for plugin %q; "+
-			"it names a member of a downloaded archive, and there is nothing here to download", i, j, p.Local)
-	case p.SHA256 == "":
-		return fmt.Errorf("generate[%d].plugins[%d].sha256: missing for plugin %q; "+
-			"a url without a hash is an address, not a pin: whatever the server serves would be run",
+// validateDownloads checks the download tier: that there is something to
+// download, that each entry is a complete statement, and that no two entries
+// claim the same platform.
+//
+// The address and the digest are one statement in two fields: an address
+// without a digest pins nothing, and a digest without an address describes
+// bytes the tool will never fetch. The platform is the third part of that
+// statement — without it the entry says which bytes to run but not which
+// machine they run on, which is exactly what a single-url form got wrong.
+//
+// Two entries for one platform are refused here rather than at selection
+// time, because it is a defect in the file that every reader can see, and a
+// file that is wrong only on somebody else's machine is the failure mode this
+// whole shape exists to end.
+func (p *Plugin) validateDownloads(i, j int) error {
+	if len(p.Downloads) == 0 {
+		return fmt.Errorf("generate[%d].plugins[%d].downloads: declared with no entries for plugin %q; "+
+			"a download tier with no platforms in it pins nothing and would leave the plugin to be found on PATH",
 			i, j, p.Local)
-	case !sha256Hex(p.SHA256):
-		return fmt.Errorf("generate[%d].plugins[%d].sha256: %q is not a sha256 for plugin %q; "+
-			"write the 64 hex characters of the digest of the file at the url", i, j, p.SHA256, p.Local)
+	}
+	seen := make(map[string]int, len(p.Downloads))
+	for k, d := range p.Downloads {
+		switch {
+		case d.OS == "":
+			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].os: missing for plugin %q; "+
+				"write the GOOS the binary is for, such as linux or darwin, spelled as Go spells it",
+				i, j, k, p.Local)
+		case d.Arch == "":
+			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].arch: missing for plugin %q; "+
+				"write the GOARCH the binary is for, such as amd64 or arm64, spelled as Go spells it",
+				i, j, k, p.Local)
+		case d.URL == "":
+			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].url: missing for plugin %q; "+
+				"a digest pins the bytes of a download, and there is nothing here to download",
+				i, j, k, p.Local)
+		case d.SHA256 == "":
+			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].sha256: missing for plugin %q; "+
+				"a url without a hash is an address, not a pin: whatever the server serves would be run",
+				i, j, k, p.Local)
+		case !sha256Hex(d.SHA256):
+			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].sha256: %q is not a sha256 for plugin %q; "+
+				"write the 64 hex characters of the digest of the file at the url", i, j, k, d.SHA256, p.Local)
+		}
+		if first, dup := seen[d.Platform()]; dup {
+			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d]: %s is already declared by downloads[%d] "+
+				"for plugin %q; exactly one entry may match a platform, and the tool cannot honour two",
+				i, j, k, d.Platform(), first, p.Local)
+		}
+		seen[d.Platform()] = k
 	}
 	return nil
 }
