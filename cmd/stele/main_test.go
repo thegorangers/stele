@@ -94,6 +94,10 @@ func TestMigrateWritesAndRefuses(t *testing.T) {
 	}
 	write("buf.yaml", "version: v2\nmodules: [{path: api}]\n")
 	write("buf.gen.yaml", "version: v2\nplugins: [{local: protoc-gen-go, out: gen}]\ninputs: [{directory: api}]\n")
+	// The plugin version lives in the Makefile. Without it the migration is
+	// incomplete by design, so a complete one has to carry it.
+	const pinned = "V ?= v1.36.6\n\ngen:\n\t@go install google.golang.org/protobuf/cmd/protoc-gen-go@$(V)\n"
+	write("Makefile", pinned)
 
 	var out, errOut strings.Builder
 	if err := run(context.Background(), []string{"migrate", "--dir", dir}, &out, &errOut); err != nil {
@@ -117,7 +121,7 @@ func TestMigrateWritesAndRefuses(t *testing.T) {
 
 	// An incomplete migration must fail: a manifest that looks migrated and
 	// is not is worse than no manifest.
-	write("Makefile", "vendor:\n\t@buf export buf.build/example/schemas --output=third_party/proto\n")
+	write("Makefile", pinned+"\nvendor:\n\t@buf export buf.build/example/schemas --output=third_party/proto\n")
 	out.Reset()
 	errOut.Reset()
 	err := run(context.Background(), []string{"migrate", "--dir", dir}, &out, &errOut)

@@ -59,6 +59,11 @@ func (r *Result) header() string {
 
 // annotate marks the entries a human still has to complete.
 func annotate(doc *yaml.Node, f *config.File) {
+	annotateDeps(doc, f)
+	annotatePlugins(doc, f)
+}
+
+func annotateDeps(doc *yaml.Node, f *config.File) {
 	deps := child(doc, "deps")
 	if deps == nil {
 		return
@@ -69,6 +74,32 @@ func annotate(doc *yaml.Node, f *config.File) {
 		}
 		deps.Content[i].HeadComment = fmt.Sprintf(
 			"TODO: pin a commit. `buf export` took the default branch of %s\nand recorded nothing, so there is no ref to carry over.", d.Git)
+	}
+}
+
+// annotatePlugins marks every plugin left resolving off PATH. The manifest is
+// the place a reviewer looks, and an unpinned plugin is invisible there: it is
+// spelled exactly like a pinned one, minus two lines nobody misses.
+func annotatePlugins(doc *yaml.Node, f *config.File) {
+	targets := child(doc, "generate")
+	if targets == nil {
+		return
+	}
+	for i, g := range f.Generate {
+		if i >= len(targets.Content) {
+			return
+		}
+		plugins := child(targets.Content[i], "plugins")
+		if plugins == nil {
+			continue
+		}
+		for j, p := range g.Plugins {
+			if j >= len(plugins.Content) || p.Module != "" || len(p.Downloads) > 0 || p.Path != "" {
+				continue
+			}
+			plugins.Content[j].HeadComment = fmt.Sprintf(
+				"TODO: say where %s comes from. No version was recovered, so this\nresolves off PATH and generates whatever that machine happens to have.", p.Local)
+		}
 	}
 }
 
@@ -126,9 +157,11 @@ type outInput struct {
 }
 
 type outPlugin struct {
-	Local string   `yaml:"local"`
-	Out   string   `yaml:"out"`
-	Opt   []string `yaml:"opt,omitempty"`
+	Local   string   `yaml:"local"`
+	Module  string   `yaml:"module,omitempty"`
+	Version string   `yaml:"version,omitempty"`
+	Out     string   `yaml:"out"`
+	Opt     []string `yaml:"opt,omitempty"`
 }
 
 type outManaged struct {
@@ -155,7 +188,7 @@ func shadowOf(f *config.File) outFile {
 			t.Inputs = append(t.Inputs, outInput{Module: in.Module, Dep: in.Dep, Paths: in.Paths})
 		}
 		for _, p := range g.Plugins {
-			t.Plugins = append(t.Plugins, outPlugin{Local: p.Local, Out: p.Out, Opt: p.Opt})
+			t.Plugins = append(t.Plugins, outPlugin{Local: p.Local, Module: p.Module, Version: p.Version, Out: p.Out, Opt: p.Opt})
 		}
 		if g.Managed != nil {
 			mg := &outManaged{}

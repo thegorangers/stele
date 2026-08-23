@@ -105,6 +105,10 @@ type migration struct {
 	// depPaths records the export --path arguments of a dependency, used to
 	// decide which dependency a vendored input path belongs to.
 	depPaths map[string][]string
+	// installs are the `go install` invocations recovered from the Makefile,
+	// by the command each installs. They are where a plugin's version is
+	// written down; buf.gen.yaml names the plugin and nothing else.
+	installs map[string][]goInstall
 	result   Result
 }
 
@@ -162,9 +166,15 @@ func (m *migration) readBufGenYAML(raw []byte) error {
 }
 
 func (m *migration) readMakefile(raw []byte) error {
+	m.installs = map[string][]goInstall{}
 	if len(raw) == 0 {
 		return nil
 	}
+	installs, unreadable := parseInstalls(raw)
+	for _, u := range unreadable {
+		m.unresolved("Makefile: could not read a `go install` invocation, so a plugin version may have been missed: %s", u)
+	}
+	m.installs = installs
 	exports, unparsed, err := parseExports(raw)
 	if err != nil {
 		return err
@@ -300,7 +310,14 @@ func (m *migration) buildPlugins() ([]config.Plugin, error) {
 		if p.Revision != nil {
 			m.note("buf.gen.yaml: plugins[%d].revision dropped: it selects a registry plugin revision, and plugins here are local binaries", i)
 		}
-		out = append(out, config.Plugin{Local: p.Local[0], Out: path.Clean(p.Out), Opt: []string(p.Opt)})
+		module, version := m.pinPlugin(p.Local[0])
+		out = append(out, config.Plugin{
+			Local:   p.Local[0],
+			Module:  module,
+			Version: version,
+			Out:     path.Clean(p.Out),
+			Opt:     []string(p.Opt),
+		})
 	}
 	return out, nil
 }
