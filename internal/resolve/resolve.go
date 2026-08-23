@@ -34,17 +34,20 @@ import (
 // and so that resolution itself needs neither a network nor a cache root.
 type FetchFunc func(ctx context.Context, git, ref string) (dir, sha string, err error)
 
-// ErrImportConflict reports that one import path is supplied by two different
-// sources. It is deliberately fatal: "first wins" would make the meaning of an
-// import depend on the order manifests happen to be walked in, and a silent
-// merge would compile one repository's contract against another's copy of it.
-// It compares contents, not sources: two sources supplying one path with
-// byte-identical files present the compiler with the same bytes either way,
-// so there is no ambiguity to protect against and the duplicate is merged.
-// That is as far as the leniency goes. Anything content-blind — "first wins",
+// ErrImportConflict reports that one import path is supplied with two
+// different contents by suppliers of equal standing. It is deliberately fatal:
+// a silent merge would compile one repository's contract against another's
+// copy of it.
+//
+// It compares contents, not suppliers: two suppliers of one path whose files
+// are byte-identical present the compiler with the same bytes either way, so
+// there is no ambiguity to protect against and the duplicate is merged. That
+// is as far as the leniency goes. Anything content-blind — "first wins",
 // "last wins" — is precisely what this error exists to prevent, because it
 // would make the meaning of an import depend on the order manifests happened
-// to be walked in.
+// to be walked in. Standing is the one thing that does decide between
+// disagreeing contents, and standing is a property of the suppliers, not of
+// when they were reached: see resolveFiles.
 var ErrImportConflict = errors.New("import path is provided by two different contents")
 
 // Origin identifies where a file came from.
@@ -112,15 +115,62 @@ type Resolved struct {
 // the same import could resolve differently in two targets of one manifest.
 // Narrowing by paths belongs to the commands that produce output.
 type Graph struct {
-	files map[string]Resolved
-	roots []string
-	deps  []Origin
-	drift []Drift
+	files     map[string]Resolved
+	suppliers map[string][]supplier
+	roots     []string
+	deps      []Origin
+	drift     []Drift
+}
+
+// supplier is one root's offer of one import path, recorded during the walk.
+// Nothing is decided while walking: an import path is settled only once every
+// supplier of it is known, so that the answer cannot depend on which manifest
+// happened to be read first. See resolveFiles.
+type supplier struct {
+	path          string
+	root          string
+	sha256        string
+	origin        Origin
+	authoritative bool
+}
+
+// less orders the suppliers of one import path. It is a total order over
+// properties of the suppliers themselves — never over arrival — so that the
+// same set of suppliers is ranked the same way whatever order they were
+// reached in.
+//
+// Authority first, because that is the rule; then the address, the commit, the
+// dependency name, and the file, which only break ties and never decide
+// between differing contents on their own: a tie among equals of one standing
+// is either agreement in bytes, in which case any of them will do, or
+// ErrImportConflict.
+func (a supplier) less(b supplier) bool {
+	if a.authoritative != b.authoritative {
+		return a.authoritative
+	}
+	if a.origin.Git != b.origin.Git {
+		return a.origin.Git < b.origin.Git
+	}
+	if a.origin.SHA != b.origin.SHA {
+		return a.origin.SHA < b.origin.SHA
+	}
+	if a.origin.Name != b.origin.Name {
+		return a.origin.Name < b.origin.Name
+	}
+	if a.root != b.root {
+		return a.root < b.root
+	}
+	return a.path < b.path
 }
 
 // ImportRoots returns the import roots, root manifest first and dependencies
-// in the order they were reached. The order is deterministic; it carries no
-// precedence, because a path supplied twice is an error rather than a choice.
+// in the order they were reached.
+//
+// The order is deterministic and carries no precedence. Which root supplies an
+// import path is decided by resolveFiles from the standing of the roots that
+// offer it, before any of this is handed to a compiler, so listing the same
+// dependencies in another order resolves the same files, reports the same
+// drift, and fails with the same error.
 func (g *Graph) ImportRoots() []string { return append([]string(nil), g.roots...) }
 
 // ImportPaths returns every resolvable import path, sorted.
@@ -167,7 +217,7 @@ func Resolve(ctx context.Context, root *config.File, fetch FetchFunc) (*Graph, e
 // ResolveIn resolves the closure of root, whose own modules are relative to
 // dir. The walk is breadth-first over manifests.
 func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFunc) (*Graph, error) {
-	g := &Graph{files: map[string]Resolved{}}
+	g := &Graph{files: map[string]Resolved{}, suppliers: map[string][]supplier{}}
 
 	// The root manifest is not fetched and is not deduplicated against
 	// anything: it is where the walk starts.
@@ -240,10 +290,15 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 			queue = append(queue, pending{origin, manifest})
 		}
 	}
+	if err := g.resolveFiles(); err != nil {
+		return nil, err
+	}
 	return g, nil
 }
 
-// addModule registers every proto file under one module root.
+// addModule records every proto file under one module root as a supplier of
+// its import path. It decides nothing: two roots offering one path are settled
+// by resolveFiles once the whole walk is done.
 //
 // authoritative says whether the root is one a manifest claims as its own —
 // a "modules:" entry of a stele.yaml, or the module a dependency edge names —
@@ -302,67 +357,102 @@ func (g *Graph) addModule(origin Origin, modulePath string, authoritative bool) 
 		if err != nil {
 			return err
 		}
-		cur := Resolved{
-			ImportPath:    importPath,
-			Path:          p,
-			Root:          root,
-			SHA256:        sum,
-			Origin:        origin,
-			Sources:       []Origin{origin},
-			Authoritative: authoritative,
-		}
-		if prev, ok := g.files[importPath]; ok {
-			if prev.SHA256 != sum {
-				switch {
-				case prev.Authoritative && !cur.Authoritative:
-					// The owner keeps the path; the stale vendored copy is
-					// reported rather than obeyed.
-					g.recordDrift(importPath, prev, cur)
-					return nil
-				case !prev.Authoritative && cur.Authoritative:
-					g.recordDrift(importPath, cur, prev)
-					cur.Sources = append(cur.Sources, prev.Sources...)
-					g.files[importPath] = cur
-					return nil
-				}
-				// Two claimed roots disagreeing is a genuine ownership
-				// conflict; two fallback roots disagreeing leaves nobody to
-				// prefer. Both stay fatal.
-				return fmt.Errorf("%w: %s is supplied by %s as %s (sha256 %s) and by %s as %s (sha256 %s)",
-					ErrImportConflict, importPath,
-					prev.Origin, prev.Path, prev.SHA256,
-					origin, p, sum)
-			}
-			// Identical bytes: the first registration stays, and the second
-			// supplier is recorded so that a later command can report the
-			// duplication without having to resolve everything again. A
-			// claimed root that arrives second is still promoted, so that the
-			// graph names the owner even where the copies agree.
-			prev.Sources = append(prev.Sources, origin)
-			if authoritative && !prev.Authoritative {
-				prev.Path, prev.Root, prev.Origin, prev.Authoritative = p, root, origin, true
-			}
-			g.files[importPath] = prev
-			return nil
-		}
-		g.files[importPath] = cur
+		g.suppliers[importPath] = append(g.suppliers[importPath], supplier{
+			path:          p,
+			root:          root,
+			sha256:        sum,
+			origin:        origin,
+			authoritative: authoritative,
+		})
 		return nil
 	})
+}
+
+// resolveFiles settles every import path once all of its suppliers are known.
+//
+// This is where the design's one-version rule is applied, and it is applied
+// to the whole set rather than to each arrival in turn. Deciding on arrival
+// was the older shape and it was wrong in a way that only a real closure
+// showed: two stale vendored copies of a contract, reached before the owner,
+// conflicted with each other and killed the run, while the same repositories
+// listed the other way round resolved cleanly with the owner winning. The
+// answer must be a property of the inputs, so the choice is made here, from
+// the suppliers, in an order that comes from what they are and not from when
+// they were read.
+//
+// The rule, stated plainly:
+//
+//   - A root a manifest CLAIMS outranks a root the tool INFERRED on a
+//     producer's behalf. A claim is a statement of ownership; the fallback is
+//     a guess made so that somebody else's files can compile.
+//   - Among the suppliers of the highest standing present, disagreeing bytes
+//     are ErrImportConflict, naming both. Two owners is a genuine ownership
+//     conflict; two guesses leaves nothing worth preferring, so it is fatal
+//     too.
+//   - A lower-standing supplier that disagrees is drift: the claim wins and
+//     the disagreement is reported, never silenced. That report is how a
+//     fleet learns its vendored copies have gone stale.
+//   - Bytes that agree deduplicate whatever the standing, and every supplier
+//     of those bytes is recorded.
+func (g *Graph) resolveFiles() error {
+	paths := make([]string, 0, len(g.suppliers))
+	for p := range g.suppliers {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	for _, importPath := range paths {
+		offers := g.suppliers[importPath]
+		sort.Slice(offers, func(i, j int) bool { return offers[i].less(offers[j]) })
+		winner := offers[0]
+
+		// Disagreement among equals of the winner's standing is fatal. It is
+		// checked before anything is recorded, so a conflict never leaves a
+		// half-built answer behind.
+		for _, o := range offers[1:] {
+			if o.authoritative == winner.authoritative && o.sha256 != winner.sha256 {
+				return fmt.Errorf("%w: %s is supplied by %s as %s (sha256 %s) and by %s as %s (sha256 %s)",
+					ErrImportConflict, importPath,
+					winner.origin, winner.path, winner.sha256,
+					o.origin, o.path, o.sha256)
+			}
+		}
+
+		resolved := Resolved{
+			ImportPath:    importPath,
+			Path:          winner.path,
+			Root:          winner.root,
+			SHA256:        winner.sha256,
+			Origin:        winner.origin,
+			Sources:       []Origin{winner.origin},
+			Authoritative: winner.authoritative,
+		}
+		for _, o := range offers[1:] {
+			if o.sha256 == winner.sha256 {
+				resolved.Sources = append(resolved.Sources, o.origin)
+				continue
+			}
+			// Only a lower standing can reach here; equals were refused above.
+			g.recordDrift(importPath, winner, o)
+		}
+		g.files[importPath] = resolved
+	}
+	return nil
 }
 
 // recordDrift notes that a claimed root and a fallback root supplied one
 // import path with different bytes. It is not an error, and it must not be
 // silent: it is exactly the staleness that vendored trees accumulate, and the
 // only moment at which anything can see it.
-func (g *Graph) recordDrift(importPath string, authoritative, fallback Resolved) {
+func (g *Graph) recordDrift(importPath string, authoritative, fallback supplier) {
 	g.drift = append(g.drift, Drift{
 		ImportPath:          importPath,
-		Authoritative:       authoritative.Origin,
-		AuthoritativePath:   authoritative.Path,
-		AuthoritativeSHA256: authoritative.SHA256,
-		Fallback:            fallback.Origin,
-		FallbackPath:        fallback.Path,
-		FallbackSHA256:      fallback.SHA256,
+		Authoritative:       authoritative.origin,
+		AuthoritativePath:   authoritative.path,
+		AuthoritativeSHA256: authoritative.sha256,
+		Fallback:            fallback.origin,
+		FallbackPath:        fallback.path,
+		FallbackSHA256:      fallback.sha256,
 	})
 }
 

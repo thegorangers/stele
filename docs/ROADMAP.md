@@ -36,10 +36,18 @@ because each has already cost someone time.
   one — resolving and the lock still record what a manifest wrote. The reasoning,
   including why no `--transport` flag and no `glab:` shorthand, is in
   `internal/config/migrate/migrate.go`.
-- **#3 Dependency order changes the outcome.** `Graph.ImportRoots` documents order as
-  carrying no precedence; in practice, listing the owner before a repository that
-  vendors a stale copy turns a fatal conflict into a reported drift. Either the
-  documentation or the behaviour is wrong.
+- ~~**#3 Dependency order changes the outcome.**~~ Fixed. The behaviour was right and
+  the documentation was incomplete: precedence is real — a root a manifest *claims*
+  outranks one the tool *inferred* on a producer's behalf — but resolution reached it
+  by accident of arrival, letting the first supplier claim a path and judging later
+  ones against it. Two stale vendored copies reached before the owner therefore
+  killed a run that the same repositories, listed the other way round, resolved
+  cleanly. Resolution now collects every supplier of an import path and decides
+  afterwards, ranking them by what they are rather than by when they were read, so
+  any ordering of `deps` yields the same winner, the same drift report and the same
+  error. The rule is stated in `internal/resolve/resolve.go` (`resolveFiles`) and in
+  the README, and is held by a test that resolves one closure under every permutation
+  of its dependencies.
 - **#4 `migrate` parses Makefile comments as invocations**, producing spurious
   "could not translate" reports that train people to ignore the report.
 

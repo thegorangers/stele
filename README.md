@@ -48,6 +48,20 @@ will quietly close later.
   PATH. Nothing is invented to fill the hole — in particular no `downloads`
   entry, because a URL and a digest nobody verified pin worse than an admitted
   gap. The report names the tiers available so the choice is a person's.
+- **An import path means one file, and which file is decided by ownership, not
+  by listing order.** A module root a manifest *claims* — an entry of its
+  `modules:`, or the module a dependency edge names — outranks a root `stele`
+  admitted only by the `buf.yaml` fallback so that an unmigrated producer's own
+  files could compile. So the owner of a contract wins over a stale vendored
+  copy of it, and the difference is **reported as drift** rather than silenced;
+  that report is how a fleet finds out its vendored copies have gone stale.
+  Two claimed roots disagreeing is a fatal ownership conflict, and so is two
+  fallback copies disagreeing, since there is nothing there worth preferring.
+  Bytes that agree are deduplicated whatever their standing. The decision is
+  made from the whole set of suppliers, so reordering `deps` cannot change the
+  result: the same closure resolves the same files, reports the same drift, and
+  fails with the same error in any order.
+
 - **An empty result is an error.** Neither `export` nor `generate` exits
   successfully having produced zero files; an empty `paths` match reports which
   path matched nothing.

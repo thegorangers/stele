@@ -528,3 +528,162 @@ func TestResolve_IdenticalBytesDedupeRegardlessOfAuthority(t *testing.T) {
 		t.Fatalf("agreeing copies are not drift, got %v", g.Drift())
 	}
 }
+
+// permutations returns every ordering of deps, so that a property claimed to
+// be order-independent is checked against all of them rather than against the
+// one ordering a test author happened to type.
+func permutations(deps []config.Dep) [][]config.Dep {
+	if len(deps) <= 1 {
+		return [][]config.Dep{append([]config.Dep(nil), deps...)}
+	}
+	var out [][]config.Dep
+	for i := range deps {
+		rest := make([]config.Dep, 0, len(deps)-1)
+		rest = append(rest, deps[:i]...)
+		rest = append(rest, deps[i+1:]...)
+		for _, p := range permutations(rest) {
+			out = append(out, append([]config.Dep{deps[i]}, p...))
+		}
+	}
+	return out
+}
+
+// outcome renders everything a caller can observe about one resolution, so
+// that two runs can be compared as strings rather than field by field.
+func outcome(g *resolve.Graph, err error, importPath string) string {
+	if err != nil {
+		return "error: " + err.Error() + "\n"
+	}
+	var b strings.Builder
+	f, ok := g.FileFor(importPath)
+	if !ok {
+		b.WriteString("unresolved\n")
+	} else {
+		b.WriteString("winner: " + f.Origin.String() + " " + f.Path + " " + f.SHA256 + "\n")
+		for _, s := range f.Sources {
+			b.WriteString("  source: " + s.String() + "\n")
+		}
+	}
+	resolve.WriteDrift(&b, g.Drift())
+	return b.String()
+}
+
+// survey resolves the same closure under every ordering of deps and returns
+// the distinct outcomes, each mapped to the orderings that produced it. More
+// than one entry is the defect: the same inputs, read in a different order,
+// meant something different.
+func survey(t *testing.T, dir string, deps []config.Dep, fetch resolve.FetchFunc, importPath string) map[string][]string {
+	t.Helper()
+	out := map[string][]string{}
+	for _, order := range permutations(deps) {
+		cfg := &config.File{Version: 1, Modules: []config.Module{{Path: "api"}}, Deps: order}
+		g, err := resolve.ResolveIn(context.Background(), dir, cfg, fetch)
+		names := make([]string, 0, len(order))
+		for _, d := range order {
+			names = append(names, d.Name)
+		}
+		got := outcome(g, err, importPath)
+		out[got] = append(out[got], strings.Join(names, ","))
+	}
+	return out
+}
+
+// render prints the distinct outcomes in a stable order, so that a failure
+// shows what the orderings disagreed about.
+func render(outcomes map[string][]string) string {
+	keys := make([]string, 0, len(outcomes))
+	for k := range outcomes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString("=== orders [" + strings.Join(outcomes[k], "] [") + "] gave:\n")
+		b.WriteString(k)
+	}
+	return b.String()
+}
+
+// TestResolve_OutcomeIsIndependentOfDependencyOrder pins the rule the docs
+// state: which root supplies an import path is decided by authority, not by
+// the order the manifest happens to list its dependencies in. One owner that
+// declares the contract, two unmigrated producers that vendor different stale
+// copies of it — every ordering must produce the same winner and the same
+// drift report.
+func TestResolve_OutcomeIsIndependentOfDependencyOrder(t *testing.T) {
+	owner := repo(t, "owner", map[string]string{
+		"stele.yaml":                    "version: 1\nmodules:\n  - path: api\n",
+		"api/acme/place/v1/types.proto": "syntax = \"proto3\";\n// owner\n",
+	})
+	stale1 := repo(t, "stale1", map[string]string{
+		"buf.yaml":                    "version: v2\nmodules:\n  - path: api\n  - path: third_party/proto\n",
+		"api/acme/menu/v1/menu.proto": "syntax = \"proto3\";\n",
+		"third_party/proto/acme/place/v1/types.proto": "syntax = \"proto3\";\n// stale one\n",
+	})
+	stale2 := repo(t, "stale2", map[string]string{
+		"buf.yaml":                               "version: v2\nmodules:\n  - path: api\n  - path: vendor/proto\n",
+		"api/acme/cart/v1/cart.proto":            "syntax = \"proto3\";\n",
+		"vendor/proto/acme/place/v1/types.proto": "syntax = \"proto3\";\n// stale two\n",
+	})
+	consumer := repo(t, "consumer", map[string]string{
+		"api/acme/order/v1/order.proto": "syntax = \"proto3\";\n",
+	})
+	fetch := fakeFetch(map[string]string{
+		"gh:acme/owner":  owner,
+		"gh:acme/stale1": stale1,
+		"gh:acme/stale2": stale2,
+	})
+	deps := []config.Dep{
+		{Name: "place", Git: "gh:acme/owner", Ref: "v1.0.0", Module: "api"},
+		{Name: "menu", Git: "gh:acme/stale1", Ref: "v1.0.0", Module: "api"},
+		{Name: "cart", Git: "gh:acme/stale2", Ref: "v1.0.0", Module: "api"},
+	}
+
+	outcomes := survey(t, consumer, deps, fetch, "acme/place/v1/types.proto")
+	if len(outcomes) != 1 {
+		t.Fatalf("the ordering of deps decided the outcome:\n%s", render(outcomes))
+	}
+	for got := range outcomes {
+		if strings.HasPrefix(got, "error:") {
+			t.Fatalf("the owner declares the contract; it must win:\n%s", got)
+		}
+	}
+}
+
+// TestResolve_NonAuthoritativeConflictIsIdenticalInEveryOrder: when nothing
+// authoritative supplies a path there is nothing to prefer, and the failure
+// must be the same failure whichever order the copies were reached in —
+// including which two suppliers the message names.
+func TestResolve_NonAuthoritativeConflictIsIdenticalInEveryOrder(t *testing.T) {
+	stale1 := repo(t, "stale1", map[string]string{
+		"buf.yaml":                    "version: v2\nmodules:\n  - path: api\n  - path: third_party/proto\n",
+		"api/acme/menu/v1/menu.proto": "syntax = \"proto3\";\n",
+		"third_party/proto/acme/place/v1/types.proto": "syntax = \"proto3\";\n// stale one\n",
+	})
+	stale2 := repo(t, "stale2", map[string]string{
+		"buf.yaml":                               "version: v2\nmodules:\n  - path: api\n  - path: vendor/proto\n",
+		"api/acme/cart/v1/cart.proto":            "syntax = \"proto3\";\n",
+		"vendor/proto/acme/place/v1/types.proto": "syntax = \"proto3\";\n// stale two\n",
+	})
+	consumer := repo(t, "consumer", map[string]string{
+		"api/acme/order/v1/order.proto": "syntax = \"proto3\";\n",
+	})
+	fetch := fakeFetch(map[string]string{
+		"gh:acme/stale1": stale1,
+		"gh:acme/stale2": stale2,
+	})
+	deps := []config.Dep{
+		{Name: "menu", Git: "gh:acme/stale1", Ref: "v1.0.0", Module: "api"},
+		{Name: "cart", Git: "gh:acme/stale2", Ref: "v1.0.0", Module: "api"},
+	}
+
+	outcomes := survey(t, consumer, deps, fetch, "acme/place/v1/types.proto")
+	if len(outcomes) != 1 {
+		t.Fatalf("the ordering of deps decided the failure:\n%s", render(outcomes))
+	}
+	for got := range outcomes {
+		if !strings.HasPrefix(got, "error: "+resolve.ErrImportConflict.Error()) {
+			t.Fatalf("nothing owns the path; want ErrImportConflict, got:\n%s", got)
+		}
+	}
+}
