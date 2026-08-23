@@ -1,0 +1,11 @@
+# A migrated producer: it states its own dependency, and resolution follows it.
+# That is what makes third_party/platform reachable from the consumer, which
+# never names it.
+version: 1
+modules:
+  - path: proto
+deps:
+  - name: platform
+    git: https://example.com/parity/platform.git
+    ref: 0000000000000000000000000000000000000000
+    module: proto

@@ -3,3 +3,5 @@ modules:
   - path: proto
   - path: third_party/telemetry/proto
   - path: third_party/telemetry/third_party/googleapis
+  - path: third_party/orders/proto
+  - path: third_party/platform/proto

@@ -67,20 +67,24 @@ verified. That is more evidence than a good many `1.0` releases carry.
 It is still not enough, for two reasons that are about evidence rather than
 polish:
 
-1. **`export` parity is proven on one repository.** It is the half that removes
-   the registry, and it is the half least tested — one repository, 48 files. A
-   `1.0` promises that the next `1.x` will not change those bytes, and we cannot
-   yet see enough shapes of `export` to know which of its current behaviours are
-   decisions and which are accidents. Promising compatibility for behaviour you
-   have not characterised is how a major version becomes a lie.
-2. **Parity is not yet held by the tool's own CI.** It is proven by hand, on one
-   machine, against a corpus in a temporary directory (roadmap milestone 3). A
-   regression in the contract would reach a user before it reached us. A
-   stability promise that nothing enforces is a promise about intentions.
+1. **`export` is characterised, but only against shapes somebody thought of.**
+   Roadmap milestones 3 and 4 have landed: parity for both halves runs in this
+   repository's CI on every change, and `export` is measured by five
+   invocations over a committed corpus rather than by one repository's 48
+   files. What that corpus cannot reach is written down beside it — no vendored
+   tree grown by real builds over months, one pinned version of the reference
+   tool, seven proto files against closures of thousands. A `1.0` promises that
+   the next `1.x` will not move those bytes, and the corpus is young enough
+   that the promise would still be resting on the fleet run rather than on
+   anything a reader can execute.
+2. **The failure modes of milestone 5 are untested.** An interrupted clone, a
+   cold cache with no network, a disk that fills during extraction: the design
+   intends all three to be safe, and intent is not evidence. A stability
+   promise that covers only the happy path is a promise about intentions.
 
-`v1.0.0` is the release that follows roadmap milestones 3 and 4: parity running
-on every change, and `export` parity beyond one repository. Until then `0.x`
-states the truth — the bytes may still move, and when they do you will be told.
+`v1.0.0` is the release that follows roadmap milestone 5, with a few releases'
+worth of the corpus catching real regressions behind it. Until then `0.x` states
+the truth — the bytes may still move, and when they do you will be told.
 
 ## Cutting a release
 

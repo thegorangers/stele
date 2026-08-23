@@ -1,0 +1,6 @@
+# A producer reached only through another producer: the consumer never names
+# it. Like telemetry it is unmigrated, so its buf.yaml is what stele falls back
+# to for its module roots.
+version: v2
+modules:
+  - path: proto

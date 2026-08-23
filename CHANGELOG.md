@@ -54,6 +54,18 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 - `STELE_PARITY_CORPUS` still points the harness at an external corpus, so the
   fleet run stays possible. What the shipped corpus does *not* cover, compared
   with that run, is written down in `test/parity/corpus/README.md`.
+- `export` is measured in that CI run too, and no longer only on the single
+  repository whose vendored tree was compared by hand. Five invocations over
+  three producers cover a dependency's module whole, `--exclude-imports` and
+  its absence, `--path` in the producer's coordinates, the caller's own
+  modules, a producer reached only through another producer, and the
+  well-known types both tools leave out. A corpus with no committed vendored
+  tree now has the reference tool run over the same files instead, one
+  invocation at a time, so a failure names the invocation.
+- The export parity test fails again when nothing was compared. It was
+  weakened to a skip when no corpus declared an export block; now that one
+  does, a skip would mean a corpus had lost its export blocks and nobody was
+  told.
 
 ## [v0.1.0] — 2026-08-23
 

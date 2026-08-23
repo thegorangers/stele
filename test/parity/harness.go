@@ -76,6 +76,9 @@ const shippedCorpus = "corpus/corpus.yaml"
 //	        - dep: some-producer
 //	          exclude_imports: true
 //	          paths: [example/v1]
+//	          reference:            # required when vendored is absent
+//	            input: third_party/some-producer/proto
+//	            paths: [third_party/some-producer/proto/example/v1]
 //	    generate:               # optional; absent means generate is not compared
 //	      manifest: manifests/some-repo.yaml   # relative to the corpus file
 //	      include_imports: false               # optional
@@ -133,7 +136,13 @@ type Producer struct {
 type Repo struct {
 	// Dir is the repository, relative to the corpus root.
 	Dir string `yaml:"dir"`
-	// Vendored is the tree the export must reproduce, relative to Dir.
+	// Vendored is the tree the export must reproduce, relative to Dir. It is
+	// how a corpus of real checkouts measures export: the committed tree is
+	// the other tool's output, produced over months by the builds that
+	// actually run. A corpus that has none — the synthetic one shipped here
+	// cannot have one, because nothing produced it — leaves this empty and
+	// gives each invocation a `reference` instead, so the other tool is run
+	// and compared against there and then.
 	Vendored string `yaml:"vendored"`
 	// Export, when present, asks for the vendored tree to be reproduced.
 	Export *Export `yaml:"export"`
@@ -162,8 +171,38 @@ type Invocation struct {
 	Dep string `yaml:"dep"`
 	// Paths mirrors --path, in coordinates relative to the module root.
 	Paths []string `yaml:"paths"`
-	// ExcludeImports mirrors --exclude-imports.
+	// ExcludeImports mirrors --exclude-imports. It applies to both tools:
+	// the import closure is the decision the flag exists to make, so an
+	// invocation that set it for one tool only would be comparing two
+	// different questions.
 	ExcludeImports bool `yaml:"exclude_imports"`
+	// Reference is the same invocation, expressed for the other tool. It is
+	// required when the checkout carries no vendored tree, and is what lets a
+	// corpus nobody has a vendored tree for still measure export: the other
+	// tool is run over the same physical files and its output is the
+	// expectation.
+	//
+	// It is stated rather than derived because the two tools do not take the
+	// same coordinates. stele's Paths are relative to the module root that
+	// supplies the file — the coordinates an import statement uses — and the
+	// other tool's are relative to the workspace. Deriving one from the other
+	// would put the translation under test into the harness that is supposed
+	// to measure it.
+	Reference *ReferenceExport `yaml:"reference"`
+	// ExpectAbsent lists path prefixes that must appear in neither tool's
+	// output. It pins a decision rather than an agreement: the well-known
+	// types are carried by every compiler and supplied by no repository, so
+	// both tools leave them out — and a test that only compared the two would
+	// go on passing if both started emitting them.
+	ExpectAbsent []string `yaml:"expect_absent"`
+}
+
+// ReferenceExport is one invocation of the other tool.
+type ReferenceExport struct {
+	// Input is what the other tool is pointed at, relative to the checkout.
+	Input string `yaml:"input"`
+	// Paths mirrors its --path, in its own coordinates.
+	Paths []string `yaml:"paths"`
 }
 
 // Generate describes how to generate from a checkout with this tool.
@@ -219,9 +258,6 @@ func loadCorpus(t *testing.T) Corpus {
 			t.Fatalf("%s: repos[%d]: generate needs a manifest", path, i)
 		}
 		if r.Export != nil {
-			if r.Vendored == "" {
-				t.Fatalf("%s: repos[%d]: export needs vendored, the tree it must reproduce", path, i)
-			}
 			if r.Export.Manifest == "" {
 				t.Fatalf("%s: repos[%d]: export needs a manifest", path, i)
 			}
@@ -229,6 +265,12 @@ func loadCorpus(t *testing.T) Corpus {
 				// No invocations would export nothing and then compare
 				// nothing, reporting success.
 				t.Fatalf("%s: repos[%d]: export needs at least one invocation", path, i)
+			}
+			for j, inv := range r.Export.Invocations {
+				if r.Vendored == "" && (inv.Reference == nil || inv.Reference.Input == "") {
+					t.Fatalf("%s: repos[%d]: export invocation %d has no reference input, and the checkout has no vendored tree to compare against; one of the two has to say what the expected bytes are",
+						path, i, j)
+				}
 			}
 		}
 	}
@@ -385,26 +427,49 @@ func referencePATH(t *testing.T, c Corpus, cfg *config.File) []string {
 func runExport(t *testing.T, c Corpus, repo string, e Export, out string) {
 	t.Helper()
 	stage := stageManifest(t, c, repo, e.Manifest)
+	for _, inv := range e.Invocations {
+		runOneExport(t, c, stage, repo, inv, out)
+	}
+}
+
+// runOneExport performs one invocation of this tool against an already staged
+// manifest.
+//
+// It is separate because the two corpora ask different questions of the same
+// run. A checkout with a committed vendored tree can only be compared with the
+// union of every invocation, since that union is what produced the tree. A
+// corpus without one compares each invocation against the other tool
+// separately — which is the more diagnosable of the two, because a failure
+// names the invocation that caused it rather than the tree they all wrote to.
+func runOneExport(t *testing.T, c Corpus, stage, repo string, inv Invocation, out string) {
+	t.Helper()
 	cache, err := cachedir.Root(c.Cache)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, inv := range e.Invocations {
-		err := export.Run(context.Background(), export.Options{
-			Dir:            stage,
-			Output:         out,
-			Dep:            inv.Dep,
-			Paths:          inv.Paths,
-			ExcludeImports: inv.ExcludeImports,
-			CacheRoot:      cache,
-			// The corpus is somebody's checkout, and the manifest is the
-			// corpus's. Writing a lock would make running the acceptance test
-			// modify the thing it measures.
-			NoLock: true,
-		})
-		if err != nil {
-			t.Fatalf("exporting dep %q of %s: %v", inv.Dep, repo, err)
-		}
+	// A corpus that declares producers answers every address from a committed
+	// tree and must never reach the network; one that declares none — the
+	// fleet's, whose dependencies are real repositories — keeps the fetching
+	// behaviour export has always had here.
+	var fetch resolve.FetchFunc
+	if len(c.Producers) > 0 {
+		fetch = c.fetcher()
+	}
+	err = export.Run(context.Background(), export.Options{
+		Dir:            stage,
+		Output:         out,
+		Dep:            inv.Dep,
+		Paths:          inv.Paths,
+		ExcludeImports: inv.ExcludeImports,
+		CacheRoot:      cache,
+		Fetch:          fetch,
+		// The corpus is somebody's checkout, and the manifest is the
+		// corpus's. Writing a lock would make running the acceptance test
+		// modify the thing it measures.
+		NoLock: true,
+	})
+	if err != nil {
+		t.Fatalf("exporting dep %q of %s: %v", inv.Dep, repo, err)
 	}
 }
 

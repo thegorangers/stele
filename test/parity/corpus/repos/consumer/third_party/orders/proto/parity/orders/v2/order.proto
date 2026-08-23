@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package parity.orders.v2;
+
+// A sibling of parity/orders/v1 under the same parent directory. It is here so
+// that narrowing to v1 has something to leave out that shares a prefix with
+// it: a path filter that widened by one directory would pass against a
+// producer whose selected directory had no siblings.
+message Order {
+  string id = 1;
+}

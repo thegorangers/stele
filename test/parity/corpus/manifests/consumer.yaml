@@ -16,6 +16,12 @@ deps:
     # coverage note in ../README.md.
     ref: 0000000000000000000000000000000000000000
     module: proto
+  # A producer that states a dependency of its own, which is how
+  # parity/platform/v1 reaches this closure: nothing here names it.
+  - name: orders
+    git: https://example.com/parity/orders.git
+    ref: 0000000000000000000000000000000000000000
+    module: proto
 generate:
   - name: go
     managed:

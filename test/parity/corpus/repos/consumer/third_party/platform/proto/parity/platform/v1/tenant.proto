@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package parity.platform.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// A file of a producer no manifest names directly: it is reached only through
+// another producer's dependency on it. Its own import is a well-known type,
+// which the compiler carries and no repository supplies.
+message Tenant {
+  string id = 1;
+  google.protobuf.Timestamp created_at = 2;
+}

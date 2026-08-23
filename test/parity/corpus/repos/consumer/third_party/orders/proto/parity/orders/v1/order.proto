@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package parity.orders.v1;
+
+import "parity/platform/v1/tenant.proto";
+
+// A producer's file whose import is satisfied by a producer of its own.
+message Order {
+  string id = 1;
+  parity.platform.v1.Tenant tenant = 2;
+}

@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package parity.shipping.v1;
+
+// A second directory of the same module, so that narrowing by --path selects
+// part of a producer rather than all of it.
+message Shipment {
+  string id = 1;
+}

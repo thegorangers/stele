@@ -16,6 +16,13 @@ buf_version: 1.48.0
 producers:
   - git: https://example.com/parity/telemetry.git
     dir: consumer/third_party/telemetry
+  - git: https://example.com/parity/orders.git
+    dir: consumer/third_party/orders
+  # Named by no manifest of any checkout: it is reached only through orders,
+  # which declares it. The corpus still has to answer its address, because
+  # resolution follows a producer's dependencies the way it follows the root's.
+  - git: https://example.com/parity/platform.git
+    dir: consumer/third_party/platform
 
 repos:
   - dir: managed
@@ -24,3 +31,50 @@ repos:
   - dir: consumer
     generate:
       manifest: manifests/consumer.yaml
+    # Export is measured against the other tool run over the same physical
+    # files, one invocation at a time, because nothing produced a vendored tree
+    # for a corpus that was written rather than grown. What each invocation is
+    # for is in README.md.
+    export:
+      manifest: manifests/consumer.yaml
+      invocations:
+        # A dependency's module, whole. Every export the fleet performs is of
+        # this shape: it is pointed at somebody else's repository, never at the
+        # caller's own.
+        - dep: orders
+          reference:
+            input: third_party/orders/proto
+          # The producer imports a well-known type. Neither tool exports one.
+          expect_absent:
+            - google/protobuf
+        # The same, with the import closure left out — the one thing the flag
+        # decides.
+        - dep: orders
+          exclude_imports: true
+          reference:
+            input: third_party/orders/proto
+          expect_absent:
+            - google/protobuf
+        # Narrowed. stele's coordinates are the producer's — the ones an import
+        # statement uses — and the other tool's are the workspace's. The same
+        # selection said two ways is the translation under test.
+        - dep: orders
+          paths:
+            - parity/orders/v1
+          reference:
+            input: third_party/orders/proto
+            paths:
+              - third_party/orders/proto/parity/orders/v1
+          expect_absent:
+            - google/protobuf
+        # The caller's own modules. No invocation in the measured fleet is of
+        # this shape — that asymmetry was a design gap found late, and --dep is
+        # what closed it — but the code path exists and is reachable from the
+        # command line, so it is measured rather than assumed.
+        - reference:
+            input: proto
+        # A dependency whose own vendored tree, not the consumer's, supplies
+        # the import that reaches the output.
+        - dep: telemetry
+          reference:
+            input: third_party/telemetry/proto

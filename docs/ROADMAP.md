@@ -7,15 +7,17 @@ Where `stele` stands and what it needs before it can be relied on.
 - `generate` matches the reference tool **byte for byte on 12 repositories**, managed
   mode included.
 - `export` matches a committed vendored tree **byte for byte on one repository**
-  (48/48 files). The richest consumer fails on a genuine defect in that fleet, not
-  in the tool.
+  (48/48 files), and matches the reference tool invocation by invocation on the
+  corpus committed here, which runs in CI on every change. The richest consumer
+  fails on a genuine defect in that fleet, not in the tool.
 - Two repositories run on it in real CI, one of them the fleet's acceptance suite.
 - Dependencies are pinned by commit; plugins are pinned by module+version or by
   per-platform digest, installed into the tool's own cache and verified after
   installation.
 
 That is enough to migrate a repository deliberately, with a human watching. It is
-not yet enough to hand to someone who has not been in the room.
+not yet enough to hand to someone who has not been in the room: what a cold
+cache, an interrupted clone or a full disk does is still untested (milestone 5).
 
 ## Milestone 1 — defects found by use
 
@@ -88,7 +90,7 @@ Done, at `v0.1.0`.
   contract. `Generated output` is its own category, breaking by definition and
   separate from features and fixes.
 - The versioning policy is written down in `RELEASING.md`, including why the first
-  release is `v0.1.0` and what would make it `v1.0.0` — which is milestones 3 and 4.
+  release is `v0.1.0` and what would make it `v1.0.0`.
 
 ## Milestone 3 — parity in the tool's own CI
 
@@ -121,9 +123,41 @@ directory. A regression would reach a user before it reached us.~~ Done.
 
 ## Milestone 4 — export parity beyond one repository
 
-`generate` is well covered; `export` is not, and it is the half that removes the
+~~`generate` is well covered; `export` is not, and it is the half that removes the
 registry. It needs several shapes: many dependencies, narrow `paths`, and a
-dependency reached only transitively.
+dependency reached only transitively.~~ Done, for what a corpus of this kind can
+reach.
+
+- The shipped corpus measures `export` rather than skipping it. Five
+  invocations, listed with what each is for in
+  `test/parity/corpus/README.md`: a dependency's module whole — the shape every
+  invocation in the measured fleet has, since an export is always pointed at
+  somebody else's repository; the same with `--exclude-imports`, so the import
+  closure is compared against its own absence; `--path` in the producer's
+  coordinates, against the reference tool's workspace-relative ones, with a
+  sibling directory present so that a filter which widened by one level fails;
+  the caller's own modules, a shape the fleet never uses but the command line
+  reaches; and a producer whose own vendored tree supplies the import that
+  reaches the output.
+- A producer reached **only transitively** is in the corpus: `parity/platform`
+  is named by no checkout, reaches the closure because another producer
+  declares it, and reaches the output because a selected file imports it.
+- The well-known types are **pinned, not merely agreed on**. Neither tool
+  emits `google/protobuf/*`, and the corpus asserts their absence against both
+  trees — a comparison of two tools would go on passing if both started
+  emitting them.
+- The guard weakened in milestone 3 is back: nothing compared is a failure
+  again, not a skip.
+
+What this does **not** reach is stated where it is used, and it is the reason
+this milestone does not close the question on its own. A synthetic corpus has no
+vendored tree that anybody's builds produced: the expectation is the reference
+tool run now, at one pinned version, so a drift that only shows across versions
+of that tool is invisible here. It is five invocations over seven proto files
+against closures of thousands. And it exercises only the shapes somebody thought
+of. The fleet run — a committed tree grown over months, compared through
+`STELE_PARITY_CORPUS` — remains the stronger measurement, and the harness keeps
+both: a checkout that declares `vendored` is compared against it.
 
 ## Milestone 5 — failure behaviour
 
