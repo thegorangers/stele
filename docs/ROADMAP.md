@@ -28,9 +28,14 @@ because each has already cost someone time.
   commits is the error, named at write time as well as at read time. Addresses are
   recorded as each manifest wrote them and are not normalised — see the decision
   recorded in `internal/lockfile/lock.go`.
-- **#2 `migrate` emits `ssh://` addresses that fail in CI.** It carries over what the
-  source `Makefile` used, but a typical CI image has no ssh binary — access is an
-  `insteadOf` rewrite over https. Every migration hits this.
+- ~~**#2 `migrate` emits `ssh://` addresses that fail in CI.**~~ Fixed. `migrate` now
+  authors `https://` unconditionally, whatever the source `Makefile` used. It is the
+  form both environments rewrite with `git config insteadOf`, so the emitted manifest
+  needs no editing on a workstation that clones over ssh either. Only `migrate`
+  chooses a transport, and only because it authors an address rather than obeying
+  one — resolving and the lock still record what a manifest wrote. The reasoning,
+  including why no `--transport` flag and no `glab:` shorthand, is in
+  `internal/config/migrate/migrate.go`.
 - **#3 Dependency order changes the outcome.** `Graph.ImportRoots` documents order as
   carrying no precedence; in practice, listing the owner before a repository that
   vendors a stale copy turns a fatal conflict into a reported drift. Either the

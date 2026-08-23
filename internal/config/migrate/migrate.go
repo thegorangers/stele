@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/thegorangers/stele/internal/config"
+	"github.com/thegorangers/stele/internal/source"
 )
 
 // Result is a translated manifest together with everything the translation
@@ -109,7 +110,11 @@ type migration struct {
 	// by the command each installs. They are where a plugin's version is
 	// written down; buf.gen.yaml names the plugin and nothing else.
 	installs map[string][]goInstall
-	result   Result
+	// rewritten records the addresses already reported as rewritten to
+	// https://, so that a producer exported by several invocations is
+	// mentioned once.
+	rewritten map[string]bool
+	result    Result
 }
 
 func (m *migration) unresolved(format string, a ...any) {
@@ -189,6 +194,7 @@ func (m *migration) readMakefile(raw []byte) error {
 // build assembles the manifest from what was read.
 func (m *migration) build() error {
 	m.deps = map[string]*config.Dep{}
+	m.rewritten = map[string]bool{}
 	m.depPaths = map[string][]string{}
 	m.vendored = map[string][]string{}
 
@@ -246,10 +252,62 @@ func (m *migration) buildDepsFromExports() error {
 	return nil
 }
 
+// portable rewrites a recovered address into the form that works in every
+// environment the manifest will be read in, which is https://.
+//
+// This is the one place in the tool that is allowed to choose a transport, and
+// it is allowed because it is the one place that AUTHORS an address rather
+// than obeying one. Resolving never rewrites and the lock never normalises: a
+// request is somebody's stated intent, and the tool cannot prove that two
+// addresses name one repository. Here there is no stated intent to preserve —
+// the source Makefile's ssh:// is the accident of the workstation the vendor
+// target was last run on, and the file being written is committed and read by
+// machines that workstation knows nothing about.
+//
+// https:// unconditionally, and no --transport flag. The failure modes are not
+// symmetric. A typical CI image carries no ssh binary at all, so an ssh://
+// address there is a hard failure, and it surfaces only once a pipeline runs;
+// an https:// address on a workstation that has configured nothing at worst
+// asks git for credentials, on a machine with a person and a credential helper
+// on it. Both environments rewrite by URL prefix with `git config insteadOf`,
+// so https:// is what CI turns into a token URL and what an ssh-key
+// workstation turns back into ssh — the emitted manifest needs no editing in
+// either. A flag would leave the default wrong for whoever does not know to
+// pass it, and whoever knows to pass it did not need it. Its absence costs the
+// rare host that genuinely speaks only ssh one edited line per dependency, in
+// a file this command already prints and tells its reader to review.
+//
+// The configurable gh:/glab: shorthands are deliberately not emitted either.
+// A shorthand defers the transport to configuration, which is the good half,
+// but it defers the host with it: `glab:acme/orders` names no host, so the
+// same manifest resolves to different repositories under different
+// configurations, and a reader cannot tell which repository is meant without
+// the configuration in hand. That is the "one import path, two contents"
+// hazard, traded for a saved scheme. It is also not available in general:
+// there is no built-in prefix for a self-hosted host, so migrating a repository
+// from one would have to invent configuration this command cannot write.
+//
+// An address that cannot be parsed is left exactly as it was found. Guessing
+// at an address is how a manifest comes to name a repository nobody meant.
+func (m *migration) portable(git string) string {
+	addr, err := source.ParseAddr(git, nil)
+	if err != nil || addr.Transport == source.HTTPS {
+		return git
+	}
+	addr.Transport = source.HTTPS
+	out := addr.CloneURL()
+	if !m.rewritten[git] {
+		m.rewritten[git] = true
+		m.note("%s is addressed over https:// instead: a manifest is committed and read in CI too, and a typical CI image has no ssh binary. Both environments rewrite this prefix with `git config insteadOf`, so no edit is needed on a machine that clones over ssh", git)
+	}
+	return out
+}
+
 // addDep records a dependency, merging a repeated one and refusing a
 // contradictory one. Two entries for the same repository at different commits
 // would put two versions of one import path in the graph.
 func (m *migration) addDep(name, git, ref, module string, paths []string) (*config.Dep, error) {
+	git = m.portable(git)
 	if d, ok := m.deps[name]; ok {
 		switch {
 		case d.Git != git:

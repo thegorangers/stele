@@ -112,7 +112,7 @@ vendor:
 		t.Fatalf("deps = %#v, want one recovered dependency", r.File.Deps)
 	}
 	d := r.File.Deps[0]
-	if d.Name != "orders" || d.Git != "ssh://git@git.example.com/group/orders.git" || d.Module != "api" {
+	if d.Name != "orders" || d.Git != "https://git.example.com/group/orders.git" || d.Module != "api" {
 		t.Fatalf("dep = %#v, want the orders repository at module api", d)
 	}
 	if !reflect.DeepEqual(d.Paths, []string{"example/orders/v1"}) {
@@ -382,5 +382,54 @@ breaking:
 `, "version: v2\nplugins: [{local: protoc-gen-go, out: gen}]\n", "")
 	if len(r.Notes) == 0 {
 		t.Fatal("dropping the lint and breaking configuration must be reported")
+	}
+}
+
+// TestSSHAddressIsMigratedToHTTPS: a Makefile's `buf export` addresses a
+// producer over ssh://, because that is what a workstation with an ssh key
+// uses. A typical CI image has no ssh binary at all, so a manifest carrying
+// that form over fails there — and only once a pipeline runs. The manifest is
+// authored here and committed for everyone, so the address it is authored
+// with must be the portable one.
+func TestSSHAddressIsMigratedToHTTPS(t *testing.T) {
+	r := mustMigrate(t, `
+version: v2
+modules:
+  - path: api
+  - path: third_party/proto
+`, `
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: gen
+inputs:
+  - directory: api
+  - directory: third_party/proto
+`, `
+vendor:
+	@rm -rf third_party/proto
+	@buf export "ssh://git@gitlab.com/acme/services/orders.git#subdir=api,ref=9f1c2b3" \
+		--exclude-imports --path acme/orders/v1 --output=third_party/proto
+`)
+	if len(r.File.Deps) != 1 {
+		t.Fatalf("deps = %#v, want one recovered dependency", r.File.Deps)
+	}
+	if got, want := r.File.Deps[0].Git, "https://gitlab.com/acme/services/orders.git"; got != want {
+		t.Fatalf("dep git = %q, want %q", got, want)
+	}
+	out, err := r.YAML()
+	if err != nil {
+		t.Fatalf("YAML: %v", err)
+	}
+	if strings.Contains(string(out), "git: ssh://") {
+		t.Fatalf("the emitted manifest still carries an ssh:// address:\n%s", out)
+	}
+	if !strings.Contains(string(out), "git: https://gitlab.com/acme/services/orders.git") {
+		t.Fatalf("the emitted manifest does not carry the https:// address:\n%s", out)
+	}
+	// The rewrite is reported rather than silent: it is a change to what the
+	// source said, and the reader of a migration is asked to review it.
+	if len(r.Notes) == 0 || !strings.Contains(strings.Join(r.Notes, "\n"), "ssh://git@gitlab.com/acme/services/orders.git") {
+		t.Fatalf("notes = %#v, want the rewritten address named", r.Notes)
 	}
 }

@@ -23,6 +23,11 @@ and is not is worse than no manifest at all. For the same reason a migration
 that leaves anything for a human to decide exits non-zero, and the reasons are
 printed and repeated in the manifest itself.
 
+Dependency addresses are authored over https://, whatever form the Makefile
+used. A typical CI image has no ssh binary, and https:// is the form both CI
+and a workstation rewrite with 'git config insteadOf' — so the emitted
+manifest needs no editing to clone over ssh. Every rewrite is reported.
+
 By default the manifest is printed for review and nothing is written.
 
 Usage:
