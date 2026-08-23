@@ -74,7 +74,7 @@
     },
     "plugin": {
       "title": "recorded plugin",
-      "description": "One code generation plugin the run went through.\n\nAn empty module is the record's most useful state: it says the tool did not choose this binary and cannot promise the next machine will run the same one. The version is then whatever the binary reported about itself, which for a plugin that is not a Go program is \"unknown\" — an observation, not a pin.",
+      "description": "One code generation plugin the run went through.\n\nThe origin says which tier of the manifest the binary came from, and the fields beside it are what identifies it on that tier: module and version when the tool installed it, url and sha256 when it downloaded and verified it, path when the manifest pointed at a file, and nothing but the name when it was found on PATH. Recording the tier is the point: it is the difference between a run another machine can reproduce and one it cannot, and a reader of a merge request should not have to infer it from which fields are empty.\n\nThe version is \"unknown\" wherever no version can be had, which is every tier but the first. That is an observation, not a pin; the pin, where there is one, is the sha256.",
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "version"],
@@ -84,15 +84,44 @@
           "type": "string",
           "minLength": 1
         },
+        "origin": {
+          "description": "Which tier the binary came from. Absent in a lock written before origins were recorded, which is read as \"not stated\" rather than as drift.",
+          "enum": ["managed", "url", "file", "path"]
+        },
         "module": {
-          "description": "The Go module the plugin was installed from, when the tool installed it. Absent for a plugin taken from PATH.",
+          "description": "The Go module the plugin was installed from, when the tool installed it.",
           "type": "string"
         },
         "version": {
-          "description": "The installed version, or the version observed on PATH.",
+          "description": "The installed version, the version observed on PATH, or \"unknown\".",
           "type": "string",
           "minLength": 1,
           "examples": ["v1.36.12", "unknown"]
+        },
+        "url": {
+          "description": "Where a downloaded plugin came from.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "The digest that download was verified against. For that tier it is the pin, and it is checked again on every use.",
+          "type": "string"
+        },
+        "archive_path": {
+          "description": "The member taken from a downloaded archive, if any.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The manifest's own spelling of an explicit path, relative to the manifest.",
+          "type": "string"
+        }
+      },
+      "if": { "properties": { "origin": { "const": "url" } }, "required": ["origin"] },
+      "then": {
+        "description": "A record that claims the download tier must carry both halves of the pin; one half would claim a pin it does not have.",
+        "required": ["url", "sha256"],
+        "properties": {
+          "url": { "minLength": 1 },
+          "sha256": { "minLength": 1 }
         }
       }
     }

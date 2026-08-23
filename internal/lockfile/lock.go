@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -63,20 +65,52 @@ type Lock struct {
 
 // Plugin is one recorded code generation plugin.
 //
-// Module is empty for a plugin taken from PATH, and that emptiness is the
-// record's most useful field: it says the tool did not choose this binary and
-// cannot promise the next machine will run the same one. Version is then
-// whatever the binary reported about itself, which for a plugin that is not a
-// Go program is "unknown" — an observation, not a pin.
+// Origin says which tier of the manifest the binary came from, and the fields
+// beside it are what identifies it on that tier: module and version when the
+// tool installed it, url and sha256 when it downloaded and verified it, path
+// when the manifest pointed at a file, and nothing but the name when it was
+// found on PATH. Recording the tier is the point: it is the difference between
+// a run another machine can reproduce and one it cannot, and a reader of a
+// merge request should not have to infer it from which fields are empty.
+//
+// Version is "unknown" wherever no version can be had — which is every tier
+// but the first. That is an observation, not a pin; the pin, where there is
+// one, is the sha256.
 type Plugin struct {
 	// Name is the manifest's own spelling of the plugin.
 	Name string `yaml:"name"`
+	// Origin is one of the origins below. It is omitted for a lock written
+	// before origins were recorded, which is read as "not stated".
+	Origin string `yaml:"origin,omitempty"`
 	// Module is the Go module the plugin was installed from, when the tool
 	// installed it.
 	Module string `yaml:"module,omitempty"`
-	// Version is the installed version, or the version observed on PATH.
+	// Version is the installed version, or the version observed on PATH, or
+	// "unknown".
 	Version string `yaml:"version"`
+	// URL is where a downloaded plugin came from.
+	URL string `yaml:"url,omitempty"`
+	// SHA256 is the digest that download was verified against. It is the pin.
+	SHA256 string `yaml:"sha256,omitempty"`
+	// ArchivePath is the member taken from a downloaded archive, if any.
+	ArchivePath string `yaml:"archive_path,omitempty"`
+	// Path is the manifest's own spelling of an explicit path.
+	Path string `yaml:"path,omitempty"`
 }
+
+// Origins a recorded plugin can have. They are the manifest's four tiers, and
+// the spellings are the resolver's own, so that a lock, a report and an error
+// message never call the same thing by two names.
+const (
+	OriginManaged = "managed"
+	OriginURL     = "url"
+	OriginFile    = "file"
+	OriginPath    = "path"
+)
+
+// origins is the accepted set, for validation and for the message that names
+// it.
+var origins = []string{OriginManaged, OriginURL, OriginFile, OriginPath}
 
 // Entry is one pinned dependency: where it came from, and which commit.
 type Entry struct {
@@ -169,6 +203,14 @@ func (l *Lock) validate() error {
 			return fmt.Errorf("plugins[%d].name: missing", i)
 		case p.Version == "":
 			return fmt.Errorf("plugins[%d].version: missing for plugin %q", i, p.Name)
+		case p.Origin != "" && !slices.Contains(origins, p.Origin):
+			return fmt.Errorf("plugins[%d].origin: %q is not an origin this tool records for plugin %q (known: %s)",
+				i, p.Origin, p.Name, strings.Join(origins, ", "))
+		case p.Origin == OriginURL && (p.URL == "" || p.SHA256 == ""):
+			// A url record without both halves would claim a pin it does not
+			// have, which is worse than recording no origin at all.
+			return fmt.Errorf("plugins[%d]: plugin %q is recorded as %s but does not carry both a url and a sha256",
+				i, p.Name, OriginURL)
 		}
 		if seenPlugins[p.Name] {
 			return fmt.Errorf("plugins[%d].name: duplicate plugin name %q", i, p.Name)

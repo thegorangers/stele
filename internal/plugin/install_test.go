@@ -202,7 +202,7 @@ func TestCache_ResolveManagedAndPathPlugins(t *testing.T) {
 	hermeticGo(t)
 	cache := plugin.Cache{Root: t.TempDir()}
 
-	managed, err := cache.Resolve(context.Background(), "protoc-gen-fake", fakeModule, fakeVersion)
+	managed, err := cache.Resolve(context.Background(), plugin.Spec{Name: "protoc-gen-fake", Module: fakeModule, Version: fakeVersion})
 	if err != nil {
 		t.Fatalf("Resolve managed: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestCache_ResolveManagedAndPathPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	found, err := cache.Resolve(context.Background(), "protoc-gen-dart", "", "")
+	found, err := cache.Resolve(context.Background(), plugin.Spec{Name: "protoc-gen-dart"})
 	if err != nil {
 		t.Fatalf("Resolve from PATH: %v", err)
 	}
@@ -238,5 +238,76 @@ func TestCache_ResolveManagedAndPathPlugins(t *testing.T) {
 	// so rather than inventing one.
 	if found.Version != plugin.Unknown {
 		t.Errorf("version %q, want %q", found.Version, plugin.Unknown)
+	}
+}
+
+// A path is interpreted relative to the manifest, because a manifest is a
+// shared file: a path that only resolves in the directory the tool happened to
+// be invoked from would work for whoever wrote it and for nobody else.
+func TestCache_ResolveRelativePath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "tools", "protoc-gen-house")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := plugin.Cache{}.Resolve(context.Background(), plugin.Spec{
+		Name: "protoc-gen-house",
+		Path: "tools/protoc-gen-house",
+		Dir:  dir,
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Path != bin {
+		t.Errorf("path %q, want %q", got.Path, bin)
+	}
+	if got.Origin != plugin.OriginFile {
+		t.Errorf("origin %q, want %q", got.Origin, plugin.OriginFile)
+	}
+	if got.Version != plugin.Unknown {
+		t.Errorf("version %q, want %q: a path pins nothing", got.Version, plugin.Unknown)
+	}
+	if got.Warning != "" {
+		t.Errorf("warning %q, want none for a relative path", got.Warning)
+	}
+}
+
+// An absolute path is accepted — someone may genuinely be pointing at a system
+// binary — but it is reported, because in a committed manifest it is a path
+// that exists on exactly one machine.
+func TestCache_ResolveAbsolutePathWarns(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "protoc-gen-house")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := plugin.Cache{}.Resolve(context.Background(), plugin.Spec{
+		Name: "protoc-gen-house",
+		Path: bin,
+		Dir:  dir,
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !strings.Contains(got.Warning, bin) || !strings.Contains(got.Warning, "absolute") {
+		t.Errorf("warning %q does not explain the absolute path", got.Warning)
+	}
+}
+
+func TestCache_ResolveMissingPathNamesWhereItLooked(t *testing.T) {
+	dir := t.TempDir()
+	_, err := plugin.Cache{}.Resolve(context.Background(), plugin.Spec{
+		Name: "protoc-gen-house",
+		Path: "tools/protoc-gen-house",
+		Dir:  dir,
+	})
+	if err == nil {
+		t.Fatal("Resolve: expected an error")
+	}
+	if !strings.Contains(err.Error(), filepath.Join(dir, "tools", "protoc-gen-house")) {
+		t.Errorf("error %q does not say where it looked", err)
 	}
 }

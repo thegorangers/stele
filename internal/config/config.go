@@ -125,14 +125,26 @@ type Input struct {
 
 // Plugin is one code generator invocation.
 //
-// A plugin either declares where it comes from or does not. Declaring it —
-// Module plus Version — makes the tool responsible for the binary: it installs
-// that exact version into its own cache and runs it, so the same manifest
-// generates the same bytes on every machine. Leaving both empty keeps the
-// older behaviour, a name looked up on PATH, which is not a nicety but a
-// necessity: not every plugin is a Go program, and the one Dart plugin of the
-// measured surface cannot be installed this way at all. What the tool cannot
-// manage it says it did not manage, rather than pretending.
+// Where the binary comes from is declared, and there are four ways to declare
+// it. They are ordered by how much of the answer the manifest gives, and the
+// manifest states which one is in use rather than leaving it to be inferred:
+//
+//  1. Module plus Version. The tool installs that exact version into its own
+//     cache and verifies the installed binary's own build metadata against it.
+//     Only a Go program can be had this way.
+//  2. URL plus SHA256. The tool downloads the binary — or an archive holding
+//     it, named by ArchivePath — into its own cache and verifies the hash
+//     before anything is run. This is what makes a plugin that is not a Go
+//     program genuinely pinnable, and most of them publish release binaries.
+//  3. Path. An explicit path to a binary, relative to the manifest. It says
+//     where the binary is and nothing about which build it is: no version can
+//     be pinned, and none is claimed.
+//  4. None of the above: the name is looked up on PATH, as it always was. The
+//     tool did not choose that binary and does not pretend it did.
+//
+// Exactly one may be declared. Two would be two answers to a question with one
+// answer, and whichever the tool honoured would leave the other in the file
+// describing a binary that never ran.
 type Plugin struct {
 	// Local is the name of, or the path to, an executable plugin binary. It
 	// stays the plugin's name even when Module is declared: it is what the
@@ -146,6 +158,22 @@ type Plugin struct {
 	// generating different bytes on different days, which is the whole
 	// problem a declared version exists to remove.
 	Version string `yaml:"version"`
+	// URL is where a published plugin binary, or an archive holding one, is
+	// downloaded from. It is meaningless without SHA256: an address alone
+	// says where the bytes came from, not which bytes they were.
+	URL string `yaml:"url"`
+	// SHA256 is the hex digest the download must have. It is checked before
+	// the download is unpacked, run, or admitted to the cache.
+	SHA256 string `yaml:"sha256"`
+	// ArchivePath names the member to take when the download is an archive,
+	// in the archive's own coordinates. An archive with no member named is
+	// refused: guessing which of its files is the plugin would be a guess the
+	// hash cannot protect anyone from.
+	ArchivePath string `yaml:"archive_path"`
+	// Path is an explicit path to a binary, interpreted relative to the
+	// directory of the manifest. An absolute path is accepted and reported:
+	// in a file that is committed and shared, it resolves on one machine.
+	Path string `yaml:"path"`
 	// Out is the directory the plugin writes to.
 	Out string `yaml:"out"`
 	// Opt are the plugin options. Accepts a single string or a list of strings.

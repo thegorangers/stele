@@ -544,3 +544,114 @@ generate:
 		})
 	}
 }
+
+// A plugin that is not a Go program can still be pinned: it declares the URL
+// of a published binary and the sha256 the download must have. A third form
+// names a path, which pins nothing but at least says where the binary is.
+func TestLoad_PluginTiers(t *testing.T) {
+	f := mustLoad(t, `
+version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: v1.36.11
+        out: gen
+      - local: protoc-gen-dart
+        url: https://example.com/protoc-gen-dart-linux-x64.tar.gz
+        sha256: 0000000000000000000000000000000000000000000000000000000000000000
+        archive_path: bin/protoc-gen-dart
+        out: lib
+      - local: protoc-gen-house
+        path: tools/protoc-gen-house
+        out: house
+      - local: protoc-gen-found
+        out: found
+`)
+	want := []config.Plugin{
+		{Local: "protoc-gen-go", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11", Out: "gen"},
+		{
+			Local:       "protoc-gen-dart",
+			URL:         "https://example.com/protoc-gen-dart-linux-x64.tar.gz",
+			SHA256:      "0000000000000000000000000000000000000000000000000000000000000000",
+			ArchivePath: "bin/protoc-gen-dart",
+			Out:         "lib",
+		},
+		{Local: "protoc-gen-house", Path: "tools/protoc-gen-house", Out: "house"},
+		{Local: "protoc-gen-found", Out: "found"},
+	}
+	if got := f.Generate[0].Plugins; !reflect.DeepEqual(got, want) {
+		t.Errorf("plugins:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestLoad_PluginTierInvalid(t *testing.T) {
+	body := func(lines string) string {
+		return `
+version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-x
+        out: gen
+` + lines
+	}
+	for _, tc := range []struct {
+		name, lines, want string
+	}{
+		{
+			name:  "module and url",
+			lines: "        module: example.com/x\n        version: v1.0.0\n        url: https://example.com/x\n        sha256: 00\n",
+			want:  `plugin "protoc-gen-x" declares both module and url`,
+		},
+		{
+			name:  "module and path",
+			lines: "        module: example.com/x\n        version: v1.0.0\n        path: tools/x\n",
+			want:  `plugin "protoc-gen-x" declares both module and path`,
+		},
+		{
+			name:  "url and path",
+			lines: "        url: https://example.com/x\n        sha256: 00\n        path: tools/x\n",
+			want:  `plugin "protoc-gen-x" declares both url and path`,
+		},
+		{
+			name:  "url without sha256",
+			lines: "        url: https://example.com/x\n",
+			want:  "sha256: missing",
+		},
+		{
+			name:  "sha256 without url",
+			lines: "        sha256: 0000000000000000000000000000000000000000000000000000000000000000\n",
+			want:  "sha256: declared without a url",
+		},
+		{
+			name:  "sha256 not a hash",
+			lines: "        url: https://example.com/x\n        sha256: nonsense\n",
+			want:  "sha256: ",
+		},
+		{
+			name:  "archive_path without url",
+			lines: "        archive_path: bin/x\n",
+			want:  "archive_path: declared without a url",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load(write(t, body(tc.lines)))
+			if err == nil {
+				t.Fatal("Load: expected an error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+}

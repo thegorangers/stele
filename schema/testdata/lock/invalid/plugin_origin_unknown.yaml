@@ -1,0 +1,6 @@
+# invalid: telepathy is not an origin this tool records.
+version: 1
+plugins:
+  - name: protoc-gen-go
+    origin: telepathy
+    version: unknown

@@ -1,0 +1,13 @@
+# valid: a plugin kept in this repository, named by a path relative to the
+# manifest. Nothing is pinned, and nothing claims to be.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: house
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-house
+        path: tools/protoc-gen-house
+        out: gen/house

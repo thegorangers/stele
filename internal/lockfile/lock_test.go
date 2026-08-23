@@ -206,3 +206,46 @@ func TestLoad_AcceptsALockWrittenBeforeTheHashesWereDropped(t *testing.T) {
 		t.Errorf("rewriting must drop the old blocks:\n%s", b)
 	}
 }
+
+// The lock records which tier each plugin came from and the data that
+// identifies it there, so that a reader can tell a pinned plugin from a found
+// one without going back to the manifest.
+func TestSaveLoad_PluginTiers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stele.lock")
+	in := &lockfile.Lock{
+		Version: lockfile.Version,
+		Plugins: []lockfile.Plugin{
+			{Name: "protoc-gen-go", Origin: "managed", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11"},
+			{Name: "protoc-gen-dart", Origin: "url", URL: "https://example.com/dart.tar.gz", SHA256: "abc", ArchivePath: "bin/protoc-gen-dart", Version: "unknown"},
+			{Name: "protoc-gen-house", Origin: "file", Path: "tools/protoc-gen-house", Version: "unknown"},
+			{Name: "protoc-gen-found", Origin: "path", Version: "unknown"},
+		},
+	}
+	if err := lockfile.Save(path, in); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	out, err := lockfile.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []lockfile.Plugin{
+		{Name: "protoc-gen-dart", Origin: "url", URL: "https://example.com/dart.tar.gz", SHA256: "abc", ArchivePath: "bin/protoc-gen-dart", Version: "unknown"},
+		{Name: "protoc-gen-found", Origin: "path", Version: "unknown"},
+		{Name: "protoc-gen-go", Origin: "managed", Module: "google.golang.org/protobuf/cmd/protoc-gen-go", Version: "v1.36.11"},
+		{Name: "protoc-gen-house", Origin: "file", Path: "tools/protoc-gen-house", Version: "unknown"},
+	}
+	if !reflect.DeepEqual(out.Plugins, want) {
+		t.Errorf("plugins:\n got %+v\nwant %+v", out.Plugins, want)
+	}
+}
+
+func TestLoad_PluginOriginValidated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stele.lock")
+	body := "version: 1\nplugins:\n  - name: protoc-gen-x\n    origin: telepathy\n    version: unknown\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockfile.Load(path); err == nil || !strings.Contains(err.Error(), "telepathy") {
+		t.Fatalf("Load: expected a complaint naming the origin, got %v", err)
+	}
+}

@@ -228,31 +228,85 @@ func (in *Input) UnmarshalYAML(n *yaml.Node) error {
 // UnmarshalYAML decodes a plugin, normalising opt to a list.
 func (p *Plugin) UnmarshalYAML(n *yaml.Node) error {
 	var aux struct {
-		Local   string     `yaml:"local"`
-		Module  string     `yaml:"module"`
-		Version string     `yaml:"version"`
-		Out     string     `yaml:"out"`
-		Opt     stringList `yaml:"opt"`
+		Local       string     `yaml:"local"`
+		Module      string     `yaml:"module"`
+		Version     string     `yaml:"version"`
+		URL         string     `yaml:"url"`
+		SHA256      string     `yaml:"sha256"`
+		ArchivePath string     `yaml:"archive_path"`
+		Path        string     `yaml:"path"`
+		Out         string     `yaml:"out"`
+		Opt         stringList `yaml:"opt"`
 	}
 	if err := decodeStrict(n, &aux); err != nil {
 		return err
 	}
-	*p = Plugin{Local: aux.Local, Module: aux.Module, Version: aux.Version, Out: aux.Out, Opt: aux.Opt}
+	*p = Plugin{
+		Local: aux.Local, Module: aux.Module, Version: aux.Version,
+		URL: aux.URL, SHA256: aux.SHA256, ArchivePath: aux.ArchivePath, Path: aux.Path,
+		Out: aux.Out, Opt: aux.Opt,
+	}
 	return nil
 }
 
-// validateSource checks the pair that says where a plugin binary comes from.
+// Tiers a plugin's binary can be declared on, named so that an error can say
+// which two a manifest asked for at once.
+const (
+	tierModule = "module"
+	tierURL    = "url"
+	tierPath   = "path"
+)
+
+// tiers returns the tiers this plugin declares, in the order they are
+// documented. Emptiness is what decides: a tier is declared when any field
+// belonging to it carries a value, so a half-written tier is still detected as
+// that tier and reported against it rather than silently falling through to
+// the PATH lookup.
+func (p *Plugin) tiers() []string {
+	var out []string
+	if p.Module != "" || p.Version != "" {
+		out = append(out, tierModule)
+	}
+	if p.URL != "" || p.SHA256 != "" || p.ArchivePath != "" {
+		out = append(out, tierURL)
+	}
+	if p.Path != "" {
+		out = append(out, tierPath)
+	}
+	return out
+}
+
+// validateSource checks the declaration that says where a plugin binary comes
+// from: that at most one tier is declared, and that the declared one is
+// complete.
 //
-// The two halves are refused separately because they are different mistakes. A
-// version without a module asks for a version of nothing, and the tool would
-// silently run whatever PATH holds while the manifest claimed a version — the
-// exact drift this is here to end. A module without a version asks the tool to
-// choose, and any choice it made would be a choice the manifest does not
-// record.
+// Two tiers at once is refused before anything else, because every later
+// message would have to guess which of the two the author meant.
+//
+// Within the module tier the two halves are refused separately, because they
+// are different mistakes. A version without a module asks for a version of
+// nothing, and the tool would silently run whatever PATH holds while the
+// manifest claimed a version — the exact drift this is here to end. A module
+// without a version asks the tool to choose, and any choice it made would be a
+// choice the manifest does not record.
 func (p *Plugin) validateSource(i, j int) error {
+	declared := p.tiers()
+	if len(declared) > 1 {
+		return fmt.Errorf("generate[%d].plugins[%d]: plugin %q declares both %s and %s; "+
+			"a plugin comes from exactly one place, and the tool cannot honour two",
+			i, j, p.Local, declared[0], declared[1])
+	}
 	switch {
-	case p.Module == "" && p.Version == "":
+	case len(declared) == 0:
+		// A bare name, looked up on PATH. Nothing is pinned and nothing is
+		// claimed to be.
 		return nil
+	case declared[0] == tierURL:
+		return p.validateURL(i, j)
+	case declared[0] == tierPath:
+		return nil
+	}
+	switch {
 	case p.Module == "":
 		return fmt.Errorf("generate[%d].plugins[%d].version: %s is declared without a module; "+
 			"a version can only be honoured for a plugin the tool installs itself", i, j, p.Version)
@@ -265,6 +319,44 @@ func (p *Plugin) validateSource(i, j int) error {
 			i, j, p.Version, p.Local)
 	}
 	return nil
+}
+
+// validateURL checks a download declaration. The address and the hash are one
+// statement in two fields: an address without a hash pins nothing, and a hash
+// without an address describes bytes the tool will never fetch.
+func (p *Plugin) validateURL(i, j int) error {
+	switch {
+	case p.URL == "" && p.SHA256 != "":
+		return fmt.Errorf("generate[%d].plugins[%d].sha256: declared without a url for plugin %q; "+
+			"a hash pins the bytes of a download, and there is nothing here to download", i, j, p.Local)
+	case p.URL == "":
+		return fmt.Errorf("generate[%d].plugins[%d].archive_path: declared without a url for plugin %q; "+
+			"it names a member of a downloaded archive, and there is nothing here to download", i, j, p.Local)
+	case p.SHA256 == "":
+		return fmt.Errorf("generate[%d].plugins[%d].sha256: missing for plugin %q; "+
+			"a url without a hash is an address, not a pin: whatever the server serves would be run",
+			i, j, p.Local)
+	case !sha256Hex(p.SHA256):
+		return fmt.Errorf("generate[%d].plugins[%d].sha256: %q is not a sha256 for plugin %q; "+
+			"write the 64 hex characters of the digest of the file at the url", i, j, p.SHA256, p.Local)
+	}
+	return nil
+}
+
+// sha256Hex reports whether s is a sha256 digest written out in hex. The
+// length is the point: a truncated digest is a weaker pin than it looks, and
+// looking like a pin is worse than not having one.
+func sha256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // exactVersion reports whether v is a version `go install` resolves to exactly

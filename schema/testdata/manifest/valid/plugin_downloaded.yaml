@@ -1,0 +1,15 @@
+# valid: a plugin that is not a Go program, pinned to the digest of a
+# published release archive.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: dart
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-dart
+        url: https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz
+        sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        archive_path: bin/protoc-gen-dart
+        out: lib/gen

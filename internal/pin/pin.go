@@ -166,7 +166,14 @@ func verifyPlugins(lock *lockfile.Lock, opts Options) error {
 		if !ok {
 			return fmt.Errorf("plugin %q is not recorded in %s; re-resolve with --update", got.Name, opts.LockPath)
 		}
-		if want.Version == got.Version && want.Module == got.Module {
+		// What is compared is what identifies the binary on its tier: the
+		// version and module of an installed one, the digest of a downloaded
+		// one, the declared path of one the manifest points at. The origin is
+		// compared only when the lock states it, so that a lock written
+		// before origins were recorded is not read as drift it is not.
+		if want.Version == got.Version && want.Module == got.Module &&
+			want.SHA256 == got.SHA256 && want.Path == got.Path &&
+			(want.Origin == "" || want.Origin == got.Origin) {
 			continue
 		}
 		return fmt.Errorf("plugin %q: %s records %s, this run resolved %s; "+
@@ -181,10 +188,16 @@ func verifyPlugins(lock *lockfile.Lock, opts Options) error {
 // when there is one so that a managed and an unmanaged entry cannot read the
 // same.
 func describe(p lockfile.Plugin) string {
-	if p.Module == "" {
+	switch {
+	case p.SHA256 != "":
+		return p.URL + " at sha256:" + p.SHA256
+	case p.Path != "":
+		return p.Version + " from the path " + p.Path
+	case p.Module == "":
 		return p.Version + " from PATH"
+	default:
+		return p.Module + "@" + p.Version
 	}
-	return p.Module + "@" + p.Version
 }
 
 // write records the closure that was just resolved.

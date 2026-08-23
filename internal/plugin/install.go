@@ -173,12 +173,20 @@ func isPathOf(pkg, main string) bool {
 	return pkg == main || strings.HasPrefix(pkg, main+"/")
 }
 
-// Origins a plugin binary can have. They are recorded, not inferred, because
-// the difference is the whole claim this tool makes about reproducibility:
-// managed means the manifest decided the version, path means the machine did.
+// Origins a plugin binary can have — one per tier the manifest declares them
+// on. They are recorded, not inferred, because the difference is the whole
+// claim this tool makes about reproducibility: managed and url mean the
+// manifest decided which bytes run, file and path mean the machine did.
 const (
+	// OriginManaged: installed from module@version by the Go toolchain.
 	OriginManaged = "managed"
-	OriginPath    = "path"
+	// OriginURL: downloaded from a declared url and verified against a
+	// declared sha256.
+	OriginURL = "url"
+	// OriginFile: an explicit path in the manifest, relative to it.
+	OriginFile = "file"
+	// OriginPath: a bare name, looked up on PATH.
+	OriginPath = "path"
 )
 
 // Unknown is the version of a plugin whose version cannot be read. A plugin
@@ -187,6 +195,24 @@ const (
 // would be believed.
 const Unknown = "unknown"
 
+// Spec is one manifest plugin as the resolver takes it: the name, and the one
+// tier the manifest declared. Validation of the tiers belongs to the manifest
+// parser; what arrives here has at most one of them set.
+type Spec struct {
+	// Name is the manifest's own spelling of the plugin.
+	Name string
+	// Module and Version are the managed tier.
+	Module, Version string
+	// URL, SHA256 and ArchivePath are the download tier.
+	URL, SHA256, ArchivePath string
+	// Path is the explicit-path tier, as written in the manifest.
+	Path string
+	// Dir is the directory of the manifest. It is what Path is relative to,
+	// and it is a parameter rather than the process's working directory so
+	// that the same manifest resolves the same way wherever it is run from.
+	Dir string
+}
+
 // Binary is a plugin resolved to something runnable, with its provenance.
 type Binary struct {
 	// Name is the manifest's own spelling of the plugin.
@@ -194,44 +220,107 @@ type Binary struct {
 	// Path is the executable to run.
 	Path string
 	// Module is the module it was installed from, for a managed plugin, and
-	// empty for one taken from PATH.
+	// empty otherwise.
 	Module string
 	// Version is the installed version for a managed plugin, and for a PATH
 	// plugin whatever its own metadata reports — or Unknown.
 	Version string
-	// Origin is OriginManaged or OriginPath.
+	// URL and SHA256 are what a downloaded plugin was pinned to.
+	URL, SHA256 string
+	// ArchivePath is the member taken from a downloaded archive, if any.
+	ArchivePath string
+	// Declared is the path as the manifest wrote it, for the file tier. Path
+	// is where that resolved to; both are kept because the manifest's own
+	// spelling is what a reader has to go and edit.
+	Declared string
+	// Origin is one of the four Origin constants.
 	Origin string
+	// Warning is a note about this resolution that is worth saying out loud
+	// but is not a refusal. It is prose for a human, never parsed. Empty
+	// means there is nothing to say.
+	Warning string
 }
 
 // Resolve turns one manifest plugin into a runnable binary.
 //
-// With a module, the version is the manifest's and the binary is this tool's
-// to install. Without one, the binary is whatever PATH holds: the tool finds
-// it, reads its version if it can, and reports where it came from. That second
-// case is not a leftover — a plugin written in another language cannot be
-// installed by a Go toolchain, and claiming to manage it would be a lie the
-// generated code would eventually contradict.
-func (c Cache) Resolve(ctx context.Context, name, module, version string) (Binary, error) {
-	if name == "" {
+// The four tiers differ in who decided which bytes run, and the answer is
+// carried back in Origin rather than left to be guessed from which fields
+// happen to be set.
+func (c Cache) Resolve(ctx context.Context, s Spec) (Binary, error) {
+	if s.Name == "" {
 		return Binary{}, errors.New("plugin: no plugin named")
 	}
-	if module == "" {
-		path, err := exec.LookPath(name)
+	switch {
+	case s.Module != "":
+		bin, err := c.Ensure(ctx, s.Module, s.Version)
 		if err != nil {
-			if strings.ContainsRune(name, filepath.Separator) {
-				return Binary{}, fmt.Errorf("plugin %q: %w", name, err)
-			}
-			return Binary{}, fmt.Errorf("plugin %q: not found in PATH: %w; "+
-				"either install it, or declare module and version in the manifest and let stele install it",
-				name, err)
+			return Binary{}, fmt.Errorf("plugin %q: %w", s.Name, err)
 		}
-		return Binary{Name: name, Path: path, Version: pathVersion(path), Origin: OriginPath}, nil
+		return Binary{Name: s.Name, Path: bin, Module: s.Module, Version: s.Version, Origin: OriginManaged}, nil
+	case s.URL != "":
+		bin, err := c.EnsureURL(ctx, s.URL, s.SHA256, s.ArchivePath)
+		if err != nil {
+			return Binary{}, fmt.Errorf("plugin %q: %w", s.Name, err)
+		}
+		// A downloaded binary is pinned to a digest, not to a version. The
+		// digest is the honest pin; reporting it as a version would put a
+		// number in the report that nothing published ever used.
+		return Binary{
+			Name: s.Name, Path: bin, Version: Unknown,
+			URL: s.URL, SHA256: strings.ToLower(s.SHA256), ArchivePath: s.ArchivePath,
+			Origin: OriginURL,
+		}, nil
+	case s.Path != "":
+		return resolvePath(s)
 	}
-	bin, err := c.Ensure(ctx, module, version)
+	path, err := exec.LookPath(s.Name)
 	if err != nil {
-		return Binary{}, fmt.Errorf("plugin %q: %w", name, err)
+		if strings.ContainsRune(s.Name, filepath.Separator) {
+			return Binary{}, fmt.Errorf("plugin %q: %w", s.Name, err)
+		}
+		return Binary{}, fmt.Errorf("plugin %q: not found in PATH: %w; "+
+			"either install it, or declare where it comes from in the manifest — module and version for a Go plugin, "+
+			"url and sha256 for a published binary, or path for one in this repository",
+			s.Name, err)
 	}
-	return Binary{Name: name, Path: bin, Module: module, Version: version, Origin: OriginManaged}, nil
+	return Binary{Name: s.Name, Path: path, Version: pathVersion(path), Origin: OriginPath}, nil
+}
+
+// resolvePath resolves the explicit-path tier.
+//
+// The path is interpreted relative to the manifest because a manifest is a
+// shared, committed file: a path resolved against the working directory would
+// mean a different binary depending on where the tool was invoked from, which
+// is precisely the drift the other tiers exist to remove.
+func resolvePath(s Spec) (Binary, error) {
+	declared := filepath.FromSlash(s.Path)
+	abs := declared
+	warning := ""
+	if filepath.IsAbs(declared) {
+		// Accepted: someone may genuinely be pointing at a system binary.
+		// Reported: in a file that is committed and shared, this line names a
+		// binary that exists on exactly one machine.
+		warning = fmt.Sprintf("plugin %q: path %s is absolute; in a manifest that is committed and shared "+
+			"it resolves only on the machine it was written on. Prefer a path relative to the manifest, "+
+			"or url and sha256 so the binary is fetched and pinned.", s.Name, declared)
+	} else {
+		abs = filepath.Join(s.Dir, declared)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return Binary{}, fmt.Errorf("plugin %q: path %s does not resolve to a binary at %s: %w",
+			s.Name, s.Path, abs, err)
+	}
+	if info.IsDir() {
+		return Binary{}, fmt.Errorf("plugin %q: path %s resolves to the directory %s, not to a binary",
+			s.Name, s.Path, abs)
+	}
+	// A path says where the binary is and nothing about which build it is.
+	// There is no version to pin and none is claimed.
+	return Binary{
+		Name: s.Name, Path: abs, Declared: s.Path, Version: Unknown,
+		Origin: OriginFile, Warning: warning,
+	}, nil
 }
 
 // pathVersion reads the version a binary on PATH declares about itself, or

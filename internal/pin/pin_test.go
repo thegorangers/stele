@@ -285,3 +285,43 @@ func TestResolve_DependencyNoLongerAskedForIsAnError(t *testing.T) {
 		}
 	}
 }
+
+// For a downloaded plugin the digest is the pin, so a changed digest is
+// exactly the drift a changed version is for a managed one. A lock written
+// before origins were recorded must not be read as drift, because nothing
+// about the binary it names has changed.
+func TestResolve_PluginDigestDriftIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	locked := []lockfile.Plugin{{
+		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
+		URL: "https://example.com/dart.tar.gz", SHA256: "aa", ArchivePath: "bin/protoc-gen-dart",
+	}}
+	if err := resolveWith(t, dir, locked, true, false); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	drifted := []lockfile.Plugin{{
+		Name: "protoc-gen-dart", Origin: lockfile.OriginURL, Version: "unknown",
+		URL: "https://example.com/dart.tar.gz", SHA256: "bb", ArchivePath: "bin/protoc-gen-dart",
+	}}
+	err := resolveWith(t, dir, drifted, true, false)
+	if err == nil {
+		t.Fatal("Resolve: expected the changed digest to be reported")
+	}
+	for _, want := range []string{"protoc-gen-dart", "aa", "bb"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+func TestResolve_ALockWithoutOriginsIsNotDrift(t *testing.T) {
+	dir := t.TempDir()
+	old := []lockfile.Plugin{{Name: "protoc-gen-go", Module: "example.com/x", Version: "v1.0.0"}}
+	if err := resolveWith(t, dir, old, true, false); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	now := []lockfile.Plugin{{Name: "protoc-gen-go", Origin: lockfile.OriginManaged, Module: "example.com/x", Version: "v1.0.0"}}
+	if err := resolveWith(t, dir, now, true, false); err != nil {
+		t.Fatalf("Resolve over a lock written before origins were recorded: %v", err)
+	}
+}

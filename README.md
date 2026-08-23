@@ -49,33 +49,79 @@ will quietly close later.
   timestamps, so two runs can be diffed. A plugin whose version cannot be read
   from its binary is reported as `unknown`; it is never omitted and never
   guessed.
-- **A plugin's version belongs in the manifest.** A plugin may declare the Go
-  module and the exact version it comes from:
+- **A plugin says where it comes from, in one of four ways.** They are ordered
+  by how much of the answer the manifest gives, and the manifest states which
+  one is in use rather than leaving it to be inferred. Exactly one may be
+  declared; two is an error naming the plugin and both.
 
-  ```yaml
-  plugins:
-    - local: protoc-gen-go
-      module: google.golang.org/protobuf/cmd/protoc-gen-go
-      version: v1.36.11
-      out: gen
-  ```
+  1. **`module` + `version`** — `stele` installs that exact version into its own
+     cache, keyed by `module@version`, and verifies the installed binary's own
+     build metadata against the version that was asked for. Only a Go program
+     can be had this way. Your `GOBIN` is never written to and your `PATH` is
+     never modified.
 
-  `stele` then installs that version into its own cache, keyed by
-  `module@version`, verifies the installed binary's own build metadata against
-  the version that was asked for, and runs it from there. Your `GOBIN` is never
-  written to and your `PATH` is never modified. The version is recorded in
-  `stele.lock` beside the dependency commits, because a run is only reproducible
-  if the toolchain is pinned too.
-- **A plugin that stele cannot install is looked up on `PATH`, and says so.**
-  Not every plugin is a Go binary — `protoc-gen-dart` is not — so a plugin with
-  no declared module resolves exactly as it always did. The report and
-  `stele plugins list` label it `path` rather than `managed`, and its version is
-  whatever the binary declares about itself, or `unknown`. The tool does not
-  pretend to manage what it cannot build.
-- **Installing needs the network once.** The first use of a version downloads it
-  with the Go toolchain; every later run, in any repository, takes it from the
-  cache and needs neither the network nor a toolchain. `stele plugins install`
-  exists so that a CI job can warm the cache in a step that has network access.
+     ```yaml
+     plugins:
+       - local: protoc-gen-go
+         module: google.golang.org/protobuf/cmd/protoc-gen-go
+         version: v1.36.11
+         out: gen
+     ```
+
+  2. **`url` + `sha256`** — `stele` downloads the binary, or an archive holding
+     it, into its own cache and verifies the digest **before** the bytes are
+     unpacked, made executable, run, or admitted to the cache. This is what
+     makes a plugin that is not a Go program genuinely pinnable: most of them,
+     `protoc-gen-dart` included, publish release binaries. A digest is a pin of
+     the same strength as `module@version` — it names the bytes; the address is
+     only where to look for them.
+
+     ```yaml
+     plugins:
+       - local: protoc-gen-dart
+         url: https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz
+         sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+         archive_path: bin/protoc-gen-dart
+         out: lib/gen
+     ```
+
+     `.tar.gz`, `.tgz` and `.zip` are unpacked, and `archive_path` must name the
+     member: an archive is not a program, and guessing which of its files is one
+     is a guess the digest cannot protect you from. A URL that names no archive
+     is taken as a bare binary, and `archive_path` is then refused. Whether the
+     download is an archive is decided by the address, which is in the manifest
+     where you can see it, not by sniffing the content.
+
+  3. **`path`** — an explicit path to a binary, interpreted **relative to the
+     manifest**, not to wherever you ran the tool from. It says where the binary
+     is and nothing about which build it is: no version is pinned, and the
+     version is reported as `unknown`. An absolute path is accepted, because you
+     may genuinely be pointing at a system binary, but it is reported as a
+     warning: in a file that is committed and shared, it resolves on exactly one
+     machine.
+
+     ```yaml
+     plugins:
+       - local: protoc-gen-house
+         path: tools/protoc-gen-house
+         out: gen/house
+     ```
+
+  4. **Nothing declared** — the name is looked up on `PATH`, as it always was.
+     Nothing is pinned, the version is whatever the binary declares about itself
+     or `unknown`, and the report and `stele plugins list` label it `path`. The
+     tool does not pretend to manage what it did not choose.
+
+  Every run records the tier and its identifying data in `stele.lock` —
+  `module@version`, or `url` and `sha256`, or the declared `path`, or just the
+  name — beside the dependency commits, because a run is only reproducible if
+  what generated it is pinned too. A recorded plugin that no longer matches the
+  manifest is reported as drift, and the digest is checked on every use, not
+  only on the run that downloaded it.
+- **Fetching a plugin needs the network once.** The first use of a version or a
+  digest fetches it; every later run, in any repository, takes it from the cache
+  and needs neither the network nor a toolchain. `stele plugins install` exists
+  so that a CI job can warm the cache in a step that has network access.
 - **Dependencies come from git only**, over `https://` or `ssh://`, plus the
   configurable `gh:` and `glab:` shorthands. Hosts and shorthands are
   configuration, not built-in constants. The unauthenticated `git://` protocol

@@ -1,6 +1,7 @@
 package gen_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -557,7 +558,9 @@ func TestRun_RecordsPluginsInTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := []lockfile.Plugin{{Name: s.bin, Version: "unknown"}}
+	// The tier is recorded beside the version: "path" is what says the tool
+	// did not choose this binary and cannot promise the next machine runs it.
+	want := []lockfile.Plugin{{Name: s.bin, Origin: lockfile.OriginPath, Version: "unknown"}}
 	if !reflect.DeepEqual(l.Plugins, want) {
 		t.Fatalf("plugins:\n got %+v\nwant %+v", l.Plugins, want)
 	}
@@ -588,5 +591,46 @@ func TestRun_ManagedPluginNeedsACache(t *testing.T) {
 	err := run(t, dir, fetch, gen.Options{})
 	if err == nil || !strings.Contains(err.Error(), "cache") {
 		t.Fatalf("expected a complaint about the missing cache root, got %v", err)
+	}
+}
+
+// A plugin declared by path runs from where the manifest says, relative to the
+// manifest and not to wherever the tool was invoked from, and the lock records
+// the tier it came from.
+func TestRun_PluginDeclaredByPath(t *testing.T) {
+	s := newSpy(t, "ok")
+	dir, fetch := world(t, "")
+	if err := os.MkdirAll(filepath.Join(dir, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(s.bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tools", "protoc-gen-spy"), body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := manifest("      - local: protoc-gen-spy\n        path: tools/protoc-gen-spy\n        out: gen\n        opt: [mode=text]\n", "api")
+	if err := os.WriteFile(filepath.Join(dir, "stele.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var warn bytes.Buffer
+	if err := run(t, dir, fetch, gen.Options{Warn: &warn}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := lockfile.Load(filepath.Join(dir, "stele.lock"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []lockfile.Plugin{{
+		Name: "protoc-gen-spy", Origin: lockfile.OriginFile,
+		Version: "unknown", Path: "tools/protoc-gen-spy",
+	}}
+	if !reflect.DeepEqual(l.Plugins, want) {
+		t.Fatalf("plugins:\n got %+v\nwant %+v", l.Plugins, want)
+	}
+	if warn.Len() != 0 {
+		t.Errorf("a relative path warned: %q", warn.String())
 	}
 }

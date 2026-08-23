@@ -103,7 +103,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 	// discovered a missing or uninstallable plugin only after producing half
 	// its output would leave the tree in a state nobody asked for, and the
 	// install is the step most likely to need the network.
-	binaries, err := resolvePlugins(ctx, targets, plugin.Cache{Root: opts.CacheRoot})
+	binaries, err := resolvePlugins(ctx, dir, targets, plugin.Cache{Root: opts.CacheRoot}, opts.Warn)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +169,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 					invoked = append(invoked, report.Plugin{
 						Name: bin.Name, Path: bin.Path, Module: bin.Module,
 						Version: bin.Version, Origin: bin.Origin,
+						URL: bin.URL, SHA256: bin.SHA256,
 					})
 					resp, err := plugin.Run(ctx, bin.Path, req)
 					if err != nil {
@@ -198,7 +199,9 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 // pluginKey identifies a manifest plugin by everything that decides which
 // binary it is. Two targets naming the same plugin at the same version are one
 // binary; the same name at two versions is two, and must not collapse.
-func pluginKey(p config.Plugin) string { return p.Local + "\x00" + p.Module + "@" + p.Version }
+func pluginKey(p config.Plugin) string {
+	return strings.Join([]string{p.Local, p.Module, p.Version, p.URL, p.SHA256, p.ArchivePath, p.Path}, "\x00")
+}
 
 // resolvePlugins turns every plugin of the selected targets into a runnable
 // binary, installing the declared ones.
@@ -207,7 +210,7 @@ func pluginKey(p config.Plugin) string { return p.Local + "\x00" + p.Module + "@
 // installer fail with a message about an empty root, the absence is reported
 // against the plugin that needed it, because that is the fact the reader has
 // to act on.
-func resolvePlugins(ctx context.Context, targets []config.GenTarget, cache plugin.Cache) (map[string]plugin.Binary, error) {
+func resolvePlugins(ctx context.Context, dir string, targets []config.GenTarget, cache plugin.Cache, warn io.Writer) (map[string]plugin.Binary, error) {
 	out := make(map[string]plugin.Binary)
 	for _, t := range targets {
 		for _, p := range t.Plugins {
@@ -219,9 +222,20 @@ func resolvePlugins(ctx context.Context, targets []config.GenTarget, cache plugi
 				return nil, fmt.Errorf("target %q, plugin %q: it declares %s@%s, which this tool installs into its own cache, "+
 					"but this run was given no cache root", t.Name, p.Local, p.Module, p.Version)
 			}
-			bin, err := cache.Resolve(ctx, p.Local, p.Module, p.Version)
+			if p.URL != "" && cache.Root == "" {
+				return nil, fmt.Errorf("target %q, plugin %q: it declares a url, which this tool downloads into its own cache, "+
+					"but this run was given no cache root", t.Name, p.Local)
+			}
+			bin, err := cache.Resolve(ctx, plugin.Spec{
+				Name: p.Local, Module: p.Module, Version: p.Version,
+				URL: p.URL, SHA256: p.SHA256, ArchivePath: p.ArchivePath,
+				Path: p.Path, Dir: dir,
+			})
 			if err != nil {
 				return nil, fmt.Errorf("target %q: %w", t.Name, err)
+			}
+			if bin.Warning != "" && warn != nil {
+				fmt.Fprintln(warn, "stele: "+bin.Warning)
 			}
 			out[k] = bin
 		}
@@ -234,7 +248,10 @@ func resolvePlugins(ctx context.Context, targets []config.GenTarget, cache plugi
 func lockedPlugins(binaries map[string]plugin.Binary) []lockfile.Plugin {
 	out := make([]lockfile.Plugin, 0, len(binaries))
 	for _, b := range binaries {
-		out = append(out, lockfile.Plugin{Name: b.Name, Module: b.Module, Version: b.Version})
+		out = append(out, lockfile.Plugin{
+			Name: b.Name, Origin: b.Origin, Module: b.Module, Version: b.Version,
+			URL: b.URL, SHA256: b.SHA256, ArchivePath: b.ArchivePath, Path: b.Declared,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out

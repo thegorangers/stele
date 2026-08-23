@@ -1,0 +1,14 @@
+# invalid: a truncated digest is a weaker pin than it looks, and looking like a
+# pin is worse than not having one.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: dart
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-dart
+        url: https://example.com/protoc-gen-dart
+        sha256: e3b0c442
+        out: lib/gen

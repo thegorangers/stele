@@ -171,19 +171,19 @@
     },
     "plugin": {
       "title": "plugin",
-      "description": "One code generator invocation.\n\nA plugin either declares where it comes from or does not. Declaring it — module plus version — makes the tool responsible for the binary: it installs that exact version into its own cache and runs it, so the same manifest generates the same bytes on every machine. Leaving both out keeps the older behaviour, a name looked up on PATH, which is a necessity rather than a nicety: not every plugin is a Go program, and some cannot be installed this way at all. What the tool cannot manage, it says it did not manage.\n\nHalf a declaration is refused, and the two halves are different mistakes. A version without a module asks for a version of nothing while the tool silently runs whatever PATH holds. A module without a version asks the tool to choose, and any choice it made would be one the manifest does not record.",
+      "description": "One code generator invocation.\n\nWhere the binary comes from is declared, and there are four ways to declare it, ordered by how much of the answer the manifest gives:\n\n  1. module + version — the tool installs that exact version into its own cache with the Go toolchain and verifies the installed binary's own build metadata against it. Only a Go program can be had this way.\n  2. url + sha256 — the tool downloads the binary, or an archive holding it named by archive_path, into its own cache and verifies the digest before anything is unpacked or run. This is what makes a plugin that is not a Go program genuinely pinnable.\n  3. path — an explicit path to a binary, relative to this manifest. It says where the binary is and nothing about which build it is: no version is pinned and none is claimed.\n  4. none of the above — the name is looked up on PATH, as it always was. The tool did not choose that binary and does not pretend it did.\n\nExactly one may be declared. Two would be two answers to a question with one answer.\n\nHalf a declaration is refused, and the halves are different mistakes. A version without a module asks for a version of nothing while the tool silently runs whatever PATH holds. A module without a version asks the tool to choose, and any choice it made would be one the manifest does not record. A url without a sha256 is an address, not a pin: whatever the server serves would be run.\n\nThe parser also checks: an absolute path is accepted and warned about, because in a committed manifest it resolves on one machine only.",
       "type": "object",
       "additionalProperties": false,
       "required": ["local", "out"],
       "properties": {
         "local": {
-          "description": "The name of, or the path to, an executable plugin binary. It stays the plugin's name even when module is declared: it is what the report and the errors call it.",
+          "description": "The name of, or the path to, an executable plugin binary. It stays the plugin's name whichever tier is declared: it is what the report and the errors call it.",
           "type": "string",
           "minLength": 1,
           "examples": ["protoc-gen-go", "protoc-gen-go-grpc"]
         },
         "module": {
-          "description": "The Go module path of the command that provides the plugin, as `go install` takes it. Omitted means the binary comes from PATH.",
+          "description": "The Go module path of the command that provides the plugin, as `go install` takes it.",
           "type": "string",
           "examples": ["google.golang.org/protobuf/cmd/protoc-gen-go"]
         },
@@ -191,6 +191,26 @@
           "description": "The version of module to install. It must be exact — a version `go install` resolves to one build, written out in full, such as v1.36.12. Anything the module system would resolve at run time (latest, upgrade, patch, a branch name, a bare query) puts the manifest back in the business of generating different bytes on different days.\n\nThe pattern here checks the shape the parser checks: a leading v, a digit, and at least two dots. It does not check that the version exists, which only `go install` can say.",
           "type": "string",
           "examples": ["v1.36.12", "v1.36.12-rc.1"]
+        },
+        "url": {
+          "description": "Where a published plugin binary, or an archive holding one, is downloaded from. Meaningless without sha256: an address says where the bytes came from, not which bytes they were.",
+          "type": "string",
+          "examples": ["https://example.com/releases/v1.2.3/protoc-gen-dart-linux-x64.tar.gz"]
+        },
+        "sha256": {
+          "description": "The digest the download must have, as 64 hex characters. It is checked against the bytes as downloaded, before they are unpacked, made executable, run, or admitted to the cache.",
+          "type": "string",
+          "examples": ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
+        },
+        "archive_path": {
+          "description": "The member to take when the download is an archive, in the archive's own coordinates. Required when the url names a .tar.gz, .tgz or .zip, and refused otherwise: an archive is not a program, and guessing which of its files is one is a guess the digest cannot protect anyone from.\n\nThe parser also checks this pairing, which JSON Schema cannot: whether a url names an archive is a fact about the address, not about which fields are present.",
+          "type": "string",
+          "examples": ["bin/protoc-gen-dart"]
+        },
+        "path": {
+          "description": "An explicit path to a binary, interpreted relative to the directory of this manifest — not to the directory the tool was invoked from, which would mean a different binary depending on where it was run.",
+          "type": "string",
+          "examples": ["tools/protoc-gen-house"]
         },
         "out": {
           "description": "The directory the plugin writes to, relative to the manifest.",
@@ -206,14 +226,48 @@
       "oneOf": [
         {
           "title": "a plugin taken from PATH",
-          "properties": { "module": { "maxLength": 0 }, "version": { "maxLength": 0 } }
+          "properties": {
+            "module": { "maxLength": 0 },
+            "version": { "maxLength": 0 },
+            "url": { "maxLength": 0 },
+            "sha256": { "maxLength": 0 },
+            "archive_path": { "maxLength": 0 },
+            "path": { "maxLength": 0 }
+          }
         },
         {
           "title": "a plugin the tool installs, at an exact version",
           "required": ["module", "version"],
           "properties": {
             "module": { "minLength": 1 },
-            "version": { "pattern": "^v[0-9][^.]*\\.[^.]*\\..*$" }
+            "version": { "pattern": "^v[0-9][^.]*\\.[^.]*\\..*$" },
+            "url": { "maxLength": 0 },
+            "sha256": { "maxLength": 0 },
+            "archive_path": { "maxLength": 0 },
+            "path": { "maxLength": 0 }
+          }
+        },
+        {
+          "title": "a plugin the tool downloads, pinned to a digest",
+          "required": ["url", "sha256"],
+          "properties": {
+            "url": { "minLength": 1 },
+            "sha256": { "pattern": "^[0-9a-fA-F]{64}$" },
+            "module": { "maxLength": 0 },
+            "version": { "maxLength": 0 },
+            "path": { "maxLength": 0 }
+          }
+        },
+        {
+          "title": "a plugin at a path in this repository",
+          "required": ["path"],
+          "properties": {
+            "path": { "minLength": 1 },
+            "module": { "maxLength": 0 },
+            "version": { "maxLength": 0 },
+            "url": { "maxLength": 0 },
+            "sha256": { "maxLength": 0 },
+            "archive_path": { "maxLength": 0 }
           }
         }
       ]

@@ -86,12 +86,17 @@ type Component struct {
 	// with the same plugin name and different binaries are a real cause of
 	// differing output, and the name alone would hide it.
 	Path string `json:"path,omitempty"`
-	// Origin says where a plugin binary came from: OriginManaged when the
-	// tool installed the version the manifest declared, OriginPath when it
-	// was found on PATH. The distinction is the report's most load-bearing
-	// field for a reader asking whether another machine would generate the
-	// same bytes.
+	// Origin says where a plugin binary came from — one of the four tiers a
+	// manifest can declare. It is the report's most load-bearing field for a
+	// reader asking whether another machine would generate the same bytes:
+	// managed and url are pinned, file and path are not.
 	Origin string `json:"origin,omitempty"`
+	// URL is where a downloaded plugin came from, and SHA256 the digest it
+	// was verified against. For that tier the digest is the pin, and a report
+	// that named only the address would record where the bytes were fetched
+	// without recording which bytes they were.
+	URL    string `json:"url,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
 	// Note says why a version is Unknown. It is prose for a human reading the
 	// evidence, never parsed.
 	Note string `json:"note,omitempty"`
@@ -104,9 +109,14 @@ type Report struct {
 	Components map[string]Component `json:"components"`
 }
 
-// Origins a plugin binary can have, mirroring the resolver's own vocabulary.
+// Origins a plugin binary can have, mirroring the resolver's own vocabulary:
+// managed for a version the tool installed, url for a binary it downloaded and
+// verified against a declared digest, file for a path the manifest gave, and
+// path for a name found on PATH.
 const (
 	OriginManaged = "managed"
+	OriginURL     = "url"
+	OriginFile    = "file"
 	OriginPath    = "path"
 )
 
@@ -120,6 +130,8 @@ type Plugin struct {
 	Module  string
 	Version string
 	Origin  string
+	URL     string
+	SHA256  string
 }
 
 // Build assembles the report for a run that invoked the named plugins.
@@ -218,7 +230,7 @@ func (r *Report) Summary() string {
 // describePlugin reads a plugin's module metadata, reporting honestly when
 // there is none to read.
 func describePlugin(p Plugin) Component {
-	c := Component{Kind: KindPlugin, Version: Unknown, Origin: p.Origin}
+	c := Component{Kind: KindPlugin, Version: Unknown, Origin: p.Origin, URL: p.URL, SHA256: p.SHA256}
 	bin := p.Path
 	if bin == "" {
 		bin = p.Name

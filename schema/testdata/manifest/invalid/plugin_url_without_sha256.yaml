@@ -1,0 +1,13 @@
+# invalid: a url without a digest is an address, not a pin: whatever the
+# server serves would be run.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: dart
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-dart
+        url: https://example.com/protoc-gen-dart
+        out: lib/gen
