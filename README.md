@@ -182,7 +182,11 @@ will quietly close later.
   registry, for schemas or for plugins.
 - **Full compatibility with buf is not promised.** We cannot verify a claim that
   broad, so we do not make it. What we do verify is byte-for-byte parity with
-  buf's output on the corpus of repositories we test against.
+  buf's output on the corpus of repositories we test against — and on a corpus
+  committed to this repository, measured in CI on every change and before every
+  release, which you can run yourself with `go test -tags parity ./test/parity/`
+  and read the limits of in
+  [`test/parity/corpus/README.md`](test/parity/corpus/README.md).
 - **The configuration format is a public contract.** `version: 1` means a
   breaking change requires a new version, with the previous one still supported.
 

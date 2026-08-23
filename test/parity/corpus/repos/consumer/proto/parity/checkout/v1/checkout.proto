@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package parity.checkout.v1;
+
+import "parity/telemetry/v1/event.proto";
+
+// A local file whose imports are satisfied by a dependency rather than by this
+// repository.
+message Checkout {
+  string id = 1;
+  parity.telemetry.v1.Event last_event = 2;
+}

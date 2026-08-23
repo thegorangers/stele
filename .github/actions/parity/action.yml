@@ -1,0 +1,56 @@
+# Runs the parity acceptance suite against the corpus committed to this
+# repository.
+#
+# It is a composite action rather than a job so that the two workflows that
+# need it — every change, and every release — run exactly the same steps. A
+# release that ran a different parity check from the one the pull request
+# passed would be a release nobody had actually measured.
+name: Parity
+description: Measure byte-for-byte parity with the reference tool on the shipped corpus.
+
+runs:
+  using: composite
+  steps:
+    # The version is read from the corpus rather than written here, because the
+    # corpus is what declares which build it was measured against. The digest
+    # is here, and it is the pin that matters: a bumped version whose digest
+    # was not updated fails this step instead of quietly measuring against a
+    # different tool.
+    - name: Install the reference tool, pinned
+      shell: bash
+      run: |
+        set -euo pipefail
+        version="$(sed -n 's/^buf_version: *//p' test/parity/corpus/corpus.yaml)"
+        if [ -z "$version" ]; then
+          echo "the corpus does not pin a reference tool version" >&2
+          exit 1
+        fi
+        case "$version" in
+          1.48.0) digest=30cbac88a3cdda6e48dcf727f3cf9d2669d771c5d5be94f37e202c76a522b66e ;;
+          *) echo "no digest recorded for reference tool $version; add one beside this line" >&2; exit 1 ;;
+        esac
+        url="https://github.com/bufbuild/buf/releases/download/v${version}/buf-Linux-x86_64"
+        curl --fail --silent --show-error --location -o /tmp/buf "$url"
+        echo "${digest}  /tmp/buf" | sha256sum -c -
+        chmod +x /tmp/buf
+        sudo mv /tmp/buf /usr/local/bin/buf
+        buf --version
+
+    # The plugins are not installed here. The corpus manifests pin them by
+    # module and version, stele installs those into its own cache, and the
+    # harness puts that cache on the reference tool's PATH — so both tools run
+    # the same binaries and the manifest is the only place a plugin version is
+    # declared. Warming the cache is all this step does.
+    - name: Warm the plugin cache
+      shell: bash
+      run: |
+        set -euo pipefail
+        for manifest in test/parity/corpus/manifests/*.yaml; do
+          dir="$(mktemp -d)"
+          cp "$manifest" "$dir/stele.yaml"
+          go run ./cmd/stele plugins install --dir "$dir"
+        done
+
+    - name: Parity
+      shell: bash
+      run: go test -tags parity -count=1 -v ./test/parity/

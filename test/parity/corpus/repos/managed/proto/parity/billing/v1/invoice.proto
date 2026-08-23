@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package parity.billing.v1;
+
+import "parity/order/v1/order.proto";
+
+// An invoice for an order, in another package of the same module: a second
+// directory, so that one input becomes more than one generation request.
+message Invoice {
+  string id = 1;
+  parity.order.v1.Order order = 2;
+  int64 total_minor = 3;
+}

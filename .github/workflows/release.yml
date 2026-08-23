@@ -86,6 +86,14 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # Output bytes are the contract this tool publishes, so a tag that
+      # generates something different from the reference tool is not
+      # releasable, however green the unit tests are. Same steps as CI runs on
+      # every change, so a release cannot be measured differently from the
+      # change that produced it.
+      - name: Parity with the reference tool
+        uses: ./.github/actions/parity
+
       - name: Build the binaries
         env:
           TAG: ${{ steps.tag.outputs.tag }}

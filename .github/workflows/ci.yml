@@ -40,3 +40,24 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+  # Parity is this project's acceptance criterion, so it runs on every change
+  # rather than on request. It is a separate job because it needs the network
+  # and the reference tool, while build-and-test is hermetic and must stay
+  # that way; keeping them apart also means a parity failure and a unit-test
+  # failure are told apart at a glance.
+  parity:
+    name: parity with the reference tool
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      - name: Measure parity
+        uses: ./.github/actions/parity

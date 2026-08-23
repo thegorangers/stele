@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package parity.order.v1;
+
+import "parity/order/v1/order.proto";
+
+service OrderService {
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+  rpc ListOrders(ListOrdersRequest) returns (stream Order);
+}
+
+message GetOrderRequest {
+  string id = 1;
+}
+
+message GetOrderResponse {
+  Order order = 1;
+}
+
+message ListOrdersRequest {
+  int32 page_size = 1;
+}

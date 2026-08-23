@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package parity.telemetry.v1;
+
+import "google/type/money.proto";
+
+// A producer's file whose own import is satisfied by the producer's vendored
+// tree, not by anything the consumer declares.
+message Event {
+  string name = 1;
+  google.type.Money amount = 2;
+}

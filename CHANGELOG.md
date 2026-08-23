@@ -38,7 +38,22 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-Nothing yet.
+### Internal
+
+- Parity with the reference tool is measured in this repository's own CI, on
+  every push and every pull request, against a corpus committed under
+  `test/parity/corpus`. Until now it was proven by hand, on one machine,
+  against private checkouts nobody else could obtain — which made the project's
+  acceptance criterion an assertion rather than evidence. A release is gated on
+  the same check, because output bytes are the contract and a tag that
+  generates something different is not releasable.
+- The reference tool is pinned by version, and refused if the binary reports
+  another one. The plugins are pinned by module and version in the corpus
+  manifests, installed into stele's own cache, and put on the reference tool's
+  `PATH` by the harness, so both tools run the same plugin binaries.
+- `STELE_PARITY_CORPUS` still points the harness at an external corpus, so the
+  fleet run stays possible. What the shipped corpus does *not* cover, compared
+  with that run, is written down in `test/parity/corpus/README.md`.
 
 ## [v0.1.0] — 2026-08-23
 

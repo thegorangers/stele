@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=../../../../schema/stele.schema.json
+#
+# The other tool's configuration for this checkout is repos/managed/buf.yaml
+# and repos/managed/buf.gen.yaml. This file says the same thing in stele's
+# terms; the test compares the two tools' output, not their configuration.
+version: 1
+modules:
+  - path: proto
+  - path: internal/proto
+generate:
+  - name: go
+    managed:
+      override:
+        - file_option: go_package_prefix
+          value: github.com/example/parity/gen
+    # Two inputs, one per module root. They are never merged into a single
+    # generation request, and the reference tool's two `inputs` entries are
+    # what that is being measured against.
+    inputs:
+      - module: proto
+      - module: internal/proto
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: v1.36.12
+        out: gen
+        opt: paths=source_relative
+      - local: protoc-gen-go-grpc
+        module: google.golang.org/grpc/cmd/protoc-gen-go-grpc
+        version: v1.5.1
+        out: gen
+        opt: paths=source_relative

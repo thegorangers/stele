@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package parity.order.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Declared, and deliberately wrong: managed mode replaces it rather than
+// defaulting to it, and a file that already carries one is the case where
+// replacement and defaulting differ.
+option go_package = "example.com/not/the/managed/path;wrong";
+
+// An order placed by a customer.
+message Order {
+  string id = 1;
+  google.protobuf.Timestamp placed_at = 2;
+  repeated Line lines = 3;
+  Status status = 4;
+}
+
+// One line of an order.
+message Line {
+  string sku = 1;
+  int32 quantity = 2;
+  int64 unit_price_minor = 3;
+}
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PLACED = 1;
+  STATUS_SHIPPED = 2;
+}

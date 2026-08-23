@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package parity.internal.v1;
+
+// A second module root of the same repository. It exists so that a target has
+// two inputs, which is not the same thing as one input over two directories:
+// the two are never merged into one generation request.
+message AuditEntry {
+  string actor = 1;
+  string action = 2;
+}

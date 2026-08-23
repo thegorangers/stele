@@ -10,14 +10,23 @@
 // produced by the tool being replaced. Anything less is an opinion about
 // correctness; this is a measurement of it.
 //
-// The corpus lives OUTSIDE this repository and is named by
-// STELE_PARITY_CORPUS. Nothing here may know the name of any organisation,
-// repository or host: this is a public repository, and a check in
-// internal/hygiene enforces that. Without the variable the tests skip, which
-// is the honest outcome — a corpus is a set of checkouts, and no unit-test run
-// has one.
+// There are two corpora, and the harness cannot tell them apart on purpose.
+//
+//   - The one that ships with the tool, in test/parity/corpus. It is synthetic,
+//     public, and committed, so that parity is measured on every change by
+//     anyone who checks the repository out. What it deliberately does not cover
+//     is written down in test/parity/corpus/README.md.
+//   - A private one, named by STELE_PARITY_CORPUS: real checkouts of a real
+//     fleet. Nothing here may know the name of any organisation, repository or
+//     host — this is a public repository, and a check in internal/hygiene
+//     enforces that — so that corpus stays outside, and the variable is how it
+//     is pointed at.
+//
+// Without the variable the shipped corpus is used. Without either, the tests
+// skip.
 //
 //	go test -tags parity ./test/parity/
+//	STELE_PARITY_CORPUS=/path/to/corpus.yaml go test -tags parity ./test/parity/
 //
 // This file is the harness: everything the two acceptance tests share, and
 // nothing about either one. It is a non-test file on purpose — a test file
@@ -32,6 +41,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -40,11 +50,18 @@ import (
 	"github.com/thegorangers/stele/internal/cachedir"
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/export"
+	"github.com/thegorangers/stele/internal/plugin"
+	"github.com/thegorangers/stele/internal/resolve"
 	"gopkg.in/yaml.v3"
 )
 
-// EnvCorpus names the file describing the checkouts to compare against.
+// EnvCorpus names the file describing the checkouts to compare against. It
+// overrides the corpus that ships with the tool.
 const EnvCorpus = "STELE_PARITY_CORPUS"
+
+// shippedCorpus is the corpus committed to this repository, relative to this
+// package's directory.
+const shippedCorpus = "corpus/corpus.yaml"
 
 // Corpus is the external description of what to compare.
 //
@@ -76,12 +93,40 @@ type Corpus struct {
 	// because which build produced a repository's committed output is a fact
 	// about that checkout, not about this tool.
 	Buf string `yaml:"buf"`
+	// BufVersion, when set, is the exact version the reference binary must
+	// report. Parity against a moving reference measures nothing: a change in
+	// the other tool would arrive as a failure in this one, and the reader
+	// would have no way to tell the two apart. So the version is declared by
+	// the corpus and checked before anything is compared, rather than being
+	// whatever the runner happened to install.
+	BufVersion string `yaml:"buf_version"`
+	// Producers maps the dependency addresses this corpus declares onto trees
+	// on disk. A corpus that names one fetches nothing.
+	Producers []Producer `yaml:"producers"`
 	// Repos are the checkouts to compare, one export each.
 	Repos []Repo `yaml:"repos"`
 	// dir is the directory the corpus file itself sits in; paths inside the
 	// corpus that name files of the corpus rather than of a checkout are
 	// relative to it.
 	dir string `yaml:"-"`
+}
+
+// Producer answers one dependency address with a tree that is already on disk.
+//
+// It exists because a corpus can be committed but a clone cannot: a shipped
+// corpus that fetched would need a reachable host, a real commit, and a
+// network, and would then be measuring git rather than generation. What is
+// under measurement is the bytes the plugins write, and those depend on the
+// producer's tree, not on how it arrived. The cost is stated where it belongs:
+// a corpus that declares producers does not exercise fetching or the cache,
+// and the shipped corpus's README says so.
+type Producer struct {
+	// Git is the address a manifest of the corpus declares.
+	Git string `yaml:"git"`
+	// Dir is the tree answering it, relative to the corpus file.
+	Dir string `yaml:"dir"`
+	// SHA is the commit the fetch reports. Empty reports the requested ref.
+	SHA string `yaml:"sha"`
 }
 
 // Repo is one checkout to compare.
@@ -141,7 +186,12 @@ func loadCorpus(t *testing.T) Corpus {
 	t.Helper()
 	path := os.Getenv(EnvCorpus)
 	if path == "" {
-		t.Skipf("%s is not set; the acceptance corpus lives outside this repository", EnvCorpus)
+		// The corpus that ships with the tool. It is used unless the
+		// environment names another, so that a plain run measures something.
+		path = shippedCorpus
+		if _, err := os.Stat(path); err != nil {
+			t.Skipf("no corpus: %s is not set and %s is not present", EnvCorpus, shippedCorpus)
+		}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -162,13 +212,16 @@ func loadCorpus(t *testing.T) Corpus {
 		t.Fatalf("%s: repos is empty", path)
 	}
 	for i, r := range c.Repos {
-		if r.Dir == "" || r.Vendored == "" {
-			t.Fatalf("%s: repos[%d]: dir and vendored are both required", path, i)
+		if r.Dir == "" {
+			t.Fatalf("%s: repos[%d]: dir is required", path, i)
 		}
 		if r.Generate != nil && r.Generate.Manifest == "" {
 			t.Fatalf("%s: repos[%d]: generate needs a manifest", path, i)
 		}
 		if r.Export != nil {
+			if r.Vendored == "" {
+				t.Fatalf("%s: repos[%d]: export needs vendored, the tree it must reproduce", path, i)
+			}
 			if r.Export.Manifest == "" {
 				t.Fatalf("%s: repos[%d]: export needs a manifest", path, i)
 			}
@@ -179,8 +232,147 @@ func loadCorpus(t *testing.T) Corpus {
 			}
 		}
 	}
-	c.dir = filepath.Dir(path)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.dir = filepath.Dir(abs)
+	// A corpus that ships with the repository is checked out wherever the
+	// repository is, so its paths are relative to itself. An absolute one is
+	// left alone: that is how the external corpus names a root that is
+	// nowhere near the corpus file.
+	c.Root = c.rel(c.Root)
+	for i := range c.Producers {
+		if c.Producers[i].Git == "" || c.Producers[i].Dir == "" {
+			t.Fatalf("%s: producers[%d]: git and dir are both required", path, i)
+		}
+		c.Producers[i].Dir = filepath.Join(c.Root, filepath.FromSlash(c.Producers[i].Dir))
+		if info, err := os.Stat(c.Producers[i].Dir); err != nil || !info.IsDir() {
+			t.Fatalf("%s: producers[%d]: %s is not a directory", path, i, c.Producers[i].Dir)
+		}
+	}
 	return c
+}
+
+// rel interprets a corpus path relative to the corpus file, leaving an
+// absolute one alone.
+func (c Corpus) rel(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(c.dir, filepath.FromSlash(p))
+}
+
+// fetcher answers dependency addresses from the corpus's producers, and
+// refuses anything else by name.
+//
+// Refusing rather than falling through to the network is the point: a corpus
+// is a measurement, and a run that quietly cloned would be measuring a tree
+// nobody committed.
+func (c Corpus) fetcher() resolve.FetchFunc {
+	return func(_ context.Context, git, ref string) (string, string, error) {
+		for _, p := range c.Producers {
+			if p.Git == git {
+				sha := p.SHA
+				if sha == "" {
+					sha = ref
+				}
+				return p.Dir, sha, nil
+			}
+		}
+		return "", "", fmt.Errorf("the parity corpus answers no address %q; it declares %s",
+			git, strings.Join(c.producerAddrs(), ", "))
+	}
+}
+
+func (c Corpus) producerAddrs() []string {
+	if len(c.Producers) == 0 {
+		return []string{"none"}
+	}
+	out := make([]string, 0, len(c.Producers))
+	for _, p := range c.Producers {
+		out = append(out, p.Git)
+	}
+	return out
+}
+
+// referenceBin is the reference tool, checked against the version the corpus
+// pins before it is used.
+//
+// The check is here rather than in a CI step because the claim belongs to the
+// corpus: someone running the harness on a workstation is making the same
+// claim as CI and deserves the same refusal when the binary is not the one the
+// corpus was measured against.
+func referenceBin(t *testing.T, c Corpus) string {
+	t.Helper()
+	bin := c.Buf
+	if bin == "" {
+		bin = "buf"
+	}
+	if c.BufVersion == "" {
+		return bin
+	}
+	out, err := exec.Command(bin, "--version").Output()
+	if err != nil {
+		t.Fatalf("asking %s for its version: %v", bin, err)
+	}
+	got := strings.TrimSpace(string(out))
+	if got != c.BufVersion {
+		t.Fatalf("the corpus pins the reference tool at %s, but %s reports %s;\n"+
+			"parity against a different build measures the difference between two tools, not a regression in this one",
+			c.BufVersion, bin, got)
+	}
+	return bin
+}
+
+// referencePATH is the PATH the reference tool is run with: the directories
+// holding the plugin binaries this manifest pins, ahead of everything else.
+//
+// Both tools must run the same plugin binaries or the comparison is between
+// two generators rather than between two drivers of one. stele installs what
+// the manifest pins into its own cache; the reference tool looks the plugin up
+// on PATH and has no way to pin it. So the pinned binaries are put on its PATH,
+// which makes the manifest the single place a plugin version is declared.
+func referencePATH(t *testing.T, c Corpus, cfg *config.File) []string {
+	t.Helper()
+	root, err := cachedir.Root(c.Cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := plugin.Cache{Root: root}
+	var dirs []string
+	seen := map[string]bool{}
+	for _, tgt := range cfg.Generate {
+		for _, p := range tgt.Plugins {
+			if p.Module == "" {
+				continue
+			}
+			bin, err := cache.Ensure(context.Background(), p.Module, p.Version)
+			if err != nil {
+				t.Fatalf("installing %s@%s, which the manifest pins: %v", p.Module, p.Version, err)
+			}
+			d := filepath.Dir(bin)
+			if !seen[d] {
+				seen[d] = true
+				dirs = append(dirs, d)
+			}
+		}
+	}
+	if len(dirs) == 0 {
+		// Nothing pinned means the reference tool would take whatever the
+		// machine has, and so would this one; the comparison would then be
+		// between two unknown binaries.
+		t.Fatal("no plugin in this manifest is pinned by module and version; both tools would run whatever is on PATH")
+	}
+	env := os.Environ()
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + strings.Join(dirs, string(os.PathListSeparator)) +
+				string(os.PathListSeparator) + strings.TrimPrefix(e, "PATH=")
+			return env
+		}
+	}
+	return append(env, "PATH="+strings.Join(dirs, string(os.PathListSeparator)))
 }
 
 // runExport reproduces a checkout's vendored tree with this tool, into out.

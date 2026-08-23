@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=../../../../schema/stele.schema.json
+#
+# A consumer that generates code for someone else's module as well as its own.
+# The dependency is not fetched over the network: the corpus maps its address
+# to a directory, and that directory is the vendored copy the reference tool
+# reads as a workspace module. One tree, reached two ways, so the two tools are
+# given the same bytes and can only differ in what they do with them.
+version: 1
+modules:
+  - path: proto
+deps:
+  - name: telemetry
+    git: https://example.com/parity/telemetry.git
+    # A commit is what a manifest states. This corpus never clones, so the
+    # value is a placeholder that the corpus's fetcher answers for; see the
+    # coverage note in ../README.md.
+    ref: 0000000000000000000000000000000000000000
+    module: proto
+generate:
+  - name: go
+    managed:
+      override:
+        - file_option: go_package_prefix
+          value: github.com/example/consumer/gen
+    inputs:
+      - module: proto
+      # Generating from a dependency rather than from a local module, narrowed
+      # by paths in the producer's coordinates rather than the consumer's.
+      - dep: telemetry
+        paths: parity/telemetry/v1
+    plugins:
+      - local: protoc-gen-go
+        module: google.golang.org/protobuf/cmd/protoc-gen-go
+        version: v1.36.12
+        out: gen
+        opt: paths=source_relative

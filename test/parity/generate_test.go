@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/thegorangers/stele/internal/cachedir"
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/gen"
 )
@@ -60,9 +61,11 @@ func TestGenerate_ParityWithBuf(t *testing.T) {
 // wrong. Nothing is written into it — the output goes to out.
 func runReference(t *testing.T, c Corpus, repo string, g Generate, out string) {
 	t.Helper()
-	bin := c.Buf
-	if bin == "" {
-		bin = "buf"
+	bin := referenceBin(t, c)
+	manifest := filepath.Join(c.dir, filepath.FromSlash(g.Manifest))
+	cfg, err := config.Load(manifest)
+	if err != nil {
+		t.Fatalf("%s: %v", manifest, err)
 	}
 	args := []string{"generate", "-o", out}
 	if g.IncludeImports {
@@ -70,6 +73,7 @@ func runReference(t *testing.T, c Corpus, repo string, g Generate, out string) {
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = repo
+	cmd.Env = referencePATH(t, c, cfg)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v in %s: %v\n%s", bin, args, repo, err, b)
 	}
@@ -104,13 +108,18 @@ func runStele(t *testing.T, c Corpus, repo string, g Generate, out string) {
 		t.Fatal(err)
 	}
 
+	cacheRoot, err := cachedir.Root(c.Cache)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = gen.Run(context.Background(), gen.Options{
 		Dir:            stage,
 		IncludeImports: g.IncludeImports,
-		// Every module of these manifests is local, so nothing is fetched; a
-		// fetcher that refuses says so plainly instead of reaching the network
-		// from an acceptance test.
-		Fetch:  refuseFetch,
+		CacheRoot:      cacheRoot,
+		// Dependencies are answered from the corpus, never from the network:
+		// what is under measurement is the bytes generated from a tree, and a
+		// clone would put an unmeasured tree in the middle of that.
+		Fetch:  c.fetcher(),
 		NoLock: true,
 	})
 	if err != nil {
@@ -139,14 +148,4 @@ func pluginOuts(cfg *config.File) []string {
 		}
 	}
 	return out
-}
-
-func refuseFetch(_ context.Context, git, ref string) (string, string, error) {
-	return "", "", errNoFetch{git: git, ref: ref}
-}
-
-type errNoFetch struct{ git, ref string }
-
-func (e errNoFetch) Error() string {
-	return "the parity corpus declares only local modules, but " + e.git + "@" + e.ref + " was asked for"
 }

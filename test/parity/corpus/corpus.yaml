@@ -1,0 +1,26 @@
+# The parity corpus that ships with the tool.
+#
+# Every path here is relative to this file. What each checkout is for, and what
+# this corpus does not cover, is in README.md beside it.
+root: repos
+
+# The reference tool, pinned. A parity job that compared against whatever the
+# runner installed would report a change in that tool as a regression in this
+# one, and nobody reading the failure could tell which it was.
+buf_version: 1.48.0
+
+# The dependency addresses this corpus declares, and the trees that answer
+# them. Nothing is cloned: the tree named here is the vendored copy inside the
+# consumer's own checkout, which is the same tree the reference tool reads as a
+# workspace module.
+producers:
+  - git: https://example.com/parity/telemetry.git
+    dir: consumer/third_party/telemetry
+
+repos:
+  - dir: managed
+    generate:
+      manifest: manifests/managed.yaml
+  - dir: consumer
+    generate:
+      manifest: manifests/consumer.yaml

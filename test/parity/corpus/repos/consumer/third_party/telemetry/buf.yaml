@@ -1,0 +1,8 @@
+# The producer has not been migrated: it configures the other tool, and this is
+# the file stele falls back to when a dependency has no stele.yaml. The second
+# module is the producer's own vendored tree, which is what resolves the import
+# in proto/parity/telemetry/v1/event.proto.
+version: v2
+modules:
+  - path: proto
+  - path: third_party/googleapis

@@ -92,12 +92,32 @@ Done, at `v0.1.0`.
 
 ## Milestone 3 — parity in the tool's own CI
 
-Parity is currently proven by hand, on one machine, against a corpus in a temporary
-directory. A regression would reach a user before it reached us.
+~~Parity is currently proven by hand, on one machine, against a corpus in a temporary
+directory. A regression would reach a user before it reached us.~~ Done.
 
-- Fixed snapshots of real repositories as test data, so the corpus is reproducible.
-- Parity runs on every change, not on request.
-- The reference tool pinned, so a change in it cannot be mistaken for a change in us.
+- A corpus committed to this repository, under `test/parity/corpus`. It could not
+  be snapshots of the measured fleet: those are an organisation's private
+  repositories, and `internal/hygiene` forbids organisation-specific identifiers
+  with no exemptions. So it is synthetic — and its weakness is real and stated
+  where it is used: a synthetic corpus exercises only what somebody thought to
+  include. What went into it was not imagined. It is the shapes the fleet run
+  measured and the design notes name as where parity is at risk: managed mode, a
+  target with two inputs, `paths` rebased into a producer's coordinates, an input
+  that reads a dependency, a producer whose own vendored tree resolves its
+  imports, and plugins pinned by module and version. The import that crosses a
+  repository boundary is a genuine googleapis file rather than one written to be
+  easy.
+- Parity runs on every push and every pull request, and gates a release: output
+  bytes are the contract, so a tag that generates something different is not
+  releasable however green the unit tests are.
+- The reference tool is pinned by the corpus, and the harness refuses a binary
+  reporting another version — on a workstation as much as in CI. The plugins are
+  pinned by the corpus manifests and installed into stele's own cache, which is
+  then put on the reference tool's `PATH`: both tools run the same binaries, so
+  a difference can only be the difference under measurement.
+- What the shipped corpus does **not** cover — scale, fetching, export, real API
+  surfaces, other plugins — is listed in `test/parity/corpus/README.md`, and the
+  fleet run stays possible through `STELE_PARITY_CORPUS`.
 
 ## Milestone 4 — export parity beyond one repository
 

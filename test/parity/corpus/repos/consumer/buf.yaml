@@ -1,0 +1,5 @@
+version: v2
+modules:
+  - path: proto
+  - path: third_party/telemetry/proto
+  - path: third_party/telemetry/third_party/googleapis
