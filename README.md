@@ -272,6 +272,57 @@ in the corpus that says so:
   in every field would tell an editor nothing about types at all. Manifests
   written the documented way are unaffected.
 
+## Installing
+
+Each release publishes binaries for `linux/amd64`, `linux/arm64`,
+`darwin/amd64` and `darwin/arm64`, with a `SHA256SUMS` file beside them, so
+using the tool does not require a Go toolchain. Take them from the
+[releases page](https://github.com/thegorangers/stele/releases), and check the
+digest:
+
+```bash
+tag=v0.1.0
+os=linux arch=amd64
+base="https://github.com/thegorangers/stele/releases/download/$tag"
+curl -fsSLO "$base/stele_${tag}_${os}_${arch}"
+curl -fsSLO "$base/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+install -m 0755 "stele_${tag}_${os}_${arch}" /usr/local/bin/stele
+```
+
+With a Go toolchain:
+
+```bash
+go install github.com/thegorangers/stele/cmd/stele@v0.1.0
+```
+
+Pin a tag rather than a commit. `stele version` reports what the binary was
+built from, and says so plainly when that is not a release:
+
+```
+$ stele version
+stele: versions that determined this run's output
+  protobuf-go   v1.36.12  (google.golang.org/protobuf)
+  protocompile  v0.14.1  (github.com/bufbuild/protocompile)
+  stele         v0.1.0  (github.com/thegorangers/stele)
+```
+
+A binary built from a checkout instead reports a pseudo-version or `(devel)`,
+with `[development build: not built from a released tag]` beside it. There is no
+`-ldflags` incantation to remember — see [RELEASING.md](RELEASING.md).
+
+## Versioning
+
+**The contract is the bytes stele writes**, not its Go API and not its
+command-line surface alone. A change that makes an existing manifest generate a
+different tree is breaking even when it is an improvement, because the consumer
+reviews the same diff either way. The changelog therefore has a category for it,
+`Generated output`, distinct from features and fixes.
+
+The full policy — what earns a major, a minor and a patch, and why the first
+release is `v0.1.0` rather than `v1.0.0` — is in
+[RELEASING.md](RELEASING.md). Changes are in [CHANGELOG.md](CHANGELOG.md).
+
 ## Requirements
 
 - Go 1.26 or newer to build.

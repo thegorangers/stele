@@ -67,12 +67,28 @@ because each has already cost someone time.
 
 ## Milestone 2 — releases
 
-Without this there is no way to answer "which version broke?" or to roll back.
+~~Without this there is no way to answer "which version broke?" or to roll back.~~
+Done, at `v0.1.0`.
 
-- Tags, and `-ldflags` so a built binary states its own version instead of `(devel)`.
-- Published binaries for the platforms that consume it, so adopting the tool does not
-  require a Go toolchain.
-- A changelog that records **behaviour** changes, since output bytes are the contract.
+- Tags, and a built binary that states its own version instead of `(devel)`. There
+  are no `-ldflags`: since Go 1.24 the toolchain stamps the version from the
+  repository itself and `debug.ReadBuildInfo` reads it back, so an `-X` flag would
+  be a second copy of a fact that is right only when somebody remembers to pass it.
+  What replaces the flag is a check — the release workflow runs the binary it just
+  built and refuses to publish unless it reports exactly the tag. `report.IsRelease`
+  is the predicate, and a build that is not a release says so in the report rather
+  than leaving a reader to recognise a pseudo-version.
+- Published binaries for `linux/{amd64,arm64}` and `darwin/{amd64,arm64}` with
+  checksums, so adopting the tool does not require a Go toolchain. Windows is
+  deliberately absent: nothing consuming this runs on it and nothing here has been
+  tested there. The defence of the set is in `RELEASING.md`.
+- Reproducibility: `-trimpath`, `CGO_ENABLED=0`, the Go version pinned exactly, and
+  the workflow builds `linux/amd64` twice and fails if the digests differ.
+- A changelog that records **behaviour** changes, since output bytes are the
+  contract. `Generated output` is its own category, breaking by definition and
+  separate from features and fixes.
+- The versioning policy is written down in `RELEASING.md`, including why the first
+  release is `v0.1.0` and what would make it `v1.0.0` — which is milestones 3 and 4.
 
 ## Milestone 3 — parity in the tool's own CI
 

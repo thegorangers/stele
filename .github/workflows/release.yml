@@ -1,0 +1,175 @@
+# Publishes the binaries for a tag, and refuses to publish anything it cannot
+# vouch for.
+#
+# The two rules this file exists to enforce:
+#
+#   - A tag cannot publish a broken build. The tests run first, in the same job,
+#     and nothing is built until they pass.
+#   - A published binary cannot claim a version it was not built from. There is
+#     no -ldflags stamping here; the Go toolchain records the tag by itself, and
+#     the verify step asserts that what it recorded is exactly the tag being
+#     released. A checkout that lost the tag, or a build that lost its VCS
+#     information, fails the release instead of shipping a binary that says
+#     (devel).
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # So the whole path can be exercised on a scratch tag before it is trusted.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # Pinned exactly, not by minor. The compiler is an input to the bytes: a
+  # patch release of Go can change them, and "1.26" would silently become a
+  # different compiler between two builds of the same stele tag.
+  GO_VERSION: '1.26.0'
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide which tag is being released
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.tag }}" ]; then
+            tag='${{ inputs.tag }}'
+          else
+            tag='${{ github.ref_name }}'
+          fi
+          case "$tag" in
+            v*) ;;
+            *) echo "not a version tag: $tag" >&2; exit 1 ;;
+          esac
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+
+      - name: Check out the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          # The version comes from the tag the toolchain can see, so the whole
+          # history and every tag must be present. A shallow checkout would
+          # produce a pseudo-version and fail the verify step below, which is
+          # the right failure but a slow way to learn it.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt-clean:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # Before anything is built, so a tag cannot publish a broken build.
+      - name: Test
+        run: go test ./...
+
+      - name: Build the binaries
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # The set is defended in RELEASING.md. Briefly: the fleets that run
+          # this in CI are linux/amd64, the arm64 pair covers the arm CI images
+          # and Apple Silicon, and darwin/amd64 covers the Intel Macs still in
+          # use. Windows is absent because nothing consuming this runs on it and
+          # nothing here has ever been tested there.
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            goos="${platform%/*}"
+            goarch="${platform#*/}"
+            out="dist/stele_${TAG}_${goos}_${goarch}"
+            # -trimpath removes the build machine's paths from the binary and
+            # CGO_ENABLED=0 removes the host C toolchain from the inputs; both
+            # are here so that two builds of one tag are the same bytes.
+            # buildvcs is left on deliberately: it is what stamps the version.
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -buildvcs=true -o "$out" ./cmd/stele
+          done
+          ls -l dist
+
+      # The check that replaces -ldflags. A binary that does not report the tag
+      # it was built from does not get published.
+      - name: Verify the built binary reports the tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          reported="$(./dist/stele_${TAG}_linux_amd64 version --json | \
+            python3 -c 'import json,sys; print(json.load(sys.stdin)["components"]["stele"]["version"])')"
+          echo "binary reports: $reported"
+          if [ "$reported" != "$TAG" ]; then
+            echo "the binary reports $reported but the tag is $TAG; refusing to publish" >&2
+            exit 1
+          fi
+
+      # Reproducibility is claimed, so it is checked rather than asserted.
+      - name: Rebuild and compare
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -buildvcs=true -o /tmp/stele_rebuild ./cmd/stele
+          a="$(sha256sum "dist/stele_${TAG}_linux_amd64" | cut -d' ' -f1)"
+          b="$(sha256sum /tmp/stele_rebuild | cut -d' ' -f1)"
+          echo "first build:  $a"
+          echo "second build: $b"
+          if [ "$a" != "$b" ]; then
+            echo "two builds of one tag differ; the release is not reproducible" >&2
+            exit 1
+          fi
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum stele_* >SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          notes_file="$(mktemp)"
+          if [ -f CHANGELOG.md ]; then
+            # The section for this tag, if the changelog has one.
+            awk -v tag="$TAG" '
+              $0 ~ "^## \\[" tag "\\]" || $0 ~ "^## " tag "( |$)" { inside=1; next }
+              inside && /^## / { exit }
+              inside { print }
+            ' CHANGELOG.md >"$notes_file"
+          fi
+          if [ ! -s "$notes_file" ]; then
+            echo "No changelog entry for $TAG." >"$notes_file"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/stele_* dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/stele_* dist/SHA256SUMS \
+              --title "$TAG" --notes-file "$notes_file"
+          fi
