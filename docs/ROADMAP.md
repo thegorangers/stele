@@ -20,8 +20,9 @@ Where `stele` stands and what it needs before it can be relied on.
 
 - Contract linting has a first slice: an engine, a rule interface designed as the
   one an out-of-tree rule implements, eight rules each measured against 35 real
-  proto files before it was chosen, and `stele lint`. No plugin host, no
-  breaking-change detection, no AIP profile (milestone 6).
+  proto files before it was chosen, `stele lint`, and a host that runs rules from
+  outside this repository, pinned in the manifest exactly as a code generation
+  plugin is. No breaking-change detection, no AIP profile (milestone 6).
 
 That is enough to migrate a repository deliberately, with a human watching. What is
 left before 1.0 is the rest of contract linting (milestone 6), and the honest
@@ -246,8 +247,9 @@ every decision below is made against that.
   linked file and returns findings. Nothing in it reaches the filesystem, the
   manifest, the configuration or the process, because none of those survive a
   process boundary — what crosses one is a set of descriptors and a list of
-  findings, which is exactly what `Check` takes and returns. The plugin host is a
-  later slice and must be a *transport* for this interface, not a second one.
+  findings, which is exactly what `Check` takes and returns. The host that landed
+  in the second slice is a *transport* for this interface, not a second one: it
+  returns `rule.Rule` values the engine cannot tell from a built-in.
 - **Rule ids are a public contract, and namespaced from the first release.** An id
   is `namespace/name`; built-ins live in the reserved `stele` namespace. Under
   `RELEASING.md` renaming an id is breaking, and retrofitting a namespace later
@@ -264,6 +266,45 @@ every decision below is made against that.
 - **A run that checked no files is an error**, not a clean run. An ignore list
   that grew until it covered everything, and a module path that no longer holds
   protos, are silent otherwise: the build stays green and the protection is gone.
+
+### The second slice: rules from outside this repository
+
+- **`lint.plugins`, pinned on the terms code generation plugins are.** The same
+  four tiers — module and version, per-platform downloads with digests, an
+  explicit path, a bare name on `PATH` — in the same words, with the same
+  refusals, enforced by *the same code*: the part of a plugin declaration that
+  says where a binary comes from is one type both kinds hand their fields to.
+  Two vocabularies for one question would have been two sets of mistakes, and
+  one kind of plugin would have ended up pinned more carefully than the other
+  for no reason anybody could state. A rule that is not pinned can change what
+  it says about an unchanged repository overnight.
+- **A host that is a transport, not a second interface.** Length-prefixed JSON
+  frames on a subprocess's stdin and stdout, one process per plugin, one
+  question at a time. What the engine receives are `rule.Rule` values.
+- **Every way a rule can fail is named, and none of them is silence.** Missing,
+  dead halfway, hanging, answering with rubbish, announcing a rule id that is
+  malformed or reserved, returning a finding with no fix: each is reported
+  naming the rule, the plugin and the file, and each fails the run whatever
+  severity that rule was configured at. Severity says what a *finding* costs,
+  and a rule that never reached a finding has said nothing about this
+  repository. `stele lint`'s own failure message was changed here too: it
+  counted findings, so a run that failed only because a rule crashed said "0
+  finding(s) at severity error; fix them".
+- **Two decisions about rule identity, made as refusals.** The `stele` namespace
+  is reserved, so a third-party rule cannot claim a built-in's configuration or
+  be silently replaced by a built-in of the same name later. Two plugins
+  claiming one id are refused naming both, rather than resolved by declaration
+  order — any order would make the meaning of a manifest depend on it, and the
+  loser's `severity: warning` line would read as exempting a rule that is still
+  failing the build.
+- **The proof is a rule outside this module.** `internal/lint/host/testdata/examplerule`
+  is its own Go module, depends on the published `rule` package and nothing
+  under `internal/`, is built from source in a temporary directory — never
+  downloaded — and finds a real thing: an unresolved TODO in a comment that
+  every consumer generates code from. Writing it is what added the `error` to
+  `Check`: across a process boundary a rule can crash, hang or answer with
+  rubbish, and a signature that could only return findings would report every
+  one of those as a rule that found nothing.
 
 ### The rules, measured before they were chosen
 
@@ -316,7 +357,6 @@ are different answers.
 
 ### Not in this slice, and said plainly rather than implied
 
-- **The go-plugin host.** The interface is designed for it; it does not exist.
 - **The breadth of an AIP profile.** Eight rules is eight rules.
 - **Breaking-change detection.** Nothing compares this revision against a
   previous one.

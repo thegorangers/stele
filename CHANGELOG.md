@@ -55,8 +55,26 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   at all before it was included; the counts, and the rules that were measured
   and rejected, are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
-  There is no plugin host, no breaking-change detection and no AIP profile in
-  this slice, and the README says so rather than implying more is covered.
+  There is no breaking-change detection and no AIP profile in this slice, and
+  the README says so rather than implying more is covered.
+- **Rules from outside this repository.** `lint.plugins` in `stele.yaml`
+  declares a binary that serves rules; the rules it serves are loaded beside the
+  built-ins, see the same linked files, sort into the same report, and are
+  demoted or switched off by the same `lint.rules` block. A rule is written
+  against the published `rule` package — the one package here that is not
+  internal — and a `rule.Serve` call is the whole of the plumbing.
+
+  A rule plugin is pinned exactly as a code generation plugin is: `module` plus
+  an exact `version`, `downloads` with a `url` and `sha256` per platform, an
+  explicit `path`, or a bare name on `PATH`. The same tiers, the same words, the
+  same refusals, and the same installer and cache. A rule that is not pinned can
+  change what it says about an unchanged repository between two runs.
+
+  A rule that could not run is never reported as a rule that found nothing. A
+  plugin that is missing, dies mid-run, hangs, answers with something that is
+  not a response, or returns a finding with no fix is reported naming the rule,
+  the plugin and the file, and fails the run whatever severity that rule was
+  configured at — severity says what a finding costs, and there was no finding.
 - **A `lint` block in `stele.yaml`**, and in the schema. It sets what a rule
   costs — `error`, `warning` or `off` — and which import paths no rule, or one
   rule, is applied to. This is the adoption mechanism: a repository that has
@@ -64,9 +82,12 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   reviewed field in the manifest rather than `allow_failure: true` in a CI job
   that is invisible from the repository the rules are about. A `warning` does
   not protect new code from the same mistake, and the roadmap says so.
-- **`stele lint --rules`**, printing the rules this build carries with their ids
-  and what each requires. A rule id is a public contract that goes into a
+- **`stele lint --rules`**, printing the rules a run here would apply with their
+  ids and what each requires. A rule id is a public contract that goes into a
   manifest; a list somebody has to read the source to find is one they guess at.
+  It loads the rule plugins the manifest declares and lists what they serve too,
+  each naming its plugin: those ids are precisely the ones that cannot be read
+  out of this repository's source.
 
 ### Refused input
 
@@ -75,9 +96,26 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   naming one rule, and an ignore entry that is empty or looks like a glob are
   all refused, naming the field. A glob-looking entry matched literally would be
   an exemption the author believes they have written and does not have.
+- A rule plugin that is not named, is named as though it were a rule id, shares
+  a name with another, or declares where its binary comes from in two ways at
+  once — or in one way, incompletely — is refused naming the field, exactly as a
+  code generation plugin is and by the same code.
+- A rule plugin claiming a rule id in the reserved `stele` namespace is refused
+  naming the plugin and the id, and two plugins claiming one id are refused
+  naming both. An id is a public contract that appears in somebody's ignore
+  list; there is no declaration order worth inventing to resolve a collision.
 - A rule id no loaded rule carries fails the run, naming it and listing what is
   loaded. A typo in an ignore list, or a rule that has been removed, otherwise
   leaves the manifest claiming a protection or an exemption that does not exist.
+
+### Reports and messages
+
+- `stele lint` counted findings when it failed, so a run that failed only
+  because a rule could not run said "0 finding(s) at severity error; fix them" —
+  sending the reader to hunt a finding that was not there, and implying a
+  severity line would silence it. Nothing silences it. The two failures are now
+  reported apart, and the one that means "this repository has not been checked"
+  says so and says what to do.
 
 ### Note for a future release
 

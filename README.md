@@ -215,14 +215,10 @@ stele: lint checked 1 file with 8 rules: 1 error, 0 warnings
 This is the first slice, and the boundary is worth stating plainly rather than
 leaving to be discovered.
 
-- **There is no plugin host.** Rules are the ones compiled into the binary. The
-  interface a rule implements was designed as the one an out-of-tree rule would
-  implement — a rule is handed one linked file and returns findings, because a
-  set of descriptors and a list of findings are what survive a process boundary
-  — and the host, when it lands, is a transport for that interface rather than
-  a second one. It is not there today.
-- **This is not an AIP profile.** Eight rules, listed below, chosen because each
-  is mechanical and each was measured against real contracts first.
+- **This is not an AIP profile.** Eight built-in rules, listed below, chosen
+  because each is mechanical and each was measured against real contracts
+  first. A repository that wants more writes them, or takes somebody else's:
+  see [rules from outside this repository](#rules-from-outside-this-repository).
 - **There is no breaking-change detection.** Nothing here compares this
   revision against a previous one. It is the obvious next thing and it is not
   in this slice.
@@ -269,6 +265,81 @@ It teaches the reader that the output is noise, and the next reader switches it
 off. Message, field and service casing are absent for a weaker reason — they are
 mechanical, but they produced zero findings on the measured fleet and there is
 nothing they protect that the tool can name, and every id is permanent.
+
+### Rules from outside this repository
+
+A rule does not have to ship here. `lint.plugins` declares a binary that serves
+rules, and the rules it serves are loaded beside the built-ins, see the same
+linked files, and are configured by the same `lint.rules` block:
+
+```yaml
+lint:
+  plugins:
+    - name: house_rules
+      module: example.com/house/cmd/stele-rule-house
+      version: v1.2.0
+  rules:
+    - id: house/field_comment
+      severity: warning
+```
+
+**It is pinned exactly as a code generation plugin is** — the same four tiers,
+the same words, the same refusals, enforced by the same code: `module` and
+`version` for a Go program the tool installs into its own cache; `downloads`
+with a `url` and a `sha256` per platform for anything else; `path` for a binary
+in this repository; a bare name looked up on `PATH` when nothing else is said.
+The reason is not symmetry for its own sake. A rule that is not pinned can
+change what it says about an unchanged repository between two runs, and the
+first anybody hears of it is a build that reddened overnight.
+
+Writing one is writing a `Check` method. The interface lives in the published
+[`rule`](rule) package — the only package of this repository that is not
+internal, because a rule elsewhere has to be able to import the interface it
+implements:
+
+```go
+func main() {
+	if err := rule.Serve(noTODO{}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func (noTODO) ID() string          { return "example/no_todo" }
+func (noTODO) Description() string { return "no declaration carries an unresolved TODO in its comment" }
+func (noTODO) Check(f rule.File) ([]rule.Finding, error) { ... }
+```
+
+A complete worked example, in its own Go module depending on nothing under
+`internal/`, is at
+[`internal/lint/host/testdata/examplerule`](internal/lint/host/testdata/examplerule).
+It is built from source and run through the host by this repository's own
+tests, so the claim that the interface can be implemented from outside is
+measured rather than asserted.
+
+`stele lint --rules` loads the plugins the manifest declares and lists what
+they serve beside the built-ins, each naming its plugin. Those ids are exactly
+the ones nobody can read out of this repository's source.
+
+**A rule that could not run is never silence.** A plugin that is missing, that
+dies halfway, that hangs, that answers with something that is not a response,
+or that returns a finding with no fix, is reported naming the rule, the plugin
+and the file it was checking, and it fails the run whatever severity that rule
+was configured at. Severity says what a *finding* costs; a rule that never
+reached a finding has said nothing about this repository, and a build that went
+green on its silence would be reporting an absence of evidence as evidence of
+absence. `severity: "off"` cannot silence a broken rule, and is not meant to:
+the fix is to repair the rule or remove its plugin, and the message says so.
+
+Two refusals are worth stating because they are decisions rather than
+omissions. The `stele` namespace is reserved for the built-ins, and a plugin
+claiming `stele/...` is refused by name — an id is a public contract that
+appears in somebody's ignore list, and a third-party rule that could claim one
+could take over a built-in's configuration or be silently replaced by a
+built-in of the same name in a later release. And two plugins claiming one id
+are refused naming both, rather than resolved by an order: whichever ran, the
+other's `severity: warning` line would read as exempting a rule that is still
+failing the build.
 
 ### Rule ids are namespaced, from the first release
 

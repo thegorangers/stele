@@ -24,9 +24,10 @@ Usage:
   stele lint [flags]
 
 Flags:
-  --rules             print the rules this build carries, with their ids, and
-                      exit. A rule id is what goes in stele.yaml, so this is
-                      the list to write one from.
+  --rules             print the rules a run here would apply, with their ids,
+                      and exit. A rule id is what goes in stele.yaml, so this
+                      is the list to write one from. It loads the rule plugins
+                      the manifest declares and lists what they serve too.
   --dir DIR           directory holding stele.yaml (default ".")
   --update            re-resolve every ref to the commit it names today and
                       rewrite stele.lock, as generate's flag of the same name
@@ -53,6 +54,25 @@ Adopting it over contracts that were never linted:
 
   A severity of warning does not protect new code from the same mistake. It
   buys the time to fix what is there, and it says so in a file people read.
+
+Rules from outside this repository:
+
+  A rule does not have to ship with this tool. A plugin serving rules is
+  declared, and pinned on exactly the terms a code generation plugin is:
+
+    lint:
+      plugins:
+        - name: house_rules
+          module: example.com/house/cmd/stele-rule-house
+          version: v1.2.0
+      rules:
+        - id: house/field_comment
+          severity: warning
+
+  Its rules run beside the built-ins over the same files and are configured the
+  same way. A rule that cannot be loaded, dies, hangs or answers with rubbish
+  fails the run naming the rule, the plugin and the file: a rule that did not
+  run has checked nothing, and no severity applies to a finding it never made.
 `
 
 func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error {
