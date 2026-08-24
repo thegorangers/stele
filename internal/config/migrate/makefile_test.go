@@ -120,3 +120,47 @@ func TestGenuineFailureStillReported(t *testing.T) {
 		t.Fatalf("real failure lost; unresolved = %v", unresolved)
 	}
 }
+
+// TestDefineBodyHoldingAnInvocationIsRefused: a define body is stored
+// verbatim and its meaning is decided where the variable is expanded, which
+// this reader does not follow. Verified against GNU Make 4.4.1: inside a
+// define body nothing is stripped — `echo one # two` keeps its hash, and so
+// does `a\#b` — and the same body becomes a recipe when it is expanded in
+// one. Reading such a body by its own indentation can therefore recover an
+// invocation that never runs, or lose part of one that does, without saying
+// so. Every other limit of this reader fails loudly; this one must too.
+func TestDefineBodyHoldingAnInvocationIsRefused(t *testing.T) {
+	_, err := migrate.FromBuf(nil, []byte(genForVendoredTree),
+		[]byte("define vendor\n"+
+			"buf export https://example.test/example/cart.git#subdir=api --output=third_party/proto\n"+
+			"endef\n"))
+	if err == nil || !strings.Contains(err.Error(), "define") {
+		t.Fatalf("err = %v, want a refusal naming define", err)
+	}
+}
+
+// TestDefineBodyWithoutAnInvocationIsNotRefused guards the cost of that
+// refusal. define is ordinary in a Makefile; refusing every use of it would
+// refuse files this reader translates correctly. Only a body that could carry
+// an invocation is beyond it.
+func TestDefineBodyWithoutAnInvocationIsNotRefused(t *testing.T) {
+	deps, unresolved := exportsOf(t, "define forward\n"+
+		"\techo 'starting' # a note\n"+
+		"endef\n"+
+		"vendor-proto:\n"+
+		"\tbuf export \"https://example.test/example/cart.git#subdir=api,ref=abc\" --path example/cart --output=third_party/proto\n")
+	if len(deps) != 1 || deps[0] != "cart" {
+		t.Fatalf("deps = %v, want [cart]; unresolved = %v", deps, unresolved)
+	}
+}
+
+// TestUnterminatedDefineIsRefused: without an endef there is no way to know
+// where the body stops, so there is no way to know which lines were read as
+// make text. GNU Make itself refuses this file; so does this reader.
+func TestUnterminatedDefineIsRefused(t *testing.T) {
+	_, err := migrate.FromBuf(nil, []byte(genForVendoredTree),
+		[]byte("define vendor\necho hello\n"))
+	if err == nil || !strings.Contains(err.Error(), "endef") {
+		t.Fatalf("err = %v, want a refusal naming endef", err)
+	}
+}

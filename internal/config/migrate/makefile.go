@@ -47,7 +47,7 @@ func parseExports(makefile []byte) ([]bufExport, []string, error) {
 		return nil, nil, err
 	}
 	for _, line := range lines {
-		if !strings.Contains(line, "buf export") {
+		if !strings.Contains(line, exportInvocation) {
 			continue
 		}
 		args, err := fields(line)
@@ -189,6 +189,14 @@ func (e *bufExport) parseTarget() error {
 	return nil
 }
 
+// exportInvocation and installInvocation are the words that make a line worth
+// reading. They are named here because a define body is refused when it holds
+// one of them, and that refusal has to look for exactly what the readers do.
+const (
+	exportInvocation  = "buf export"
+	installInvocation = "go install"
+)
+
 // makeRecipePrefix is the character that marks a recipe line. .RECIPEPREFIX
 // can change it; a Makefile that does is refused rather than read with every
 // recipe mistaken for a make line.
@@ -215,16 +223,22 @@ const makeRecipePrefix = "\t"
 //
 // Beyond that it does not go, and what it cannot model it refuses:
 // .RECIPEPREFIX is an error, because it moves the boundary the whole model
-// rests on. Known limits, stated rather than guessed at: a tab-indented line
-// outside any rule is read as a recipe, and the body of a define/endef block
-// is read by the rule its own indentation suggests rather than by how the
-// variable is later used.
+// rests on, and a define/endef body is not read at all: what a body means is
+// decided where the variable is expanded, which this reader does not follow.
+// A body is dropped, and refused outright when it holds an invocation, since
+// that is the only case where dropping it could lose one. Known limit, stated
+// rather than guessed at: a tab-indented line outside any rule is read as a
+// recipe.
 func logicalLines(s string) ([]string, error) {
 	physical := strings.Split(s, "\n")
 	for _, line := range physical {
 		if strings.HasPrefix(line, ".RECIPEPREFIX") {
 			return nil, fmt.Errorf(".RECIPEPREFIX changes which lines are recipes; this reader understands only the default tab")
 		}
+	}
+	physical, err := withoutDefineBodies(physical)
+	if err != nil {
+		return nil, err
 	}
 	var (
 		out    []string
@@ -268,6 +282,70 @@ func logicalLines(s string) ([]string, error) {
 		end()
 	}
 	return out, nil
+}
+
+// withoutDefineBodies removes the body of every define/endef block, and
+// refuses a body that holds an invocation.
+//
+// A define body is stored verbatim and means whatever the place it is
+// expanded makes it mean. Verified against GNU Make 4.4.1: inside a body
+// nothing is stripped — `echo one # two` keeps its hash and `a\#b` keeps its
+// backslash — and the very same body becomes a recipe, read by the shell's
+// rules, when it is expanded inside one. This reader does not follow
+// expansion, so it cannot say which rules apply, and reading a body by its own
+// indentation would answer that question by guessing.
+//
+// Dropping a body loses nothing this reader was going to recover from it,
+// except when the body holds an invocation — and then it is refused by name.
+// Refusing every define instead would refuse the many Makefiles that use one
+// for something this reader never reads.
+func withoutDefineBodies(physical []string) ([]string, error) {
+	var (
+		out   []string
+		depth int
+		start int
+	)
+	for n, line := range physical {
+		switch {
+		case isDirective(line, "define"):
+			if depth == 0 {
+				start = n + 1
+			}
+			depth++
+		case isDirective(line, "endef"):
+			if depth > 0 {
+				depth--
+			}
+		case depth > 0:
+			for _, word := range []string{exportInvocation, installInvocation} {
+				if strings.Contains(line, word) {
+					return nil, fmt.Errorf("line %d: `%s` inside a define body: what a body means is decided where the variable is expanded, which this reader does not follow; move the invocation out of the define, or translate it by hand", n+1, word)
+				}
+			}
+		}
+		if depth == 0 && !isDirective(line, "endef") {
+			out = append(out, line)
+			continue
+		}
+		// A dropped line still has to occupy its place, so that a line
+		// number in a message means the line the author wrote.
+		out = append(out, "")
+	}
+	if depth > 0 {
+		return nil, fmt.Errorf("line %d: define with no endef; where the body ends decides which lines are make text, and nothing here says", start)
+	}
+	return out, nil
+}
+
+// isDirective reports whether a physical line opens or closes a define block.
+// Make allows leading spaces before a directive but not a tab, which would
+// make the line a recipe instead.
+func isDirective(line, word string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimLeft(line, " "), word)
+	if !ok {
+		return false
+	}
+	return rest == "" || strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t") || strings.HasPrefix(rest, "=")
 }
 
 // continued reports whether a line ends in a continuation. An even number of

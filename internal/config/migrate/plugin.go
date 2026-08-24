@@ -181,7 +181,7 @@ func parseInstalls(makefile []byte) (map[string][]goInstall, []string, error) {
 		return nil, nil, err
 	}
 	for _, line := range logical {
-		if !strings.Contains(line, "go install") {
+		if !strings.Contains(line, installInvocation) {
 			continue
 		}
 		args, err := fields(line)
