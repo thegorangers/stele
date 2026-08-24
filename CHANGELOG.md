@@ -57,6 +57,23 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   every output was the part worth fixing: a rule can then start disagreeing with
   itself and nothing says so.
 
+### Internal
+
+- **The reference tool's pin lives in one file.** `test/parity/corpus.yaml` now
+  carries `buf_downloads` beside `buf_version`: one `os`/`arch`/`url`/`sha256`
+  entry per platform, in exactly the vocabulary a manifest uses to pin a
+  plugin, and the harness fetches and verifies it through the same cache and
+  the same digest check a pinned plugin goes through. The sha256 used to sit in
+  the CI workflow while the version sat in the corpus. That failed closed, but a
+  pin split across two files can be half-updated, and only CI read the half that
+  named the bytes — a workstation run measured against whatever `buf` the
+  machine had. The CI step that installed the tool is gone with it.
+
+- **The translation from a manifest's `downloads` entries to the plugin
+  resolver's own type is written once**, as `config.PluginDownloads`. It had
+  been written twice, in generation and in lint, and the parity harness would
+  have been the third.
+
 ### Refused input
 
 - **`stele migrate` refuses a `Makefile` whose `define` body holds `buf export`

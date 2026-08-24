@@ -250,18 +250,7 @@ func resolvePlugins(ctx context.Context, dir string, targets []config.GenTarget,
 // downloads translates the manifest's download entries into the resolver's.
 // The two types are separate so that the resolver does not depend on the
 // manifest parser, which is what lets a plugin be resolved from anywhere.
-func downloads(p config.Plugin) []plugin.Download {
-	if len(p.Downloads) == 0 {
-		return nil
-	}
-	out := make([]plugin.Download, 0, len(p.Downloads))
-	for _, d := range p.Downloads {
-		out = append(out, plugin.Download{
-			OS: d.OS, Arch: d.Arch, URL: d.URL, SHA256: d.SHA256, ArchivePath: d.ArchivePath,
-		})
-	}
-	return out
-}
+func downloads(p config.Plugin) []plugin.Download { return config.PluginDownloads(p.Downloads) }
 
 // lockedPlugins renders the resolved binaries the lock has anything to say
 // about, sorted by name so that the same run always writes the same bytes.

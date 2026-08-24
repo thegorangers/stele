@@ -11,30 +11,17 @@ description: Measure byte-for-byte parity with the reference tool on the shipped
 runs:
   using: composite
   steps:
-    # The version is read from the corpus rather than written here, because the
-    # corpus is what declares which build it was measured against. The digest
-    # is here, and it is the pin that matters: a bumped version whose digest
-    # was not updated fails this step instead of quietly measuring against a
-    # different tool.
-    - name: Install the reference tool, pinned
-      shell: bash
-      run: |
-        set -euo pipefail
-        version="$(sed -n 's/^buf_version: *//p' test/parity/corpus/corpus.yaml)"
-        if [ -z "$version" ]; then
-          echo "the corpus does not pin a reference tool version" >&2
-          exit 1
-        fi
-        case "$version" in
-          1.48.0) digest=30cbac88a3cdda6e48dcf727f3cf9d2669d771c5d5be94f37e202c76a522b66e ;;
-          *) echo "no digest recorded for reference tool $version; add one beside this line" >&2; exit 1 ;;
-        esac
-        url="https://github.com/bufbuild/buf/releases/download/v${version}/buf-Linux-x86_64"
-        curl --fail --silent --show-error --location -o /tmp/buf "$url"
-        echo "${digest}  /tmp/buf" | sha256sum -c -
-        chmod +x /tmp/buf
-        sudo mv /tmp/buf /usr/local/bin/buf
-        buf --version
+    # The reference tool is not installed here either. The corpus pins it —
+    # the version and, in the manifest's own downloads vocabulary, the url and
+    # sha256 of the published binary for each platform — and the harness
+    # fetches and verifies the entry matching this runner through the same
+    # cache and the same digest check a pinned plugin goes through.
+    #
+    # This step used to carry the sha256 while the corpus carried the version.
+    # It failed closed: a bumped version with no digest beside it aborted. But
+    # two files for one pin can be half-updated, and only CI ever read the half
+    # that named the bytes, so somebody running the harness on a workstation
+    # measured against whatever buf their machine had.
 
     # The plugins are not installed here. The corpus manifests pin them by
     # module and version, stele installs those into its own cache, and the

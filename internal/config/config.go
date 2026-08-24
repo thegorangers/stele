@@ -1,7 +1,10 @@
 // Package config parses and validates the stele.yaml manifest.
 package config
 
-import "github.com/thegorangers/stele/internal/managed"
+import (
+	"github.com/thegorangers/stele/internal/managed"
+	"github.com/thegorangers/stele/internal/plugin"
+)
 
 // File is a parsed stele.yaml manifest.
 type File struct {
@@ -212,6 +215,27 @@ type Download struct {
 
 // Platform is the entry's platform as an error message writes it.
 func (d Download) Platform() string { return d.OS + "/" + d.Arch }
+
+// PluginDownloads translates manifest download entries into the resolver's own
+// type.
+//
+// The two types are separate so that the resolver depends on nothing: it
+// resolves a plugin for anyone who can describe one, including callers that
+// never read a manifest. The translation therefore has to live somewhere, and
+// it lives here — once. It was written twice before, in generation and in
+// lint, and a third caller is what turns two copies into a habit.
+func PluginDownloads(ds []Download) []plugin.Download {
+	if len(ds) == 0 {
+		return nil
+	}
+	out := make([]plugin.Download, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, plugin.Download{
+			OS: d.OS, Arch: d.Arch, URL: d.URL, SHA256: d.SHA256, ArchivePath: d.ArchivePath,
+		})
+	}
+	return out
+}
 
 // Lint configures the contract lint.
 //

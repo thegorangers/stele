@@ -378,18 +378,7 @@ func unpinnedNotes(unpinned map[string]string) []string {
 // pluginDownloads translates the manifest's download entries into the
 // resolver's, as generation does. The two types stay separate so that the
 // resolver does not depend on the manifest parser.
-func pluginDownloads(ds []config.Download) []plugin.Download {
-	if len(ds) == 0 {
-		return nil
-	}
-	out := make([]plugin.Download, 0, len(ds))
-	for _, d := range ds {
-		out = append(out, plugin.Download{
-			OS: d.OS, Arch: d.Arch, URL: d.URL, SHA256: d.SHA256, ArchivePath: d.ArchivePath,
-		})
-	}
-	return out
-}
+func pluginDownloads(ds []config.Download) []plugin.Download { return config.PluginDownloads(ds) }
 
 // owned returns the import paths this repository supplies, and where each was
 // read from on disk.

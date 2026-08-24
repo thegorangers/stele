@@ -7,7 +7,31 @@ root: repos
 # The reference tool, pinned. A parity job that compared against whatever the
 # runner installed would report a change in that tool as a regression in this
 # one, and nobody reading the failure could tell which it was.
+#
+# The version and the bytes are one pin and live in one file. The digest used
+# to sit in the CI workflow instead: it failed closed, but two files for one
+# pin can be half-updated, and a workstation run saw only half of it. The shape
+# below is the manifest's own way of pinning a published binary — os, arch,
+# url, sha256 — because this is the same question, and the harness resolves it
+# with the same code.
 buf_version: 1.48.0
+buf_downloads:
+  - os: linux
+    arch: amd64
+    url: https://github.com/bufbuild/buf/releases/download/v1.48.0/buf-Linux-x86_64
+    sha256: 30cbac88a3cdda6e48dcf727f3cf9d2669d771c5d5be94f37e202c76a522b66e
+  - os: linux
+    arch: arm64
+    url: https://github.com/bufbuild/buf/releases/download/v1.48.0/buf-Linux-aarch64
+    sha256: 76b531e2c29be3b0ddf8b1034126b56506532b47c98b3968a49f09432536f39d
+  - os: darwin
+    arch: amd64
+    url: https://github.com/bufbuild/buf/releases/download/v1.48.0/buf-Darwin-x86_64
+    sha256: 5af7155250ad8af5f0a2f5701d1df83bfece53dfe98f13b3768d808468fcdbde
+  - os: darwin
+    arch: arm64
+    url: https://github.com/bufbuild/buf/releases/download/v1.48.0/buf-Darwin-arm64
+    sha256: 6ef7df6116c72ef3ccaa8574c9b8008389f0911c1921da4689e0abff3924a4bd
 
 # The dependency addresses this corpus declares, and the trees that answer
 # them. Nothing is cloned: the tree named here is the vendored copy inside the

@@ -43,6 +43,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -103,6 +104,19 @@ type Corpus struct {
 	// the corpus and checked before anything is compared, rather than being
 	// whatever the runner happened to install.
 	BufVersion string `yaml:"buf_version"`
+	// BufDownloads are the published binaries of the reference tool at
+	// BufVersion, one entry per platform, in exactly the vocabulary a manifest
+	// uses to pin a plugin: os, arch, url, sha256. When Buf names no binary,
+	// the entry matching this machine is downloaded, verified against its
+	// digest, and used.
+	//
+	// It is here, beside the version, because the version and the bytes are
+	// one pin. They used to be two: the version in this file and the digest in
+	// a CI workflow, which failed closed but could be half-updated, and left
+	// somebody running the harness on a workstation measuring against a build
+	// nothing in the corpus described. A pin split across two files is a pin
+	// with a seam.
+	BufDownloads []config.Download `yaml:"buf_downloads"`
 	// Producers maps the dependency addresses this corpus declares onto trees
 	// on disk. A corpus that names one fetches nothing.
 	Producers []Producer `yaml:"producers"`
@@ -348,7 +362,13 @@ func (c Corpus) producerAddrs() []string {
 func referenceBin(t *testing.T, c Corpus) string {
 	t.Helper()
 	bin := c.Buf
-	if bin == "" {
+	switch {
+	case bin != "":
+		// The corpus names a binary. It is taken as given and still
+		// version-checked: naming one is not a claim about which build it is.
+	case len(c.BufDownloads) > 0:
+		bin = downloadReference(t, c)
+	default:
 		bin = "buf"
 	}
 	if c.BufVersion == "" {
@@ -363,6 +383,34 @@ func referenceBin(t *testing.T, c Corpus) string {
 		t.Fatalf("the corpus pins the reference tool at %s, but %s reports %s;\n"+
 			"parity against a different build measures the difference between two tools, not a regression in this one",
 			c.BufVersion, bin, got)
+	}
+	return bin
+}
+
+// downloadReference fetches the reference tool the corpus pins, verifies it
+// against the digest declared for this machine's platform, and returns the
+// path to it.
+//
+// It reuses the plugin cache and the plugin download tier wholesale, because
+// the question is the same one and was already answered once: which bytes ran.
+// A digest names bytes, bytes are per-platform, an entry is chosen by GOOS and
+// GOARCH, the digest is checked before anything is made executable, and an
+// unmatched platform is refused rather than falling back to whatever is on
+// PATH. Giving the reference tool its own second answer to that question would
+// be a second set of mistakes to make.
+func downloadReference(t *testing.T, c Corpus) string {
+	t.Helper()
+	root, err := cachedir.Root(c.Cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := plugin.Select("the reference tool", config.PluginDownloads(c.BufDownloads), runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, err := plugin.Cache{Root: root}.EnsureURL(context.Background(), d.URL, d.SHA256, d.ArchivePath)
+	if err != nil {
+		t.Fatalf("fetching the reference tool the corpus pins (%s, %s): %v", c.BufVersion, d.URL, err)
 	}
 	return bin
 }

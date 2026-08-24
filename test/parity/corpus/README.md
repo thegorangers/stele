@@ -111,6 +111,21 @@ well as in CI. Parity against a moving reference measures nothing: a change in
 the other tool would arrive as a failure in this one, and the reader would have
 no way to tell which had moved.
 
+The bytes are pinned beside the version, in `buf_downloads`, and that is the
+whole pin: one `os`/`arch`/`url`/`sha256` entry per platform, in exactly the
+vocabulary a manifest uses to pin a plugin, resolved by the same code — the
+entry is chosen by `GOOS` and `GOARCH`, the digest is verified before anything
+is made executable, and an unmatched platform is refused rather than falling
+back to whatever is on `PATH`. The harness fetches it, so a workstation run and
+a CI run measure against the same bytes without either of them being told
+where to get them. Setting `buf` in the corpus overrides this and names a
+binary directly; it is still version-checked.
+
+The digest used to live in the CI workflow while the version lived here. That
+failed closed — a bumped version with no digest beside it aborted the job — but
+a pin split across two files can be half-updated, and only CI ever read the
+half that named the bytes.
+
 The plugins are pinned the same way and in one place: the manifests declare
 `module` and `version`, stele installs them into its own cache, and the harness
 puts that cache on the reference tool's `PATH`. Both tools therefore run the
