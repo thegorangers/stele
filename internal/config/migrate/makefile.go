@@ -339,13 +339,16 @@ func withoutDefineBodies(physical []string) ([]string, error) {
 
 // isDirective reports whether a physical line opens or closes a define block.
 // Make allows leading spaces before a directive but not a tab, which would
-// make the line a recipe instead.
+// make the line a recipe instead. The word has to be followed by whitespace or
+// by nothing: `define=1` assigns a variable named define, as GNU Make 4.4.1
+// confirms, and refusing that file for a missing `endef` it never needed would
+// cost as much as an unresolved item that is not real.
 func isDirective(line, word string) bool {
 	rest, ok := strings.CutPrefix(strings.TrimLeft(line, " "), word)
 	if !ok {
 		return false
 	}
-	return rest == "" || strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t") || strings.HasPrefix(rest, "=")
+	return rest == "" || strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t")
 }
 
 // continued reports whether a line ends in a continuation. An even number of

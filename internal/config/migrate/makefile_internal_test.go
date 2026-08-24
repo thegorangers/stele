@@ -61,3 +61,18 @@ func TestBackslashRunBeforeAHash(t *testing.T) {
 		}
 	}
 }
+
+// TestDefineIsADirectiveOnlyWhenItNamesAVariable: `define=1` assigns a
+// variable that happens to be called define — verified against GNU Make
+// 4.4.1, where `define=1` followed by `$(info $(define))` prints 1. Read as
+// the opening of a block it would refuse a Makefile for having no `endef` it
+// never needed, and a refusal of a file that is fine is as costly as a report
+// entry that is not real.
+func TestDefineIsADirectiveOnlyWhenItNamesAVariable(t *testing.T) {
+	if _, err := logicalLines("define=1\nall:\n\t@true\n"); err != nil {
+		t.Errorf("logicalLines refused a plain assignment: %v", err)
+	}
+	if _, err := logicalLines("define body\na\nendef\n"); err != nil {
+		t.Errorf("logicalLines refused a define block: %v", err)
+	}
+}
