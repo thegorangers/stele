@@ -1,0 +1,8 @@
+# invalid: a rule plugin is named here, and that name is what every error about
+# it says. Without one there is nothing for a message to blame.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - path: tools/stele-rule-house

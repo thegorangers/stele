@@ -1,0 +1,12 @@
+# invalid: a plugin comes from exactly one place, and this one declares both a
+# module and a path. Whichever the tool honoured, the other line would describe
+# a binary that never ran.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house_rules
+      module: example.com/house/cmd/stele-rule-house
+      version: v1.2.0
+      path: tools/stele-rule-house

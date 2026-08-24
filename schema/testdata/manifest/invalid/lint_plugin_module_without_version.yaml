@@ -1,0 +1,10 @@
+# invalid: a module without a version asks the tool to choose which build of a
+# rule judges this repository, and any choice it made would be one the manifest
+# does not record.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house_rules
+      module: example.com/house/cmd/stele-rule-house

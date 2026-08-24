@@ -1,0 +1,12 @@
+# beyond: JSON Schema's uniqueItems compares whole items, and these two differ
+# in path. That two plugins may not share a name is a constraint over one field
+# across items, which the parser checks and the schema cannot state.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house_rules
+      path: tools/a
+    - name: house_rules
+      path: tools/b

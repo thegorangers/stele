@@ -1,0 +1,14 @@
+# valid: a rule plugin pinned the way a code generator is — an exact version of
+# an exact module — and one of the rules it serves demoted to a warning while
+# the repository catches up with it.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house_rules
+      module: example.com/house/cmd/stele-rule-house
+      version: v1.2.0
+  rules:
+    - id: house/field_comment
+      severity: warning

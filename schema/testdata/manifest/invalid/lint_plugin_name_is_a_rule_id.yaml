@@ -1,0 +1,10 @@
+# invalid: this is the plugin's name, not a rule's. A plugin serves rules whose
+# ids it declares itself, and a manifest that names the plugin after one of them
+# sends the author looking for their severity line in the wrong place.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house/field_comment
+      path: tools/stele-rule-house

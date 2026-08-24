@@ -1,0 +1,20 @@
+# valid: a rule plugin that is not a Go program, pinned per platform by digest.
+# A digest pins bytes and bytes are per-platform, which is why there is an
+# entry each rather than one url.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house_rules
+      downloads:
+        - os: linux
+          arch: amd64
+          url: https://example.com/stele-rule-house_linux_amd64.tar.gz
+          sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+          archive_path: stele-rule-house
+        - os: darwin
+          arch: arm64
+          url: https://example.com/stele-rule-house_darwin_arm64.tar.gz
+          sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+          archive_path: stele-rule-house

@@ -1,0 +1,12 @@
+# invalid: a url without a hash is an address, not a pin: whatever the server
+# serves would be run, and it would be run over this repository's contracts.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house_rules
+      downloads:
+        - os: linux
+          arch: amd64
+          url: https://example.com/stele-rule-house

@@ -513,6 +513,16 @@
             "third_party"
           ]
         },
+        "plugins": {
+          "description": "Rule plugins to load beside the rules this tool ships with. Each serves one or more rules, which are configured under lint.rules by the ids the plugin declares.\n\nThe parser also checks: no two plugins may share a name. The host additionally refuses, when the plugins are loaded, a rule that claims the reserved `stele` namespace and two plugins that claim one rule id \u2014 neither is expressible here, because both are properties of what the binaries announce at run time rather than of this file.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/lint_plugin"
+          }
+        },
         "rules": {
           "description": "What this repository says about individual rules. A rule not named here runs at its default severity over every file.\n\nThe parser also checks: no two entries may name the same rule.",
           "type": [
@@ -525,6 +535,136 @@
         }
       },
       "minProperties": 1
+    },
+    "lint_plugin": {
+      "title": "lint plugin",
+      "description": "One rule plugin: a binary outside this tool that serves lint rules, run beside the built-in ones.\n\nWhere the binary comes from is declared on exactly the same terms as a code generation plugin's \u2014 the same four tiers, in the same words, with the same refusals, enforced by the same code. See the plugin definition for what each tier means and why half a declaration is refused.\n\nThe reason the pinning matters here is its own: a rule that is not pinned can change what it says about a repository between two runs of an unchanged manifest, and the first anybody hears of it is a build that reddened overnight.\n\nThe rules a plugin serves are named by the plugin itself, and each is configured under lint.rules by that id. Run `stele lint --rules` in this directory for the list, which loads these plugins and prints what they serve.\n\nThe parser also checks: no two plugins may share a name, and a name written as a rule id is refused \u2014 the plugin is the binary, the rule ids are its to declare.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "description": "The plugin's name in this manifest, and what every error about it says. It is not a rule id: one plugin may serve several rules, and their ids are the plugin's to declare.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^/]+$",
+          "examples": [
+            "house_rules"
+          ]
+        },
+        "module": {
+          "description": "The Go module path of the command that provides the plugin, as `go install` takes it.",
+          "type": "string",
+          "examples": [
+            "example.com/house/cmd/stele-rule-house"
+          ]
+        },
+        "version": {
+          "description": "The version of module to install. It must be exact \u2014 a version `go install` resolves to one build, written out in full, such as v1.36.12. Anything the module system would resolve at run time (latest, upgrade, patch, a branch name, a bare query) puts the manifest back in the business of generating different bytes on different days.\n\nThe pattern here checks the shape the parser checks: a leading v, a digit, and at least two dots. It does not check that the version exists, which only `go install` can say.",
+          "type": "string",
+          "examples": [
+            "v1.36.12",
+            "v1.36.12-rc.1"
+          ]
+        },
+        "downloads": {
+          "description": "The published binaries of this plugin, one entry per platform. Exactly one entry may match the machine the tool runs on; two matching entries are refused naming both, and a machine no entry covers is refused naming the platforms that are covered \u2014 never a silent fallback to PATH, which is how the un-pinned binary gets back in.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/download"
+          }
+        },
+        "path": {
+          "description": "An explicit path to a binary, interpreted relative to the directory of this manifest \u2014 not to the directory the tool was invoked from, which would mean a different binary depending on where it was run.",
+          "type": "string",
+          "examples": [
+            "tools/stele-rule-house"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "title": "a plugin taken from PATH",
+          "properties": {
+            "module": {
+              "maxLength": 0
+            },
+            "version": {
+              "maxLength": 0
+            },
+            "downloads": {
+              "maxItems": 0
+            },
+            "path": {
+              "maxLength": 0
+            }
+          }
+        },
+        {
+          "title": "a plugin the tool installs, at an exact version",
+          "required": [
+            "module",
+            "version"
+          ],
+          "properties": {
+            "module": {
+              "minLength": 1
+            },
+            "version": {
+              "pattern": "^v[0-9][^.]*\\.[^.]*\\..*$"
+            },
+            "downloads": {
+              "maxItems": 0
+            },
+            "path": {
+              "maxLength": 0
+            }
+          }
+        },
+        {
+          "title": "a plugin the tool downloads, pinned to a digest per platform",
+          "required": [
+            "downloads"
+          ],
+          "properties": {
+            "downloads": {
+              "minItems": 1
+            },
+            "module": {
+              "maxLength": 0
+            },
+            "version": {
+              "maxLength": 0
+            },
+            "path": {
+              "maxLength": 0
+            }
+          }
+        },
+        {
+          "title": "a plugin at a path in this repository",
+          "required": [
+            "path"
+          ],
+          "properties": {
+            "path": {
+              "minLength": 1
+            },
+            "module": {
+              "maxLength": 0
+            },
+            "version": {
+              "maxLength": 0
+            },
+            "downloads": {
+              "maxItems": 0
+            }
+          }
+        }
+      ]
     },
     "lint_rule": {
       "title": "lint rule",

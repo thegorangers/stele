@@ -1,0 +1,11 @@
+# invalid: latest is not a version. A rule that resolves at run time can change
+# what it says about an unchanged repository, and the build reddens overnight
+# with nothing in the repository to explain it.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house_rules
+      module: example.com/house/cmd/stele-rule-house
+      version: latest
