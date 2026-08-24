@@ -229,8 +229,37 @@ func (d Download) Platform() string { return d.OS + "/" + d.Arch }
 type Lint struct {
 	// Ignore lists import paths no rule is applied to. See Config.
 	Ignore []string `yaml:"ignore"`
+	// Plugins are the rule plugins to load beside the built-in rules.
+	Plugins []LintPlugin `yaml:"plugins"`
 	// Rules is what this repository says about individual rules.
 	Rules []LintRule `yaml:"rules"`
+}
+
+// LintPlugin is one rule plugin: a binary outside this tool that serves rules
+// the lint runs beside its own.
+//
+// Where the binary comes from is declared on exactly the same terms as a code
+// generation plugin's — the same four tiers, in the same words, with the same
+// refusals — and the same code enforces it. Two vocabularies for one question
+// would be two sets of mistakes to make, and the question is the same one:
+// which bytes ran. See Plugin for what each tier means.
+//
+// A rule that is not pinned is worse than no rule: it can change what it says
+// about a repository without anything in that repository changing, and the
+// first anybody hears of it is a build that reddened overnight.
+type LintPlugin struct {
+	// Name identifies the plugin in this manifest and in every error about
+	// it. It is not a rule id: one plugin may serve several rules, the ids
+	// are the plugin's to declare, and this is the line a reader has to come
+	// back and edit.
+	Name string `yaml:"name"`
+	// Module and Version are the managed tier, as Plugin describes it.
+	Module  string `yaml:"module"`
+	Version string `yaml:"version"`
+	// Downloads are the published binaries of this plugin, one per platform.
+	Downloads []Download `yaml:"downloads"`
+	// Path is an explicit path to a binary, relative to the manifest.
+	Path string `yaml:"path"`
 }
 
 // LintRule is what a repository says about one rule.

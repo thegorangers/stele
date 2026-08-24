@@ -133,10 +133,13 @@ func (l *Lint) validate() error {
 	if l == nil {
 		return nil
 	}
-	if len(l.Ignore) == 0 && len(l.Rules) == 0 {
+	if len(l.Ignore) == 0 && len(l.Rules) == 0 && len(l.Plugins) == 0 {
 		// As with managed: a block that configures nothing reads as if it
 		// configured something.
-		return fmt.Errorf("lint: at least one of ignore or rules is required")
+		return fmt.Errorf("lint: at least one of ignore, plugins or rules is required")
+	}
+	if err := validateLintPlugins(l.Plugins); err != nil {
+		return err
 	}
 	if err := validateIgnore("lint.ignore", l.Ignore); err != nil {
 		return err
@@ -163,6 +166,52 @@ func (l *Lint) validate() error {
 		}
 	}
 	return nil
+}
+
+// validateLintPlugins checks the rule plugins: that each is named, that no two
+// share a name, and that where its binary comes from is declared the way a
+// code generation plugin's is.
+//
+// The name is refused when it is written as a rule id, because the two are
+// easy to conflate and conflating them is not harmless: a plugin serves rules
+// whose ids it declares itself, so a manifest that names the plugin after one
+// of them describes a relationship the tool cannot honour, and the author
+// would go looking for their severity line in the wrong place.
+func validateLintPlugins(ps []LintPlugin) error {
+	seen := make(map[string]int, len(ps))
+	for i, p := range ps {
+		field := fmt.Sprintf("lint.plugins[%d]", i)
+		if p.Name == "" {
+			return fmt.Errorf("%s.name: missing; a rule plugin is named here, and that name is what "+
+				"every error about it says", field)
+		}
+		if strings.Contains(p.Name, "/") {
+			return fmt.Errorf("%s.name: %q is written as a rule id, and this is the plugin's name, not a rule's; "+
+				"one plugin serves the rules it declares, and each of those is configured under lint.rules by "+
+				"the id the plugin gives it — name the plugin something like %s instead",
+				field, p.Name, strings.ReplaceAll(p.Name, "/", "_"))
+		}
+		if first, dup := seen[p.Name]; dup {
+			return fmt.Errorf("%s.name: %q is already declared by lint.plugins[%d]; a plugin name identifies "+
+				"one binary, and an error naming it would not say which", field, p.Name, first)
+		}
+		seen[p.Name] = i
+		if err := p.source(field).validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// source is where this rule plugin's binary comes from. It is the same
+// declaration a code generation plugin makes, checked by the same code.
+func (p *LintPlugin) source(field string) binarySource {
+	return binarySource{
+		field: field, name: p.Name,
+		module: p.Module, version: p.Version,
+		downloads: p.Downloads, downloadsDeclared: p.Downloads != nil,
+		path: p.Path,
+	}
 }
 
 // checkLintRuleID checks the shape of a rule id: namespace/name, both parts
@@ -314,13 +363,14 @@ func (in *Input) UnmarshalYAML(n *yaml.Node) error {
 // UnmarshalYAML decodes the lint block, normalising ignore to a list.
 func (l *Lint) UnmarshalYAML(n *yaml.Node) error {
 	var aux struct {
-		Ignore stringList `yaml:"ignore"`
-		Rules  []LintRule `yaml:"rules"`
+		Ignore  stringList   `yaml:"ignore"`
+		Plugins []LintPlugin `yaml:"plugins"`
+		Rules   []LintRule   `yaml:"rules"`
 	}
 	if err := decodeStrict(n, &aux); err != nil {
 		return err
 	}
-	*l = Lint{Ignore: aux.Ignore, Rules: aux.Rules}
+	*l = Lint{Ignore: aux.Ignore, Plugins: aux.Plugins, Rules: aux.Rules}
 	return nil
 }
 
@@ -369,6 +419,29 @@ func (p *Plugin) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// UnmarshalYAML decodes a rule plugin. It keeps an explicitly empty downloads
+// list apart from an absent one, for the reason Plugin does.
+func (p *LintPlugin) UnmarshalYAML(n *yaml.Node) error {
+	var aux struct {
+		Name      string      `yaml:"name"`
+		Module    string      `yaml:"module"`
+		Version   string      `yaml:"version"`
+		Downloads *[]Download `yaml:"downloads"`
+		Path      string      `yaml:"path"`
+	}
+	if err := decodeStrict(n, &aux); err != nil {
+		return err
+	}
+	*p = LintPlugin{Name: aux.Name, Module: aux.Module, Version: aux.Version, Path: aux.Path}
+	if aux.Downloads != nil {
+		p.Downloads = *aux.Downloads
+		if p.Downloads == nil {
+			p.Downloads = []Download{}
+		}
+	}
+	return nil
+}
+
 // Tiers a plugin's binary can be declared on, named so that an error can say
 // which two a manifest asked for at once.
 const (
@@ -377,28 +450,55 @@ const (
 	tierPath      = "path"
 )
 
-// tiers returns the tiers this plugin declares, in the order they are
+// binarySource is the part of a plugin declaration that says where its binary
+// comes from, seen apart from what the plugin is for.
+//
+// It exists because there are two kinds of plugin in this manifest — a code
+// generator and a rule — and exactly one question about where either comes
+// from. The tiers, the words and the refusals are shared by being the same
+// code rather than by being written twice and compared by eye; a second
+// implementation would be a second set of mistakes, and the manifest would
+// pin one kind of plugin more carefully than the other for no reason anybody
+// could state.
+//
+// field is the manifest coordinate of the declaration, such as
+// `generate[0].plugins[1]` or `lint.plugins[0]`, so that every message points
+// at the line that has to be edited.
+type binarySource struct {
+	field     string
+	name      string
+	module    string
+	version   string
+	downloads []Download
+	// downloadsDeclared distinguishes an absent downloads key from one
+	// written with no entries. The second is refused by name: read as "no
+	// downloads" it would be a plugin that quietly fell through to a PATH
+	// lookup, which is the one thing the download tier exists to prevent.
+	downloadsDeclared bool
+	path              string
+}
+
+// tiers returns the tiers this declaration uses, in the order they are
 // documented. Emptiness is what decides: a tier is declared when any field
 // belonging to it carries a value, so a half-written tier is still detected as
 // that tier and reported against it rather than silently falling through to
 // the PATH lookup.
-func (p *Plugin) tiers() []string {
+func (b binarySource) tiers() []string {
 	var out []string
-	if p.Module != "" || p.Version != "" {
+	if b.module != "" || b.version != "" {
 		out = append(out, tierModule)
 	}
-	if p.Downloads != nil {
+	if b.downloadsDeclared {
 		out = append(out, tierDownloads)
 	}
-	if p.Path != "" {
+	if b.path != "" {
 		out = append(out, tierPath)
 	}
 	return out
 }
 
-// validateSource checks the declaration that says where a plugin binary comes
-// from: that at most one tier is declared, and that the declared one is
-// complete.
+// validate checks the declaration that says where a binary comes from: that at
+// most one tier is declared, and that the declared one is complete.
 //
 // Two tiers at once is refused before anything else, because every later
 // message would have to guess which of the two the author meant.
@@ -409,12 +509,12 @@ func (p *Plugin) tiers() []string {
 // manifest claimed a version — the exact drift this is here to end. A module
 // without a version asks the tool to choose, and any choice it made would be a
 // choice the manifest does not record.
-func (p *Plugin) validateSource(i, j int) error {
-	declared := p.tiers()
+func (b binarySource) validate() error {
+	declared := b.tiers()
 	if len(declared) > 1 {
-		return fmt.Errorf("generate[%d].plugins[%d]: plugin %q declares both %s and %s; "+
+		return fmt.Errorf("%s: plugin %q declares both %s and %s; "+
 			"a plugin comes from exactly one place, and the tool cannot honour two",
-			i, j, p.Local, declared[0], declared[1])
+			b.field, b.name, declared[0], declared[1])
 	}
 	switch {
 	case len(declared) == 0:
@@ -422,21 +522,21 @@ func (p *Plugin) validateSource(i, j int) error {
 		// claimed to be.
 		return nil
 	case declared[0] == tierDownloads:
-		return p.validateDownloads(i, j)
+		return b.validateDownloads()
 	case declared[0] == tierPath:
 		return nil
 	}
 	switch {
-	case p.Module == "":
-		return fmt.Errorf("generate[%d].plugins[%d].version: %s is declared without a module; "+
-			"a version can only be honoured for a plugin the tool installs itself", i, j, p.Version)
-	case p.Version == "":
-		return fmt.Errorf("generate[%d].plugins[%d].version: missing for plugin %q; "+
-			"a declared module must name the exact version to install", i, j, p.Local)
-	case !exactVersion(p.Version):
-		return fmt.Errorf("generate[%d].plugins[%d].version: %q is not an exact version for plugin %q; "+
+	case b.module == "":
+		return fmt.Errorf("%s.version: %s is declared without a module; "+
+			"a version can only be honoured for a plugin the tool installs itself", b.field, b.version)
+	case b.version == "":
+		return fmt.Errorf("%s.version: missing for plugin %q; "+
+			"a declared module must name the exact version to install", b.field, b.name)
+	case !exactVersion(b.version):
+		return fmt.Errorf("%s.version: %q is not an exact version for plugin %q; "+
 			"write the version to install, such as v1.36.11, so that the manifest states what generated the code",
-			i, j, p.Version, p.Local)
+			b.field, b.version, b.name)
 	}
 	return nil
 }
@@ -455,43 +555,59 @@ func (p *Plugin) validateSource(i, j int) error {
 // time, because it is a defect in the file that every reader can see, and a
 // file that is wrong only on somebody else's machine is the failure mode this
 // whole shape exists to end.
-func (p *Plugin) validateDownloads(i, j int) error {
-	if len(p.Downloads) == 0 {
-		return fmt.Errorf("generate[%d].plugins[%d].downloads: declared with no entries for plugin %q; "+
+func (b binarySource) validateDownloads() error {
+	if len(b.downloads) == 0 {
+		return fmt.Errorf("%s.downloads: declared with no entries for plugin %q; "+
 			"a download tier with no platforms in it pins nothing and would leave the plugin to be found on PATH",
-			i, j, p.Local)
+			b.field, b.name)
 	}
-	seen := make(map[string]int, len(p.Downloads))
-	for k, d := range p.Downloads {
+	seen := make(map[string]int, len(b.downloads))
+	for k, d := range b.downloads {
 		switch {
 		case d.OS == "":
-			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].os: missing for plugin %q; "+
+			return fmt.Errorf("%s.downloads[%d].os: missing for plugin %q; "+
 				"write the GOOS the binary is for, such as linux or darwin, spelled as Go spells it",
-				i, j, k, p.Local)
+				b.field, k, b.name)
 		case d.Arch == "":
-			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].arch: missing for plugin %q; "+
+			return fmt.Errorf("%s.downloads[%d].arch: missing for plugin %q; "+
 				"write the GOARCH the binary is for, such as amd64 or arm64, spelled as Go spells it",
-				i, j, k, p.Local)
+				b.field, k, b.name)
 		case d.URL == "":
-			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].url: missing for plugin %q; "+
+			return fmt.Errorf("%s.downloads[%d].url: missing for plugin %q; "+
 				"a digest pins the bytes of a download, and there is nothing here to download",
-				i, j, k, p.Local)
+				b.field, k, b.name)
 		case d.SHA256 == "":
-			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].sha256: missing for plugin %q; "+
+			return fmt.Errorf("%s.downloads[%d].sha256: missing for plugin %q; "+
 				"a url without a hash is an address, not a pin: whatever the server serves would be run",
-				i, j, k, p.Local)
+				b.field, k, b.name)
 		case !sha256Hex(d.SHA256):
-			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d].sha256: %q is not a sha256 for plugin %q; "+
-				"write the 64 hex characters of the digest of the file at the url", i, j, k, d.SHA256, p.Local)
+			return fmt.Errorf("%s.downloads[%d].sha256: %q is not a sha256 for plugin %q; "+
+				"write the 64 hex characters of the digest of the file at the url", b.field, k, d.SHA256, b.name)
 		}
 		if first, dup := seen[d.Platform()]; dup {
-			return fmt.Errorf("generate[%d].plugins[%d].downloads[%d]: %s is already declared by downloads[%d] "+
+			return fmt.Errorf("%s.downloads[%d]: %s is already declared by downloads[%d] "+
 				"for plugin %q; exactly one entry may match a platform, and the tool cannot honour two",
-				i, j, k, d.Platform(), first, p.Local)
+				b.field, k, d.Platform(), first, b.name)
 		}
 		seen[d.Platform()] = k
 	}
 	return nil
+}
+
+// source is where this code generation plugin's binary comes from.
+func (p *Plugin) source(field string) binarySource {
+	return binarySource{
+		field: field, name: p.Local,
+		module: p.Module, version: p.Version,
+		downloads: p.Downloads, downloadsDeclared: p.Downloads != nil,
+		path: p.Path,
+	}
+}
+
+// validateSource checks where the binary of code generation plugin j of target
+// i comes from.
+func (p *Plugin) validateSource(i, j int) error {
+	return p.source(fmt.Sprintf("generate[%d].plugins[%d]", i, j)).validate()
 }
 
 // sha256Hex reports whether s is a sha256 digest written out in hex. The

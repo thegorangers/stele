@@ -110,3 +110,97 @@ func TestLintIgnoreAcceptsAScalar(t *testing.T) {
 		t.Errorf("Ignore = %v", got)
 	}
 }
+
+// TestLintPluginsArePinnedOnTheSameTerms: a rule that changes its mind between
+// runs is worse than no rule, so a rule plugin is declared exactly as a code
+// generation plugin is — the same tiers, the same words, the same refusals.
+// Two vocabularies for one question would be two sets of mistakes to make.
+func TestLintPluginsArePinnedOnTheSameTerms(t *testing.T) {
+	f, err := config.Load(writeManifest(t, lintPreamble+`lint:
+  plugins:
+    - name: house_rules
+      module: example.com/house/cmd/stele-rule-house
+      version: v1.2.0
+  rules:
+    - id: house/field_comment
+      severity: warning
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Lint.Plugins) != 1 {
+		t.Fatalf("lint.plugins: %d entries", len(f.Lint.Plugins))
+	}
+	p := f.Lint.Plugins[0]
+	if p.Name != "house_rules" || p.Module != "example.com/house/cmd/stele-rule-house" || p.Version != "v1.2.0" {
+		t.Fatalf("lint.plugins[0] = %+v", p)
+	}
+}
+
+// TestLintPluginRefusals holds the pinning discipline to the same standard the
+// code generation plugins are held to, because a rule that is not pinned is a
+// rule that can change what it says without anything in the repository
+// changing.
+func TestLintPluginRefusals(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "a module without a version",
+			body: "    - name: house\n      module: example.com/house\n",
+			want: "exact version",
+		},
+		{
+			name: "a floating version",
+			body: "    - name: house\n      module: example.com/house\n      version: latest\n",
+			want: "not an exact version",
+		},
+		{
+			name: "two tiers at once",
+			body: "    - name: house\n      module: example.com/house\n      version: v1.0.0\n      path: ./bin/house\n",
+			want: "comes from exactly one place",
+		},
+		{
+			name: "a url without a digest",
+			body: "    - name: house\n      downloads:\n        - os: linux\n          arch: amd64\n          url: https://example.com/house\n",
+			want: "not a pin",
+		},
+		{
+			name: "no name",
+			body: "    - module: example.com/house\n      version: v1.0.0\n",
+			want: "name",
+		},
+		{
+			name: "two plugins with one name",
+			body: "    - name: house\n      path: ./a\n    - name: house\n      path: ./b\n",
+			want: "already",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load(writeManifest(t, lintPreamble+"lint:\n  plugins:\n"+tc.body))
+			if err == nil {
+				t.Fatal("must be refused")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("the message must contain %q: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// TestLintPluginNameIsNotARuleID keeps two names apart that are easy to
+// conflate: the plugin is what the manifest declares and what errors call it,
+// and the rule id is what the plugin serves and what configuration names.
+func TestLintPluginNameIsNotARuleID(t *testing.T) {
+	_, err := config.Load(writeManifest(t, lintPreamble+`lint:
+  plugins:
+    - name: house/field_comment
+      path: ./bin/house
+`))
+	if err == nil || !strings.Contains(err.Error(), "rule id") {
+		t.Fatalf("a plugin name that is written as a rule id must be refused, saying so: %v", err)
+	}
+}
