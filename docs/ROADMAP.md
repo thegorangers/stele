@@ -82,7 +82,7 @@ because each has already cost someone time.
   which strips nothing inside a body, so `echo one # two` keeps its hash and
   `a\#b` its backslash, and hands the same body to the shell when it is expanded
   in a recipe. The body is dropped, and refused by name when it holds `buf export`
-  or `go install`, which was the only silent way past this reader's limits;
+  or `go install`;
   refusing every `define` instead would refuse Makefiles it translates correctly,
   one of them in the measured fleet. `.RECIPEPREFIX` is now refused in one shape
   rather than two: the plugin reader used to file it as an unreadable invocation,
@@ -91,6 +91,12 @@ because each has already cost someone time.
   comment, `a\\\#b` is `a\#b` entire, and a backslash with no hash after it is
   left as written. Re-run over the same fleet, every unresolved report and every
   emitted manifest is byte-identical to before.
+
+  "By name" is literal, and the hole it leaves is now stated in `logicalLines`
+  beside the reader's other limits: a body reaching the same command through a
+  variable — `$(BUF) export` — matches no keyword, is dropped like any other
+  body, and nothing says so. Seeing it would mean expanding the variable, which
+  is the thing this reader deliberately does not do.
 
 ## Milestone 2 — releases
 

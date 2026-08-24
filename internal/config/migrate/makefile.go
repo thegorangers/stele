@@ -226,9 +226,22 @@ const makeRecipePrefix = "\t"
 // rests on, and a define/endef body is not read at all: what a body means is
 // decided where the variable is expanded, which this reader does not follow.
 // A body is dropped, and refused outright when it holds an invocation, since
-// that is the only case where dropping it could lose one. Known limit, stated
-// rather than guessed at: a tab-indented line outside any rule is read as a
-// recipe.
+// that is the only case where dropping it could lose one.
+//
+// Two limits are known, and are stated here rather than guessed at:
+//
+//   - A tab-indented line outside any rule is read as a recipe.
+//   - The define refusal is keyword-shaped: it looks for the literal words
+//     `buf export` and `go install`, not for an invocation. A body that
+//     reaches the same command through a variable — `$(BUF) export`, and any
+//     other spelling that only becomes those words when Make expands it — is
+//     dropped in silence, because deciding otherwise means following
+//     expansion, which is exactly what this reader does not do. Narrowing the
+//     refusal to a keyword was the choice: refusing every define would refuse
+//     the many Makefiles whose bodies this reader was never going to read,
+//     and following expansion would be a second Make. The cost is this hole,
+//     and it is a hole: an invocation inside a define, written through a
+//     variable, migrates as if it were not there.
 func logicalLines(s string) ([]string, error) {
 	physical := strings.Split(s, "\n")
 	for _, line := range physical {
@@ -299,6 +312,12 @@ func logicalLines(s string) ([]string, error) {
 // except when the body holds an invocation — and then it is refused by name.
 // Refusing every define instead would refuse the many Makefiles that use one
 // for something this reader never reads.
+//
+// "By name" is literal, and is the limit logicalLines states: the words
+// searched for are `buf export` and `go install` as written. A body that
+// spells one through a variable — `$(BUF) export` — matches neither, is
+// dropped like any other body, and nothing says so. Seeing it would mean
+// expanding the variable, and this reader does not follow expansion.
 func withoutDefineBodies(physical []string) ([]string, error) {
 	var (
 		out   []string

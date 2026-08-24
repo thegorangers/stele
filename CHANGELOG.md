@@ -64,10 +64,11 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   stored verbatim and means whatever the place it is expanded makes it mean;
   the Makefile reader does not follow expansion, so it used to read a body by
   its own indentation and could recover an invocation that never runs, or lose
-  half of one that does, saying nothing either way. That was the one limit of
-  this reader that was silent — `.RECIPEPREFIX` was already refused outright.
+  half of one that does, saying nothing either way.
   A body holding neither word is dropped, which loses nothing the reader was
   going to recover from it, so the ordinary uses of `define` still migrate.
+  The refusal is keyword-shaped, and that is now written down where the
+  reader's other limits are — see *Reports and messages*.
 
 - **A `Makefile` this reader cannot read is refused whichever half reaches it
   first.** `.RECIPEPREFIX` was an error from the export reader and, from the
@@ -85,6 +86,15 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   be saying two things that cannot both be true.
 
 ### Reports and messages
+
+- **The `define` refusal in the `Makefile` reader is documented as
+  keyword-shaped.** It looks for the literal words `buf export` and
+  `go install`, so a body that reaches the same command through a variable —
+  `$(BUF) export` — matches nothing, is dropped like any other body, and
+  nothing says so. Narrowing the refusal to a keyword was the right call over
+  following Make's expansion, but every other limit of that reader was stated
+  in `logicalLines`' doc comment and this one was not. Behaviour is unchanged;
+  what changes is that the hole is now findable by someone reading the reader.
 
 - **`stele migrate` reads a backslash run before a `#` in a `Makefile` as GNU
   Make does.** It had a two-character lookahead, which agreed with Make only on
