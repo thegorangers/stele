@@ -396,8 +396,8 @@ func (m *migration) attribute() {
 func (m *migration) reportOrphans(root string, orphan []string) {
 	if len(orphan) == 0 {
 		if len(m.registryOf[root]) > 0 {
-			m.note("Makefile: %s fills %s, but no file this configuration compiles imports anything from it; nothing was carried over for it",
-				strings.Join(m.registryOf[root], " and "), root)
+			m.note("Makefile: no file this configuration compiles imports anything from %s, which is filled by %s; nothing was carried over for it",
+				root, strings.Join(m.registryOf[root], " and "))
 		}
 		return
 	}
