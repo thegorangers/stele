@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/thegorangers/stele/internal/lint"
 	"gopkg.in/yaml.v3"
 )
 
@@ -118,6 +119,68 @@ func (f *File) validate() error {
 			}
 		}
 	}
+	return f.Lint.validate()
+}
+
+// validate checks the lint block.
+//
+// Rule IDs are checked for shape here and for existence in the lint engine.
+// The split is not squeamishness about an import cycle: this package describes
+// what a manifest may say, and the set of rules that exist is a property of
+// the engine and of whatever rules are loaded beside it. A manifest naming a
+// third-party rule is well formed here and refused there, by a message that
+// can list what is actually loaded.
+func (l *Lint) validate() error {
+	if l == nil {
+		return nil
+	}
+	if len(l.Ignore) == 0 && len(l.Rules) == 0 {
+		// As with managed: a block that configures nothing reads as if it
+		// configured something.
+		return fmt.Errorf("lint: at least one of ignore or rules is required")
+	}
+	if err := validateIgnore("lint.ignore", l.Ignore); err != nil {
+		return err
+	}
+	seen := make(map[string]int, len(l.Rules))
+	for i, r := range l.Rules {
+		if r.ID == "" {
+			return fmt.Errorf("lint.rules[%d].id: missing", i)
+		}
+		if err := lint.CheckID(r.ID); err != nil {
+			return fmt.Errorf("lint.rules[%d].id: %w", i, err)
+		}
+		if first, dup := seen[r.ID]; dup {
+			return fmt.Errorf("lint.rules[%d].id: duplicate configuration for %s, already set by lint.rules[%d]; "+
+				"a rule has one severity, and the tool cannot honour two", i, r.ID, first)
+		}
+		seen[r.ID] = i
+		if r.Severity != "" {
+			if _, err := lint.ParseSeverity(r.Severity); err != nil {
+				return fmt.Errorf("lint.rules[%d].severity: %w", i, err)
+			}
+		}
+		if err := validateIgnore(fmt.Sprintf("lint.rules[%d].ignore", i), r.Ignore); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateIgnore refuses an entry that matches nothing. An empty string is the
+// dangerous one: read as a prefix it would be silently harmless, and read as a
+// path it would be a file nobody has. Either way the author believes they have
+// written an exemption.
+func validateIgnore(field string, entries []string) error {
+	for i, e := range entries {
+		if strings.TrimSpace(e) == "" {
+			return fmt.Errorf("%s[%d]: empty; write an import path, or a prefix of one such as api/legacy", field, i)
+		}
+		if strings.ContainsAny(e, "*?[") {
+			return fmt.Errorf("%s[%d]: %q looks like a glob, and these are not globs; "+
+				"write an import path, or a prefix of one such as api/legacy", field, i, e)
+		}
+	}
 	return nil
 }
 
@@ -222,6 +285,33 @@ func (in *Input) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	*in = Input{Module: aux.Module, Dep: aux.Dep, Paths: aux.Paths}
+	return nil
+}
+
+// UnmarshalYAML decodes the lint block, normalising ignore to a list.
+func (l *Lint) UnmarshalYAML(n *yaml.Node) error {
+	var aux struct {
+		Ignore stringList `yaml:"ignore"`
+		Rules  []LintRule `yaml:"rules"`
+	}
+	if err := decodeStrict(n, &aux); err != nil {
+		return err
+	}
+	*l = Lint{Ignore: aux.Ignore, Rules: aux.Rules}
+	return nil
+}
+
+// UnmarshalYAML decodes one rule's configuration, normalising ignore to a list.
+func (r *LintRule) UnmarshalYAML(n *yaml.Node) error {
+	var aux struct {
+		ID       string     `yaml:"id"`
+		Severity string     `yaml:"severity"`
+		Ignore   stringList `yaml:"ignore"`
+	}
+	if err := decodeStrict(n, &aux); err != nil {
+		return err
+	}
+	*r = LintRule{ID: aux.ID, Severity: aux.Severity, Ignore: aux.Ignore}
 	return nil
 }
 

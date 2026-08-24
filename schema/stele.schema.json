@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.schema.json",
   "title": "stele.yaml",
-  "description": "The stele manifest: the proto modules this repository owns, the ones it takes from elsewhere, and the code it generates from them.\n\nThis schema is not a second description of the format. A test in this repository runs one corpus of example manifests through both this schema and the real parser and fails on any disagreement, so what you read here is what the tool enforces — with the documented exceptions marked \"the parser also checks\" below, which are rules JSON Schema cannot express.",
+  "description": "The stele manifest: the proto modules this repository owns, the ones it takes from elsewhere, and the code it generates from them.\n\nThis schema is not a second description of the format. A test in this repository runs one corpus of example manifests through both this schema and the real parser and fails on any disagreement, so what you read here is what the tool enforces \u2014 with the documented exceptions marked \"the parser also checks\" below, which are rules JSON Schema cannot express.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -45,6 +45,10 @@
       "items": {
         "$ref": "#/$defs/target"
       }
+    },
+    "lint": {
+      "$ref": "#/$defs/lint",
+      "description": "Configuration for `stele lint`.\n\nAbsent means every rule at its own default over every file this repository owns \u2014 not a lint that does nothing.\n\nThe parser also checks: at least one of ignore or rules must be present, and no two rule entries may name the same rule. The lint engine additionally refuses a rule id no loaded rule carries, which this schema cannot express because third-party rules are loaded at run time."
     }
   },
   "$defs": {
@@ -109,7 +113,7 @@
     },
     "address": {
       "title": "git address",
-      "description": "Where a dependency comes from, in one of three forms:\n\n  https://git.example.com/acme/example.git\n  ssh://git@git.example.com/acme/group/example.git\n  gh:acme/example            (a shorthand)\n\nThe shorthand prefixes are configurable. Two are built in — gh: expands to github.com and glab: to gitlab.com, both over HTTPS — and a caller that configures prefixes replaces those defaults entirely, so a manifest may legitimately use a prefix this schema does not know. The transport is part of the host configuration, not of the shorthand, so the same manifest works from a workstation that clones over SSH and from CI that clones over HTTPS.\n\nThere is no git:// form on purpose: it is neither encrypted nor authenticated, and major hosts have disabled it.\n\nThe parser also checks: each segment of the repository path must be a real path element, so \".\" and \"..\" are refused.",
+      "description": "Where a dependency comes from, in one of three forms:\n\n  https://git.example.com/acme/example.git\n  ssh://git@git.example.com/acme/group/example.git\n  gh:acme/example            (a shorthand)\n\nThe shorthand prefixes are configurable. Two are built in \u2014 gh: expands to github.com and glab: to gitlab.com, both over HTTPS \u2014 and a caller that configures prefixes replaces those defaults entirely, so a manifest may legitimately use a prefix this schema does not know. The transport is part of the host configuration, not of the shorthand, so the same manifest works from a workstation that clones over SSH and from CI that clones over HTTPS.\n\nThere is no git:// form on purpose: it is neither encrypted nor authenticated, and major hosts have disabled it.\n\nThe parser also checks: each segment of the repository path must be a real path element, so \".\" and \"..\" are refused.",
       "type": "string",
       "oneOf": [
         {
@@ -172,7 +176,7 @@
           ],
           "properties": {
             "override": {
-              "description": "The file options to synthesise. At least one — a managed block that overrides nothing reads as if it configured something.\n\nAt most one, too, and only because exactly one file option is currently permitted: the parser refuses the same option twice, and with one permitted spelling a second entry can only be a repeat.",
+              "description": "The file options to synthesise. At least one \u2014 a managed block that overrides nothing reads as if it configured something.\n\nAt most one, too, and only because exactly one file option is currently permitted: the parser refuses the same option twice, and with one permitted spelling a second entry can only be a repeat.",
               "type": "array",
               "minItems": 1,
               "maxItems": 1,
@@ -200,7 +204,7 @@
         },
         "paths": {
           "$ref": "#/$defs/stringList",
-          "description": "Narrows the selection, in coordinates relative to the root of the referenced module — this repository's module for module, the producer's module named by the deps entry for dep. Accepts a single string or a list of strings."
+          "description": "Narrows the selection, in coordinates relative to the root of the referenced module \u2014 this repository's module for module, the producer's module named by the deps entry for dep. Accepts a single string or a list of strings."
         }
       },
       "oneOf": [
@@ -236,7 +240,7 @@
     },
     "plugin": {
       "title": "plugin",
-      "description": "One code generator invocation.\n\nWhere the binary comes from is declared, and there are four ways to declare it, ordered by how much of the answer the manifest gives:\n\n  1. module + version — the tool installs that exact version into its own cache with the Go toolchain and verifies the installed binary's own build metadata against it. Only a Go program can be had this way.\n  2. downloads — one entry per platform, each naming a url and the sha256 the download must have. The tool takes the entry matching the machine it runs on, fetches it into its own cache, and verifies the digest before anything is unpacked or run. This is what makes a plugin that is not a Go program genuinely pinnable.\n\n     It is a list, and there is no single-url shorthand, because a digest pins bytes and bytes are per-platform: one url cannot serve linux/amd64 and darwin/arm64. A shorthand would work for whoever wrote the manifest and push the next developer on a different OS back onto an unpinned PATH lookup.\n  3. path — an explicit path to a binary, relative to this manifest. It says where the binary is and nothing about which build it is: no version is pinned and none is claimed.\n  4. none of the above — the name is looked up on PATH, as it always was. The tool did not choose that binary and does not pretend it did.\n\nExactly one may be declared. Two would be two answers to a question with one answer.\n\nHalf a declaration is refused, and the halves are different mistakes. A version without a module asks for a version of nothing while the tool silently runs whatever PATH holds. A module without a version asks the tool to choose, and any choice it made would be one the manifest does not record. A url without a sha256 is an address, not a pin: whatever the server serves would be run. A download entry without an os and an arch says which bytes to run but not which machine they run on.\n\nThe parser also checks: an absolute path is accepted and warned about, because in a committed manifest it resolves on one machine only.\n\nThe parser also checks what the schema cannot: that no two download entries claim the same platform, and that a machine no entry covers is refused rather than quietly falling back to PATH.",
+      "description": "One code generator invocation.\n\nWhere the binary comes from is declared, and there are four ways to declare it, ordered by how much of the answer the manifest gives:\n\n  1. module + version \u2014 the tool installs that exact version into its own cache with the Go toolchain and verifies the installed binary's own build metadata against it. Only a Go program can be had this way.\n  2. downloads \u2014 one entry per platform, each naming a url and the sha256 the download must have. The tool takes the entry matching the machine it runs on, fetches it into its own cache, and verifies the digest before anything is unpacked or run. This is what makes a plugin that is not a Go program genuinely pinnable.\n\n     It is a list, and there is no single-url shorthand, because a digest pins bytes and bytes are per-platform: one url cannot serve linux/amd64 and darwin/arm64. A shorthand would work for whoever wrote the manifest and push the next developer on a different OS back onto an unpinned PATH lookup.\n  3. path \u2014 an explicit path to a binary, relative to this manifest. It says where the binary is and nothing about which build it is: no version is pinned and none is claimed.\n  4. none of the above \u2014 the name is looked up on PATH, as it always was. The tool did not choose that binary and does not pretend it did.\n\nExactly one may be declared. Two would be two answers to a question with one answer.\n\nHalf a declaration is refused, and the halves are different mistakes. A version without a module asks for a version of nothing while the tool silently runs whatever PATH holds. A module without a version asks the tool to choose, and any choice it made would be one the manifest does not record. A url without a sha256 is an address, not a pin: whatever the server serves would be run. A download entry without an os and an arch says which bytes to run but not which machine they run on.\n\nThe parser also checks: an absolute path is accepted and warned about, because in a committed manifest it resolves on one machine only.\n\nThe parser also checks what the schema cannot: that no two download entries claim the same platform, and that a machine no entry covers is refused rather than quietly falling back to PATH.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -261,7 +265,7 @@
           ]
         },
         "version": {
-          "description": "The version of module to install. It must be exact — a version `go install` resolves to one build, written out in full, such as v1.36.12. Anything the module system would resolve at run time (latest, upgrade, patch, a branch name, a bare query) puts the manifest back in the business of generating different bytes on different days.\n\nThe pattern here checks the shape the parser checks: a leading v, a digit, and at least two dots. It does not check that the version exists, which only `go install` can say.",
+          "description": "The version of module to install. It must be exact \u2014 a version `go install` resolves to one build, written out in full, such as v1.36.12. Anything the module system would resolve at run time (latest, upgrade, patch, a branch name, a bare query) puts the manifest back in the business of generating different bytes on different days.\n\nThe pattern here checks the shape the parser checks: a leading v, a digit, and at least two dots. It does not check that the version exists, which only `go install` can say.",
           "type": "string",
           "examples": [
             "v1.36.12",
@@ -269,7 +273,7 @@
           ]
         },
         "downloads": {
-          "description": "The published binaries of this plugin, one entry per platform. Exactly one entry may match the machine the tool runs on; two matching entries are refused naming both, and a machine no entry covers is refused naming the platforms that are covered — never a silent fallback to PATH, which is how the un-pinned binary gets back in.",
+          "description": "The published binaries of this plugin, one entry per platform. Exactly one entry may match the machine the tool runs on; two matching entries are refused naming both, and a machine no entry covers is refused naming the platforms that are covered \u2014 never a silent fallback to PATH, which is how the un-pinned binary gets back in.",
           "type": "array",
           "minItems": 1,
           "items": {
@@ -277,7 +281,7 @@
           }
         },
         "path": {
-          "description": "An explicit path to a binary, interpreted relative to the directory of this manifest — not to the directory the tool was invoked from, which would mean a different binary depending on where it was run.",
+          "description": "An explicit path to a binary, interpreted relative to the directory of this manifest \u2014 not to the directory the tool was invoked from, which would mean a different binary depending on where it was run.",
           "type": "string",
           "examples": [
             "tools/protoc-gen-house"
@@ -426,7 +430,7 @@
     },
     "download": {
       "title": "download",
-      "description": "One published binary of a plugin, for one platform.\n\nos and arch are Go's own spellings — GOOS and GOARCH — because that is what the tool compares them against: runtime.GOOS and runtime.GOARCH, with no translation in between. Accepting a publisher's spelling (x64, macos, aarch64) would need a table nobody can audit, and a table is where a platform gets matched to the wrong bytes while the digest verifies them happily.",
+      "description": "One published binary of a plugin, for one platform.\n\nos and arch are Go's own spellings \u2014 GOOS and GOARCH \u2014 because that is what the tool compares them against: runtime.GOOS and runtime.GOARCH, with no translation in between. Accepting a publisher's spelling (x64, macos, aarch64) would need a table nobody can audit, and a table is where a platform gets matched to the wrong bytes while the digest verifies them happily.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -476,6 +480,96 @@
           "type": "string",
           "examples": [
             "bin/protoc-gen-dart"
+          ]
+        }
+      }
+    },
+    "lint": {
+      "title": "lint",
+      "description": "What this repository says about contract linting.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ignore": {
+          "description": "Import paths no rule is applied to.\n\nEntries are import paths or prefixes of them, matched by whole path components \u2014 never globs. `api/legacy/v1/old.proto` names one file; `api/legacy` names everything under it. There is no glob dialect to get subtly wrong, and no question about whether a wildcard crosses a directory separator.\n\nAccepts a single string or a list of strings.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^*?\\[]+$"
+              }
+            }
+          ],
+          "examples": [
+            "third_party"
+          ]
+        },
+        "rules": {
+          "description": "What this repository says about individual rules. A rule not named here runs at its default severity over every file.\n\nThe parser also checks: no two entries may name the same rule.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/lint_rule"
+          }
+        }
+      },
+      "minProperties": 1
+    },
+    "lint_rule": {
+      "title": "lint rule",
+      "description": "What this repository says about one rule.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "description": "The rule, as `namespace/name`. Rules that ship with this tool live in the reserved `stele` namespace; a third-party rule declares its own. Run `stele lint --rules` for the list that is loaded.\n\nA rule id is a public contract: it appears in this file, so renaming one is a breaking change under the versioning policy. That is why the namespace is here from the first release rather than added at the first collision.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$",
+          "examples": [
+            "stele/enum_value_prefix",
+            "stele/package_version_suffix"
+          ]
+        },
+        "severity": {
+          "description": "What a finding of this rule costs.\n\n`error` fails the run and is what an unconfigured rule already is. `warning` reports the finding and lets the run pass \u2014 this is how a repository adopts lint over contracts that were never linted, in a file a reviewer reads, rather than by adding allow_failure to a CI job nobody looks at. `off` does not run the rule at all.\n\nNote that YAML reads a bare off as false, so it must be quoted.",
+          "enum": [
+            "error",
+            "warning",
+            "off"
+          ]
+        },
+        "ignore": {
+          "description": "Import paths this rule alone is not applied to. Matched exactly as lint.ignore is.\n\nAccepts a single string or a list of strings.",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^*?\\[]+$"
+              }
+            }
           ]
         }
       }

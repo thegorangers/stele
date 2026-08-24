@@ -1,0 +1,10 @@
+# beyond: the block names a field, so it is not empty by JSON Schema's
+# reckoning, but it still configures nothing. That an explicitly empty list is
+# no different from an absent one is a rule about values, not about which
+# fields are present, and minProperties cannot state it.
+version: 1
+modules:
+  - path: api
+lint:
+  ignore: []
+  rules: []

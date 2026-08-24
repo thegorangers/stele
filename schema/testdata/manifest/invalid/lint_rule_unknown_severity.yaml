@@ -1,0 +1,9 @@
+# invalid: severity is one of error, warning, off. Anything else would have to
+# be interpreted, and the interpretation would decide whether a build is red.
+version: 1
+modules:
+  - path: api
+lint:
+  rules:
+    - id: stele/enum_value_prefix
+      severity: relaxed

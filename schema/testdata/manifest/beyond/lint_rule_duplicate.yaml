@@ -1,0 +1,12 @@
+# beyond: JSON Schema's uniqueItems compares whole items, and these two differ
+# in severity. That two entries may not name the same rule is a constraint over
+# one field across items, which the parser checks and the schema cannot state.
+version: 1
+modules:
+  - path: api
+lint:
+  rules:
+    - id: stele/enum_value_prefix
+      severity: warning
+    - id: stele/enum_value_prefix
+      severity: "off"

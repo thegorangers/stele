@@ -1,0 +1,7 @@
+# invalid: a rule entry with no id configures nothing that can be named.
+version: 1
+modules:
+  - path: api
+lint:
+  rules:
+    - severity: warning

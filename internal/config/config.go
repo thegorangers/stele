@@ -1,7 +1,10 @@
 // Package config parses and validates the stele.yaml manifest.
 package config
 
-import "github.com/thegorangers/stele/internal/managed"
+import (
+	"github.com/thegorangers/stele/internal/lint"
+	"github.com/thegorangers/stele/internal/managed"
+)
 
 // File is a parsed stele.yaml manifest.
 type File struct {
@@ -14,6 +17,9 @@ type File struct {
 	Deps []Dep `yaml:"deps"`
 	// Generate lists the code generation targets.
 	Generate []GenTarget `yaml:"generate"`
+	// Lint configures the contract lint. Absent means every rule at its own
+	// default over every file this repository owns.
+	Lint *Lint `yaml:"lint"`
 }
 
 // Module is a proto module owned by this repository.
@@ -209,3 +215,62 @@ type Download struct {
 
 // Platform is the entry's platform as an error message writes it.
 func (d Download) Platform() string { return d.OS + "/" + d.Arch }
+
+// Lint configures the contract lint.
+//
+// The block is optional, and its absence means every rule at its own default
+// over every file this repository owns — not a lint that does nothing. A tool
+// that had to be switched on in the manifest would be switched on by the
+// repositories that need it least.
+//
+// The whole block exists for one reason: a repository adopting lint over
+// contracts that were never linted has findings on the first run, and the
+// mechanism it uses to get to a green build has to be one a reviewer sees.
+// `severity: warning` in a file everybody reads is that mechanism.
+// `allow_failure: true` in a CI job is the thing it replaces, and it is
+// invisible from the repository the rules are about.
+type Lint struct {
+	// Ignore lists import paths no rule is applied to. See Config.
+	Ignore []string `yaml:"ignore"`
+	// Rules is what this repository says about individual rules.
+	Rules []LintRule `yaml:"rules"`
+}
+
+// LintRule is what a repository says about one rule.
+type LintRule struct {
+	// ID names the rule, as `namespace/name`. An ID no rule carries is an
+	// error naming it: the two ways that happens are a typo and a rule that
+	// has been removed, and both mean this file claims a protection or an
+	// exemption that does not exist.
+	ID string `yaml:"id"`
+	// Severity is what a finding of this rule costs: error, warning or off.
+	// Empty means error, which is what an unconfigured rule already is.
+	Severity string `yaml:"severity"`
+	// Ignore lists import paths this rule alone is not applied to.
+	Ignore []string `yaml:"ignore"`
+}
+
+// Config translates the manifest's lint block into the form the engine takes.
+//
+// A nil block is an empty configuration rather than an error, so that every
+// caller does not have to test for absence. Severities are already known to
+// parse: validation refused anything else before this was reachable.
+func (l *Lint) Config() lint.Config {
+	var c lint.Config
+	if l == nil {
+		return c
+	}
+	c.Ignore = l.Ignore
+	if len(l.Rules) == 0 {
+		return c
+	}
+	c.Rules = make(map[string]lint.RuleConfig, len(l.Rules))
+	for _, r := range l.Rules {
+		sev := lint.SeverityError
+		if r.Severity != "" {
+			sev, _ = lint.ParseSeverity(r.Severity)
+		}
+		c.Rules[r.ID] = lint.RuleConfig{Severity: sev, Ignore: r.Ignore}
+	}
+	return c
+}

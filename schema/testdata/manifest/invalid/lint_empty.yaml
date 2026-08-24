@@ -1,0 +1,6 @@
+# invalid: a lint block that configures nothing reads as if it configured
+# something. At least one of ignore or rules is required.
+version: 1
+modules:
+  - path: api
+lint: {}

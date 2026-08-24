@@ -1,0 +1,10 @@
+# invalid: a rule id is namespace/name. A bare name would take an identifier
+# the built-in set may later want, and retrofitting the namespace afterwards
+# is a rename that silently stops matching whoever wrote this file.
+version: 1
+modules:
+  - path: api
+lint:
+  rules:
+    - id: enum_value_prefix
+      severity: warning

@@ -1,0 +1,9 @@
+# invalid: ignore entries are import paths or prefixes of them, not globs.
+# Accepting a glob-looking string and matching it literally would be an
+# exemption the author believes they have written and does not have.
+version: 1
+modules:
+  - path: api
+lint:
+  ignore:
+    - api/**/legacy
