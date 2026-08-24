@@ -1,0 +1,11 @@
+# valid: PATH is genuinely what is meant, and the manifest says so. Every
+# report and every `stele lint --rules` listing will say the rule is not
+# pinned, which is the point of the opt-in: not to forbid the tier, but to stop
+# it being indistinguishable from a pinned one.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: stele-rule-house
+      unpinned: true

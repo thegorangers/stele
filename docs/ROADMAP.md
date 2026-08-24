@@ -306,6 +306,26 @@ every decision below is made against that.
   rubbish, and a signature that could only return findings would report every
   one of those as a rule that found nothing.
 
+### What the first consumer found, and what it cost to fix
+
+Writing the example rule is what turned three gaps in the published interface
+from opinions into observations, and all three were closed while `rule` was
+still unreleased — the only window in which changing it is free:
+
+- **A position had no way back to a descriptor.** The rule walked the source
+  path with field numbers in its own source and covered two kinds of
+  declaration. `File.DescriptorAt` and `File.Comments` cover nine, and the
+  example rule got shorter rather than longer, which is the only evidence that
+  an interface addition was the right one.
+- **A position's meaning was unstated.** A test asserted the comment's line and
+  got the declaration's. `Finding.Pos` now says it is the declaration and why,
+  and `Comment.LeadingPos` gives the other position to the rule that wants it.
+- **The bare-`PATH` tier was accepted for rule plugins.** It exists because the
+  vocabulary is shared with code generation plugins on purpose. It is now
+  refused without `unpinned: true`, and an unpinned plugin is named in every
+  report and every listing: a generator that changes is visible in a diff, and a
+  rule that changes is visible nowhere.
+
 ### The rules, measured before they were chosen
 
 Each rule was run over 35 hand-written `.proto` files from fourteen services of

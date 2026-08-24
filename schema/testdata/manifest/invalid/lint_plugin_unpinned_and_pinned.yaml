@@ -1,0 +1,11 @@
+# invalid: the entry says where its binary comes from and then says nothing
+# pins it. Whichever half a reader believed, the other would be false.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: house_rules
+      module: example.com/house/cmd/stele-rule-house
+      version: v1.2.0
+      unpinned: true

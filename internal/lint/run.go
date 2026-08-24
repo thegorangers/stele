@@ -84,6 +84,11 @@ func ConfigFrom(l *config.Lint) Config {
 // Report is what one lint run produced.
 type Report struct {
 	Result
+	// Notes are things about this run that qualify everything below them but
+	// are not findings: at present, the rule plugins nothing pins. They are
+	// printed above the findings for that reason — a reader who meets them
+	// afterwards has already read the findings as the whole answer.
+	Notes []string
 	// disk maps an import path to the path on disk it was read from, so that
 	// output points at a file a reader can open rather than at a name only
 	// the resolver uses.
@@ -110,6 +115,9 @@ func (r *Report) Failed() bool { return r.Errors > 0 || len(r.Failures) > 0 }
 // and this repository's are the same import path and different files, and a
 // reader in a CI log has to know which one to go to.
 func (r *Report) Write(w io.Writer) {
+	for _, n := range r.Notes {
+		fmt.Fprintln(w, n)
+	}
 	// Failures first. They are the reason the rest of the output is
 	// incomplete, and a reader who sees the findings first reads them as the
 	// whole answer.
@@ -136,6 +144,12 @@ func (r *Report) Summary() string {
 		plural(r.Errors, "error"), plural(r.Warnings, "warning"))
 	if n := len(r.Failures); n > 0 {
 		s += fmt.Sprintf(", and %s did not run", plural(n, "rule check"))
+	}
+	if n := len(r.Notes); n > 0 {
+		// The summary is the line that survives a truncated log, so the fact
+		// that some of the judgement came from a binary nothing pins has to be
+		// on it and not only in the note above.
+		s += fmt.Sprintf(", %s not pinned", plural(n, "rule plugin"))
 	}
 	return s + "\n"
 }
@@ -173,7 +187,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	// not start has to be reported before a network round trip rather than
 	// after one, and the rules it serves have to exist before the engine can
 	// say whether a configured rule id names anything.
-	set, err := loadPlugins(ctx, cfg, dir, opts.CacheRoot)
+	set, unpinned, err := loadPlugins(ctx, cfg, dir, opts.CacheRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +238,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	for _, f := range compiled {
 		files = append(files, f)
 	}
-	rep := &Report{Result: engine.Check(files), disk: disk}
+	rep := &Report{Result: engine.Check(files), disk: disk, Notes: unpinnedNotes(unpinned)}
 	// A run that checked nothing is not a clean run. The two ways to reach
 	// here are an ignore list that grew until it covered everything and a
 	// module path that no longer holds any protos, and both are silent: the
@@ -242,6 +256,11 @@ type Loaded struct {
 	// Plugin is the manifest's name for the plugin serving it, or the empty
 	// string for a rule that ships with this tool.
 	Plugin string
+	// Unpinned says why nothing pins the binary serving this rule, and is
+	// empty for a rule that is pinned or built in. A listing that showed an
+	// unpinned rule the same way it shows a pinned one would be a listing that
+	// omitted the only thing about it a reader has to act on.
+	Unpinned string
 }
 
 // Rules returns every rule a lint run in dir would apply: the ones this build
@@ -270,12 +289,13 @@ func Rules(ctx context.Context, dir, cacheRoot string) ([]Loaded, func(), error)
 	if err != nil {
 		return nil, func() {}, err
 	}
-	set, err := loadPlugins(ctx, cfg, dir, cacheRoot)
+	set, unpinned, err := loadPlugins(ctx, cfg, dir, cacheRoot)
 	if err != nil {
 		return nil, func() {}, err
 	}
 	for _, r := range set.Rules() {
-		out = append(out, Loaded{Rule: r, Plugin: set.PluginFor(r.ID())})
+		name := set.PluginFor(r.ID())
+		out = append(out, Loaded{Rule: r, Plugin: name, Unpinned: unpinned[name]})
 	}
 	return out, func() { set.Close() }, nil
 }
@@ -293,30 +313,66 @@ func Rules(ctx context.Context, dir, cacheRoot string) ([]Loaded, func(), error)
 // a run missing a rule has not checked what that rule checks, and reporting
 // the remaining rules' silence as a clean repository is the failure this whole
 // tool exists to remove.
-func loadPlugins(ctx context.Context, cfg *config.File, dir, cacheRoot string) (*host.Set, error) {
+// The second return value maps a plugin name to why nothing pins it, for the
+// plugins that declared `unpinned: true`. The manifest has already refused the
+// tier without that opt-in; what is left is to make sure the opt-in is not
+// something a reader has to go back to the manifest to discover.
+func loadPlugins(ctx context.Context, cfg *config.File, dir, cacheRoot string) (*host.Set, map[string]string, error) {
 	if cfg.Lint == nil || len(cfg.Lint.Plugins) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	cache := plugin.Cache{Root: cacheRoot}
 	plugins := make([]host.Plugin, 0, len(cfg.Lint.Plugins))
+	var unpinned map[string]string
 	for _, p := range cfg.Lint.Plugins {
 		if cache.Root == "" && (p.Module != "" || len(p.Downloads) > 0) {
 			tier := "downloads, which this tool fetches into its own cache"
 			if p.Module != "" {
 				tier = fmt.Sprintf("%s@%s, which this tool installs into its own cache", p.Module, p.Version)
 			}
-			return nil, fmt.Errorf("lint plugin %q: it declares %s, but this run was given no cache root", p.Name, tier)
+			return nil, nil, fmt.Errorf("lint plugin %q: it declares %s, but this run was given no cache root", p.Name, tier)
 		}
 		bin, err := cache.Resolve(ctx, plugin.Spec{
 			Name: p.Name, Module: p.Module, Version: p.Version,
 			Downloads: pluginDownloads(p.Downloads), Path: p.Path, Dir: dir,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("lint: %w", err)
+			return nil, nil, fmt.Errorf("lint: %w", err)
+		}
+		if bin.Origin == plugin.OriginPath {
+			if unpinned == nil {
+				unpinned = make(map[string]string, 1)
+			}
+			unpinned[p.Name] = fmt.Sprintf("not pinned: it is whatever %s resolves to on PATH, which today is %s",
+				p.Name, bin.Path)
 		}
 		plugins = append(plugins, host.Plugin{Name: bin.Name, Path: bin.Path})
 	}
-	return host.Load(ctx, plugins)
+	set, err := host.Load(ctx, plugins)
+	if err != nil {
+		return nil, nil, err
+	}
+	return set, unpinned, nil
+}
+
+// unpinnedNotes turns the unpinned plugins into the lines a report opens with,
+// in a stable order: a report whose bytes move between runs is not diffable.
+func unpinnedNotes(unpinned map[string]string) []string {
+	if len(unpinned) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(unpinned))
+	for name := range unpinned {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	notes := make([]string, 0, len(names))
+	for _, name := range names {
+		notes = append(notes, fmt.Sprintf("stele: lint: the rule plugin %q is %s. "+
+			"What it says about this repository can change with nothing in the repository changing",
+			name, unpinned[name]))
+	}
+	return notes
 }
 
 // pluginDownloads translates the manifest's download entries into the

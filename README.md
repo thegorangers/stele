@@ -292,6 +292,32 @@ The reason is not symmetry for its own sake. A rule that is not pinned can
 change what it says about an unchanged repository between two runs, and the
 first anybody hears of it is a build that reddened overnight.
 
+**The one difference is the bare-`PATH` tier, which is refused unless the
+manifest says it means it.** The vocabulary is shared because the question is
+the same one — which bytes ran — and two vocabularies would be two sets of
+mistakes to make. What is not shared is the consequence of answering it with
+"whatever this machine has": a generator that changes writes different
+generated code, and the change is in a diff somebody reviews; a rule that
+changes writes a different *judgement*, and a judgement leaves no artefact
+anywhere. So the tier stays spellable and stops being usable by accident:
+
+```yaml
+lint:
+  plugins:
+    - name: stele-rule-house
+      unpinned: true          # yes, really: whatever PATH resolves to
+```
+
+That is one reviewed line in a file people read — the same mechanism
+`severity: warning` is — and it is not the end of it. Every run opens its
+report with the plugin named and the reason, the summary counts it, and
+`stele lint --rules` prints it under the rule:
+
+```
+  house/field_comment                  every field carries a comment  (from the plugin "stele-rule-house")
+                                         not pinned: it is whatever stele-rule-house resolves to on PATH, which today is /usr/local/bin/stele-rule-house
+```
+
 Writing one is writing a `Check` method. The interface lives in the published
 [`rule`](rule) package — the only package of this repository that is not
 internal, because a rule elsewhere has to be able to import the interface it

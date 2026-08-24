@@ -40,6 +40,49 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ### Added
 
+- **`rule.File` can get from a source position back to what the author wrote.**
+  `DescriptorAt` walks the source path a location carries to the declaration it
+  names — message, field, nested type, enum, enum value, oneof, extension,
+  service, method — and answers nil rather than guessing when the path names
+  something that is not a declaration. `Comments` yields every comment in the
+  file with that declaration and a name for it. Before this, a rule about
+  comments wrote the walk itself with descriptor-proto field numbers spelled
+  out; the one rule written against the interface handled two kinds out of nine
+  and named the file for the rest. The example rule's `Check` is now a loop over
+  `f.Comments()` and twenty-five lines shorter.
+- **`unpinned: true` on a `lint.plugins` entry**, and it is now required for the
+  bare-`PATH` tier — see *Refused input*. Every run opens its report with the
+  plugin named and the reason, the summary counts it, and `stele lint --rules`
+  prints it beneath the rule. An unpinned rule that looked like a pinned one in
+  every output was the part worth fixing: a rule can then start disagreeing with
+  itself and nothing says so.
+
+### Refused input
+
+- **A `lint.plugins` entry that declares no `module`, `downloads` or `path` is
+  refused** unless it also says `unpinned: true`. Such an entry is whatever the
+  machine's `PATH` resolves the name to. The vocabulary is deliberately shared
+  with code generation plugins, and it stays shared — what differs is the
+  consequence: a generator that changes writes different generated code into a
+  diff somebody reviews, and a rule that changes writes a different judgement,
+  which leaves no artefact at all. The error says how to pin it and how to opt
+  in. `unpinned: true` beside a declared tier is refused too: the manifest would
+  be saying two things that cannot both be true.
+
+### Reports and messages
+
+- **A finding's position means the declaration, not the comment above it**, and
+  it now says so on `Finding.Pos`, on `Position` and in the README. Nothing
+  stated it before, so two rules could choose differently and give one
+  repository a report whose lines meant different things on different lines. A
+  rule that really is reporting a comment takes the new `Comment.LeadingPos` —
+  the first line of the comment block — because a decision that leaves the other
+  position unreachable is a limitation rather than a decision.
+
+  All of this is in the published `rule` package, which has not been released:
+  under [RELEASING.md](RELEASING.md) the same change after a release would be
+  breaking, and there was exactly one window in which it was free.
+
 - **`stele lint`** — a first slice of contract linting: an engine, a rule
   interface, eight rules and a command. It compiles the protos this repository
   owns and reports findings as `path:line:col: severity: rule: message` with

@@ -260,6 +260,24 @@ type LintPlugin struct {
 	Downloads []Download `yaml:"downloads"`
 	// Path is an explicit path to a binary, relative to the manifest.
 	Path string `yaml:"path"`
+	// Unpinned admits, in the manifest, that this plugin is whatever the
+	// machine's PATH resolves the name to.
+	//
+	// It is the one place a rule plugin is declared on different terms from a
+	// code generation plugin, and the difference is in the consequence rather
+	// than in the vocabulary. Both tiers answer the same question — which
+	// bytes ran — and a generator that answers it with "whatever is on this
+	// machine" produces different generated code, which lands in the diff
+	// somebody reviews. A rule that answers it that way produces a different
+	// judgement, and a judgement leaves no artefact: the build reddens or
+	// greens overnight and nothing in the repository explains it.
+	//
+	// So the tier stays spellable — removing it would fork a vocabulary that
+	// is shared on purpose — and it is not usable by accident. Saying it here
+	// is one reviewed line in a file people read, the same mechanism
+	// `severity: warning` is, and the run says it out loud on every report and
+	// every listing rather than leaving the reader to come back and check.
+	Unpinned bool `yaml:"unpinned"`
 }
 
 // LintRule is what a repository says about one rule.

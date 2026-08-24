@@ -1,0 +1,10 @@
+# invalid: a rule plugin that declares nothing is whatever PATH resolves the
+# name to, which is not pinned. A lint's whole job is to be the same judge on
+# two machines, and this one can disagree with itself with nothing in the
+# manifest changing. Say `unpinned: true` if PATH is genuinely what is meant.
+version: 1
+modules:
+  - path: api
+lint:
+  plugins:
+    - name: stele-rule-house

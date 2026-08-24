@@ -199,8 +199,37 @@ func validateLintPlugins(ps []LintPlugin) error {
 		if err := p.source(field).validate(); err != nil {
 			return err
 		}
+		if err := checkLintPluginPinned(field, p); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// checkLintPluginPinned refuses the bare-PATH tier unless the manifest says
+// out loud that it means it.
+//
+// The tier exists because a rule plugin is declared in the same words a code
+// generation plugin is, and that sharing is deliberate. What is not shared is
+// what an unpinned answer costs: a generator that changes writes different
+// code into a diff somebody reviews, and a rule that changes writes a
+// different judgement into nothing at all.
+func checkLintPluginPinned(field string, p LintPlugin) error {
+	declared := p.Module != "" || len(p.Downloads) > 0 || p.Path != ""
+	switch {
+	case declared && p.Unpinned:
+		return fmt.Errorf("%s.unpinned: %q already says where its binary comes from, and unpinned says the "+
+			"opposite; remove whichever of the two is not true", field, p.Name)
+	case declared, p.Unpinned:
+		return nil
+	}
+	return fmt.Errorf("%s: %q declares no module, downloads or path, so the rule that judges this "+
+		"repository is whatever %q resolves to on PATH — which is not pinned, and can say different things "+
+		"on two machines with nothing in this file changing. Pin it with module and version, with downloads "+
+		"and a sha256 per platform, or with a path in this repository. If PATH is genuinely what is meant, "+
+		"write `unpinned: true` beside the name: every report and every `stele lint --rules` listing will "+
+		"then say the rule is not pinned",
+		field, p.Name, p.Name)
 }
 
 // source is where this rule plugin's binary comes from. It is the same
@@ -428,11 +457,13 @@ func (p *LintPlugin) UnmarshalYAML(n *yaml.Node) error {
 		Version   string      `yaml:"version"`
 		Downloads *[]Download `yaml:"downloads"`
 		Path      string      `yaml:"path"`
+		Unpinned  bool        `yaml:"unpinned"`
 	}
 	if err := decodeStrict(n, &aux); err != nil {
 		return err
 	}
-	*p = LintPlugin{Name: aux.Name, Module: aux.Module, Version: aux.Version, Path: aux.Path}
+	*p = LintPlugin{Name: aux.Name, Module: aux.Module, Version: aux.Version, Path: aux.Path,
+		Unpinned: aux.Unpinned}
 	if aux.Downloads != nil {
 		p.Downloads = *aux.Downloads
 		if p.Downloads == nil {

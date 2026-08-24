@@ -204,3 +204,66 @@ func TestLintPluginNameIsNotARuleID(t *testing.T) {
 		t.Fatalf("a plugin name that is written as a rule id must be refused, saying so: %v", err)
 	}
 }
+
+// TestABarePathRulePluginIsRefused is the one place a rule plugin is declared
+// on different terms from a code generation plugin, and the difference is
+// deliberate.
+//
+// The vocabulary is shared because the question is the same one — which bytes
+// ran — and two vocabularies would be two sets of mistakes. What differs is the
+// consequence of answering it with "whatever is on this machine's PATH". A
+// generator that changed produces different generated code, and the change is
+// in the diff somebody reviews. A rule that changed produces a different
+// judgement, and there is no artefact of it anywhere: the build reddens or
+// greens overnight with nothing in the repository to explain it. So the tier is
+// still spellable, and it is not usable by accident.
+func TestABarePathRulePluginIsRefused(t *testing.T) {
+	_, err := config.Load(writeManifest(t, lintPreamble+`lint:
+  plugins:
+    - name: stele-rule-house
+`))
+	if err == nil {
+		t.Fatal("a rule plugin that is whatever PATH resolves must not load silently")
+	}
+	for _, want := range []string{"PATH", "not pinned", "unpinned: true"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the message must contain %q, so the reader can both understand and act: %v", want, err)
+		}
+	}
+}
+
+// TestABarePathRulePluginIsAllowedWhenSaidOutLoud. The opt-in is one reviewed
+// line in a file people read, which is the same mechanism `severity: warning`
+// uses: the point is not to forbid the tier but to stop it being invisible.
+func TestABarePathRulePluginIsAllowedWhenSaidOutLoud(t *testing.T) {
+	f, err := config.Load(writeManifest(t, lintPreamble+`lint:
+  plugins:
+    - name: stele-rule-house
+      unpinned: true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := f.Lint.Plugins[0]; !p.Unpinned {
+		t.Errorf("lint.plugins[0] = %+v; the opt-in must be readable by the run that has to announce it", p)
+	}
+}
+
+// TestUnpinnedOnAPinnedTierIsRefused. A manifest that says both is a manifest
+// whose reader cannot tell which half is true, and the half that is false is
+// the one somebody relied on.
+func TestUnpinnedOnAPinnedTierIsRefused(t *testing.T) {
+	for _, tier := range []string{
+		"      module: example.com/house\n      version: v1.0.0\n",
+		"      path: ./bin/house\n",
+	} {
+		_, err := config.Load(writeManifest(t, lintPreamble+
+			"lint:\n  plugins:\n    - name: house\n      unpinned: true\n"+tier))
+		if err == nil {
+			t.Fatalf("declaring both a tier and unpinned must be refused:\n%s", tier)
+		}
+		if !strings.Contains(err.Error(), "unpinned") {
+			t.Errorf("the message must name the field that contradicts the tier: %v", err)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package lint_test
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -134,5 +135,98 @@ func TestARulePluginNeedingTheCacheSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cache root") {
 		t.Errorf("the error must say what is missing:\n%v", err)
+	}
+}
+
+// onPath copies the external rule to a directory of its own and puts that
+// directory on PATH under a plain name, so the manifest can declare it the way
+// the bare-PATH tier is declared: by name and nothing else.
+func onPath(t *testing.T) string {
+	t.Helper()
+	src, err := os.ReadFile(buildExampleRule(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	name := "stele-rule-example"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	return "stele-rule-example"
+}
+
+const unpinnedManifest = "lint:\n  plugins:\n    - name: stele-rule-example\n      unpinned: true\n"
+
+// TestAnUnpinnedRuleIsVisibleInTheRun. The tier is allowed with an opt-in, and
+// an opt-in that only lives in the manifest would leave the report of a run
+// indistinguishable from one whose rules were all pinned — which is exactly the
+// state the reader has to be able to tell apart, because it is the one where a
+// finding can appear or vanish with nothing in the repository changing.
+func TestAnUnpinnedRuleIsVisibleInTheRun(t *testing.T) {
+	name := onPath(t)
+	dir := repo(t, oneModule+unpinnedManifest,
+		map[string]string{"api/example/v1/order.proto": todoProto})
+	rep, err := lint.Run(context.Background(), lint.Options{Dir: dir, NoLock: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	rep.Write(&out)
+	for _, want := range []string{name, "not pinned"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the run output must say %q:\n%s", want, out.String())
+		}
+	}
+	if !strings.Contains(rep.Summary(), "not pinned") {
+		t.Errorf("the summary must say the run was not fully pinned: %q", rep.Summary())
+	}
+}
+
+// TestAnUnpinnedRuleIsVisibleInTheListing. `stele lint --rules` is what
+// somebody reads to find out which rules judge this repository; a rule listed
+// there without saying that nothing pins it reads as one that is pinned.
+func TestAnUnpinnedRuleIsVisibleInTheListing(t *testing.T) {
+	onPath(t)
+	dir := repo(t, oneModule+unpinnedManifest,
+		map[string]string{"api/example/v1/order.proto": todoProto})
+	rules, stop, err := lint.Rules(context.Background(), dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for _, r := range rules {
+		switch {
+		case r.ID() == "example/no_todo":
+			if r.Unpinned == "" {
+				t.Error("the external rule is whatever PATH resolves to, and the listing says nothing about it")
+			}
+		case r.Unpinned != "":
+			t.Errorf("built-in rule %s is listed as unpinned: %q", r.ID(), r.Unpinned)
+		}
+	}
+}
+
+// TestADeclaredRuleIsNotAnnounced. A note printed over every run would be a
+// note nobody reads, and the whole value of this one is that it is unusual.
+// The tier here is `path`, which stele does not verify either — what it does
+// do is name one binary in a line a reviewer sees, which is the difference the
+// announcement is about. What `path` does and does not promise is in the
+// README's trust section.
+func TestADeclaredRuleIsNotAnnounced(t *testing.T) {
+	dir := repo(t, oneModule+"lint:\n  plugins:\n    - name: example\n      path: "+
+		filepath.ToSlash(buildExampleRule(t))+"\n",
+		map[string]string{"api/example/v1/order.proto": todoProto})
+	rep, err := lint.Run(context.Background(), lint.Options{Dir: dir, NoLock: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	rep.Write(&out)
+	if strings.Contains(out.String(), "not pinned") || strings.Contains(rep.Summary(), "not pinned") {
+		t.Errorf("a run whose plugins are all declared says nothing about pinning:\n%s%s", out.String(), rep.Summary())
 	}
 }

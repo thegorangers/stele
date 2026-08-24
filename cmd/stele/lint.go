@@ -69,6 +69,14 @@ Rules from outside this repository:
         - id: house/field_comment
           severity: warning
 
+  A plugin that declares nothing -- neither module and version, nor downloads
+  with a sha256, nor a path in this repository -- is whatever the machine's
+  PATH resolves the name to, and that is refused: a rule that is not pinned can
+  say different things on two machines with nothing in the manifest changing,
+  and a lint's whole job is to be the same judge twice. If PATH is genuinely
+  what is meant, say so with unpinned: true beside the name; the run and
+  stele lint --rules then say the rule is not pinned, every time.
+
   Its rules run beside the built-ins over the same files and are configured the
   same way. A rule that cannot be loaded, dies, hangs or answers with rubbish
   fails the run naming the rule, the plugin and the file: a rule that did not
@@ -168,6 +176,12 @@ func writeRules(ctx context.Context, w io.Writer, dir, cacheRoot string) error {
 			origin = fmt.Sprintf("  (from the plugin %q)", r.Plugin)
 		}
 		fmt.Fprintf(w, "  %-36s %s%s\n", r.ID(), r.Description(), origin)
+		// An unpinned rule listed the way a pinned one is would be the one
+		// thing in this listing a reader has to act on, printed as if it were
+		// not there.
+		if r.Unpinned != "" {
+			fmt.Fprintf(w, "  %-36s   %s\n", "", r.Unpinned)
+		}
 	}
 	return nil
 }
