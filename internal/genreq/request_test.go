@@ -329,7 +329,7 @@ func TestBuild_AppliesManagedOptions(t *testing.T) {
 	}
 
 	req, err := genreq.Build(files, genreq.Target{
-		Managed: &managed.Config{GoPackagePrefix: managed.Override{Value: "example.com/gen"}},
+		Managed: &managed.Config{GoPackagePrefix: []managed.Override{{Value: "example.com/gen"}}},
 	})
 	if err != nil {
 		t.Fatal(err)

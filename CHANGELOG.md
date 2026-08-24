@@ -57,6 +57,24 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   every output was the part worth fixing: a rule can then start disagreeing with
   itself and nothing says so.
 
+- **`go_package_prefix` can be overridden once per path**, instead of once per
+  target. A repository whose generated Go lives under more than one import
+  prefix could not be expressed at all before; migrating a `buf.gen.yaml` that
+  declares several path-scoped overrides produced a manifest this tool then
+  refused to load.
+
+  Which of several matching overrides applies to a file was measured against
+  the reference tool at 1.48.0 rather than reasoned about: it is the **last**
+  matching entry in declaration order, not the most specific one. Reversing
+  the order of three overrides — unscoped, `two`, `two/deep` — over the same
+  three files changed every answer. Order in `managed.override` is therefore
+  meaning, and it is the one place in the manifest where order is. A selector
+  matches on element boundaries and may name a file as well as a directory,
+  both also measured. The parity corpus exercises it: `repos/managed` declares
+  four overrides, with the narrow `parity/order/v1` deliberately ahead of the
+  broader `parity/order`, so a reading that preferred the most specific
+  selector fails there.
+
 ### Internal
 
 - **The reference tool's pin lives in one file.** `test/parity/corpus.yaml` now
@@ -101,6 +119,17 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   which leaves no artefact at all. The error says how to pin it and how to opt
   in. `unpinned: true` beside a declared tier is refused too: the manifest would
   be saying two things that cannot both be true.
+
+- **Two `managed.override` entries for one file option at one path are
+  refused**, whether their values agree or not. The reference tool takes the
+  last of the two in silence; one of the lines then describes output nothing
+  ever has. Overriding one option at *different* paths is what is now allowed,
+  and is the point.
+
+- **An override `path` with a leading or trailing slash is refused.** The
+  reference tool refuses both spellings, so accepting them would produce a
+  manifest that cannot be written back out as a configuration the other tool
+  reads.
 
 ### Reports and messages
 

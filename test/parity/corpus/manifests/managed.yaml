@@ -10,9 +10,24 @@ modules:
 generate:
   - name: go
     managed:
+      # Four overrides of one file option, scoped by path. The order is
+      # meaning: a file matched by several takes the LAST of them, which is
+      # what the reference tool does. parity/order/v1 is declared BEFORE the
+      # broader parity/order on purpose — every order file matches both, and
+      # the broader one wins, so a reading that preferred the most specific
+      # selector would fail here and only here.
       override:
         - file_option: go_package_prefix
           value: github.com/example/parity/gen
+        - file_option: go_package_prefix
+          path: parity/order/v1
+          value: github.com/example/parity/gen/orderv1
+        - file_option: go_package_prefix
+          path: parity/order
+          value: github.com/example/parity/gen/order
+        - file_option: go_package_prefix
+          path: parity/internal
+          value: github.com/example/parity/gen/internal
     # Two inputs, one per module root. They are never merged into a single
     # generation request, and the reference tool's two `inputs` entries are
     # what that is being measured against.

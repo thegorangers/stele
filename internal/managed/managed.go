@@ -37,7 +37,12 @@ type Override struct {
 // from the file: where the generated Go code will live.
 type Config struct {
 	// GoPackagePrefix is joined with the file's directory to form go_package.
-	GoPackagePrefix Override
+	//
+	// It is a list because one repository can put its generated Go under more
+	// than one import prefix, and a path-scoped override is how that is said.
+	// The order is the order the manifest declares, and it is meaning: see
+	// selectOverride.
+	GoPackagePrefix []Override
 }
 
 // Apply rewrites fd's options in place.
@@ -71,9 +76,40 @@ func Apply(fd *descriptorpb.FileDescriptorProto, cfg Config) {
 	opts.PhpMetadataNamespace = proto.String(strings.Join(append(titleEach(parts), "GPBMetadata"), `\`))
 	opts.RubyPackage = proto.String(strings.Join(titleEach(parts), "::"))
 
-	if v := goPackage(fd.GetName(), cfg.GoPackagePrefix); v != "" {
+	if v := goPackage(fd.GetName(), selectOverride(fd.GetName(), cfg.GoPackagePrefix)); v != "" {
 		opts.GoPackage = proto.String(v)
 	}
+}
+
+// selectOverride picks the override that applies to a file: the LAST one whose
+// path matches, in the order the manifest declares them.
+//
+// Last, not most specific. That was measured against the reference tool at
+// 1.48.0 rather than reasoned about, on a workspace of one/v1, two/v1 and
+// two/deep/v1 under one module root:
+//
+//   - declared as (no path), two, two/deep, the file two/deep/v1/c.proto came
+//     out under the two/deep prefix and two/v1/b.proto under the two prefix;
+//   - with the same three entries in the opposite order, every file came out
+//     under the unscoped prefix.
+//
+// Reversing the order alone changed the answer, so specificity decides
+// nothing and position decides everything. A selector may also name a file
+// rather than a directory — path: two/v1/b.proto matched exactly that file —
+// which underPath already allows, and it matches on element boundaries: a
+// selector of "tw" reached no file under "two/".
+//
+// No match leaves the option alone, which is also measured: a file matched by
+// no override came out with no go_package at all, and protoc-gen-go then
+// refused to generate for it.
+func selectOverride(file string, overrides []Override) Override {
+	var out Override
+	for _, o := range overrides {
+		if underPath(file, o.Path) {
+			out = o
+		}
+	}
+	return out
 }
 
 // goPackage returns the go_package for a file, or "" when the override does

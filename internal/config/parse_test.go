@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/thegorangers/stele/internal/config"
+	"github.com/thegorangers/stele/internal/managed"
 )
 
 // write puts the given YAML into a temporary stele.yaml and returns its path.
@@ -346,7 +347,8 @@ generate:
 	}
 
 	mc := got.Config()
-	if mc.GoPackagePrefix.Path != "acme" || mc.GoPackagePrefix.Value != "example.com/acme/gen" {
+	if len(mc.GoPackagePrefix) != 1 ||
+		mc.GoPackagePrefix[0].Path != "acme" || mc.GoPackagePrefix[0].Value != "example.com/acme/gen" {
 		t.Fatalf("Config() = %#v, want the prefix override carried over", mc)
 	}
 }
@@ -694,6 +696,88 @@ generate:
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoad_PathScopedManagedOverrides pins that one file option may be
+// overridden several times, once per path.
+//
+// Declaring it once was a manifest limitation, not a corpus one: the reference
+// tool accepts several path-scoped overrides of go_package_prefix, and a
+// repository that splits its generated Go across two import prefixes cannot be
+// migrated without them. Order is meaning, and is preserved: the reference
+// tool applies the LAST matching entry, not the most specific one.
+func TestLoad_PathScopedManagedOverrides(t *testing.T) {
+	f := mustLoad(t, `
+version: 1
+modules:
+  - path: api
+generate:
+  - name: go
+    managed:
+      override:
+        - file_option: go_package_prefix
+          value: example.com/gen
+        - file_option: go_package_prefix
+          path: acme/widget
+          value: example.com/widget/gen
+    inputs:
+      - module: api
+    plugins:
+      - local: protoc-gen-go
+        out: gen
+`)
+	want := []managed.Override{
+		{Path: "", Value: "example.com/gen"},
+		{Path: "acme/widget", Value: "example.com/widget/gen"},
+	}
+	if got := f.Generate[0].Managed.Config().GoPackagePrefix; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Config().GoPackagePrefix =\n%#v\nwant\n%#v", got, want)
+	}
+}
+
+// TestLoad_RefusesRepeatedManagedOverridePath refuses two overrides of one
+// file option that select the same path, and refuses a path spelled in a way
+// the reference tool refuses too.
+//
+// The reference tool takes the last of two entries for one path silently. This
+// tool refuses: one of the two lines describes output nothing will ever have,
+// and a dead line in a committed manifest is the kind that gets edited by
+// somebody who then wonders why nothing changed.
+func TestLoad_RefusesRepeatedManagedOverridePath(t *testing.T) {
+	const head = "version: 1\nmodules:\n  - path: api\ngenerate:\n  - name: go\n    managed:\n      override:\n"
+	const tail = "    inputs:\n      - module: api\n    plugins:\n      - local: protoc-gen-go\n        out: gen\n"
+	for _, tc := range []struct{ name, overrides, want string }{
+		{
+			"same path twice",
+			"        - file_option: go_package_prefix\n          path: acme\n          value: example.com/a\n        - file_option: go_package_prefix\n          path: acme\n          value: example.com/b\n",
+			"duplicate",
+		},
+		{
+			"no path twice",
+			"        - file_option: go_package_prefix\n          value: example.com/a\n        - file_option: go_package_prefix\n          value: example.com/b\n",
+			"duplicate",
+		},
+		{
+			"leading slash",
+			"        - file_option: go_package_prefix\n          path: /acme\n          value: example.com/a\n",
+			"generate[0].managed.override[0].path",
+		},
+		{
+			"trailing slash",
+			"        - file_option: go_package_prefix\n          path: acme/\n          value: example.com/a\n",
+			"generate[0].managed.override[0].path",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load(write(t, head+tc.overrides+tail))
+			if err == nil {
+				t.Fatalf("want an error naming %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not name %q", err, tc.want)
 			}
 		})
 	}

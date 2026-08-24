@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -296,6 +297,13 @@ func (m *Managed) validate(i int) error {
 		// leaving the author to find out from a diff.
 		return fmt.Errorf("generate[%d].managed.override: at least one override is required", i)
 	}
+	// Keyed by the option AND the path it is scoped to: one option may be
+	// overridden once per path, because a repository can put its generated
+	// code under more than one import prefix, and the path selector is how
+	// that is said. Two entries for one path are still refused — the
+	// reference tool takes the last of them in silence, and a manifest line
+	// that describes output nothing will ever have is the kind somebody edits
+	// and then wonders why nothing changed.
 	seen := make(map[string]bool, len(m.Override))
 	for j, o := range m.Override {
 		switch {
@@ -305,13 +313,33 @@ func (m *Managed) validate(i int) error {
 			return fmt.Errorf("generate[%d].managed.override[%d].file_option: %s is not a file option this tool synthesises (known: %s)",
 				i, j, o.FileOption, strings.Join(fileOptions, ", "))
 		case o.Value == "":
+			// The reference tool reads an empty value as "switch this option
+			// off for these files", and the files it matches then come out
+			// with no go_package at all — measured at 1.48.0, where
+			// protoc-gen-go refused to generate for them. There is nothing
+			// to express here that is worth expressing.
 			return fmt.Errorf("generate[%d].managed.override[%d].value: missing for file option %s", i, j, o.FileOption)
-		case seen[o.FileOption]:
-			return fmt.Errorf("generate[%d].managed.override[%d].file_option: duplicate override for %s", i, j, o.FileOption)
+		case strings.HasPrefix(o.Path, "/") || strings.HasSuffix(o.Path, "/"):
+			// The reference tool refuses both spellings, so accepting them
+			// here would make a manifest that migrates back into a buf.gen.yaml
+			// the other tool will not read.
+			return fmt.Errorf("generate[%d].managed.override[%d].path: %q must be a relative path with no leading or trailing slash", i, j, o.Path)
+		case seen[o.FileOption+"\x00"+o.Path]:
+			return fmt.Errorf("generate[%d].managed.override[%d].file_option: duplicate override for %s at path %s",
+				i, j, o.FileOption, pathOrEveryFile(o.Path))
 		}
-		seen[o.FileOption] = true
+		seen[o.FileOption+"\x00"+o.Path] = true
 	}
 	return nil
+}
+
+// pathOrEveryFile names an override's scope in an error message. An unscoped
+// override has no path to quote, and quoting an empty string reads as a bug.
+func pathOrEveryFile(p string) string {
+	if p == "" {
+		return "every file (no path)"
+	}
+	return strconv.Quote(p)
 }
 
 func depNamesOf(ds []Dep) []string {

@@ -60,8 +60,9 @@ type GenTarget struct {
 // Managed configures the managed-mode file options of one generate target.
 type Managed struct {
 	// Override lists the file options to synthesise. Each entry names one
-	// option; an option named twice is an error rather than a last-one-wins
-	// race, because the two entries describe different output.
+	// option and, optionally, the path it is scoped to; one option scoped to
+	// one path twice is an error rather than a last-one-wins race, because one
+	// of the two entries would describe output nothing ever has.
 	Override []Override `yaml:"override"`
 }
 
@@ -69,10 +70,17 @@ type Managed struct {
 type Override struct {
 	// FileOption is the name of the option, in the spelling the measured
 	// configs use. Only the options this tool synthesises are accepted; an
-	// unknown one is an error naming it, never a silent skip.
+	// unknown one is an error naming it, never a silent skip. It may appear
+	// more than once, at most once per Path.
 	FileOption string `yaml:"file_option"`
 	// Path limits the override to the files under it, in the coordinates an
 	// import statement uses. Empty applies it to every file.
+	//
+	// One file option may be overridden several times, once per path. A file
+	// matched by more than one entry takes the LAST of them, which is what the
+	// reference tool does — measured, not assumed; the measurement is written
+	// down on managed.selectOverride. Order is therefore meaning, and this is
+	// the one place in the manifest where it is.
 	Path string `yaml:"path"`
 	// Value is the value of the option.
 	Value string `yaml:"value"`
@@ -95,7 +103,10 @@ func (m *Managed) Config() managed.Config {
 	}
 	for _, o := range m.Override {
 		if o.FileOption == FileOptionGoPackagePrefix {
-			c.GoPackagePrefix = managed.Override{Path: o.Path, Value: o.Value}
+			// Appended, not assigned: one file option may be overridden once
+			// per path, and which of several matching entries applies to a
+			// file is decided by their order. See managed.selectOverride.
+			c.GoPackagePrefix = append(c.GoPackagePrefix, managed.Override{Path: o.Path, Value: o.Value})
 		}
 	}
 	return c

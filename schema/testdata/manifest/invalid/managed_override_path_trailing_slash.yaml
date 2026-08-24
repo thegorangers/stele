@@ -1,0 +1,18 @@
+# invalid: an override path with a trailing slash. The reference tool refuses
+# both this and a leading slash, so accepting it here would produce a manifest
+# that cannot be written back out as a buf.gen.yaml the other tool reads.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go
+    managed:
+      override:
+        - file_option: go_package_prefix
+          path: acme/example/
+          value: example.com/acme/gen/go

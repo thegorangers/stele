@@ -176,13 +176,13 @@
           ],
           "properties": {
             "override": {
-              "description": "The file options to synthesise. At least one — a managed block that overrides nothing reads as if it configured something.\n\nAt most one, too, and only because exactly one file option is currently permitted: the parser refuses the same option twice, and with one permitted spelling a second entry can only be a repeat.",
+              "description": "The file options to synthesise. At least one — a managed block that overrides nothing reads as if it configured something.\n\nOne file option may appear more than once, at most once per path: a repository can put its generated code under more than one import prefix, and a path-scoped override is how that is said. A file matched by several entries takes the LAST of them, so the order here is meaning.\n\nThe parser refuses two entries for one option at one path even when their values differ; this schema can only see two entries that are identical in every field, so an editor is quieter here than the tool is.",
               "type": "array",
               "minItems": 1,
-              "maxItems": 1,
               "items": {
                 "$ref": "#/$defs/override"
-              }
+              },
+              "uniqueItems": true
             }
           }
         }
@@ -398,8 +398,9 @@
           ]
         },
         "path": {
-          "description": "Limits the override to the files under it, in the coordinates an import statement uses. Omitted applies it to every file.",
-          "type": "string"
+          "description": "Limits the override to the files under it, in the coordinates an import statement uses. Omitted applies it to every file. It matches on element boundaries and may name a file as well as a directory. Relative, with no leading or trailing slash — the reference tool refuses both spellings too.",
+          "type": "string",
+          "pattern": "^([^/]|[^/].*[^/])?$"
         },
         "value": {
           "description": "The value of the option.",

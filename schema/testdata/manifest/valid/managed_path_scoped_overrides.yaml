@@ -1,0 +1,20 @@
+# valid: one file option overridden once per path. A repository whose generated
+# Go lives under two import prefixes says so this way. A file matched by both
+# entries takes the last of them — order is meaning here, and only here.
+version: 1
+modules:
+  - path: proto
+generate:
+  - name: go
+    inputs:
+      - module: proto
+    plugins:
+      - local: protoc-gen-go
+        out: gen/go
+    managed:
+      override:
+        - file_option: go_package_prefix
+          value: example.com/acme/gen/go
+        - file_option: go_package_prefix
+          path: acme/example/v1
+          value: example.com/acme/gen/go/example

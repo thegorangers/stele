@@ -402,6 +402,13 @@ func (m *migration) buildManaged() (*config.Managed, error) {
 		return nil, errors.New("buf.gen.yaml: managed.enabled is true with no override: buf's default managed options are not reproduced by this tool, so there is nothing faithful to translate")
 	}
 	out := &config.Managed{}
+	// One file option may be overridden once per path, and the entries are
+	// carried across in order, because order is what decides which of several
+	// matching entries applies. Two entries for one path are refused here
+	// rather than emitted: buf takes the last of them, so the manifest this
+	// tool would write carries a line describing output nothing ever has —
+	// and config.Load would refuse to read it back anyway.
+	seen := map[string]bool{}
 	for i, o := range g.Override {
 		switch {
 		case o.Module != "":
@@ -414,6 +421,10 @@ func (m *migration) buildManaged() (*config.Managed, error) {
 		case o.Value == "":
 			return nil, fmt.Errorf("buf.gen.yaml: managed.override[%d].value: missing", i)
 		}
+		if seen[o.FileOption+"\x00"+o.Path] {
+			return nil, fmt.Errorf("buf.gen.yaml: managed.override[%d]: %s is overridden twice at the same path; buf applies the last and the other describes output nothing has, so translate it by hand", i, o.FileOption)
+		}
+		seen[o.FileOption+"\x00"+o.Path] = true
 		out.Override = append(out.Override, config.Override{FileOption: o.FileOption, Path: o.Path, Value: o.Value})
 	}
 	return out, nil

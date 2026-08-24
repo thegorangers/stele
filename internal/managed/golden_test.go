@@ -18,10 +18,10 @@ import (
 // shows up here as a diff against a measurement.
 func TestApply_MatchesGolden(t *testing.T) {
 	cfg := managed.Config{
-		GoPackagePrefix: managed.Override{
+		GoPackagePrefix: []managed.Override{{
 			Path:  "acme",
 			Value: "github.com/acme/project/gen",
-		},
+		}},
 	}
 
 	for _, tc := range []struct {
@@ -79,7 +79,7 @@ func TestApply_LeavesGoPackageAloneOutsideTheSelectedPath(t *testing.T) {
 	}
 
 	managed.Apply(fd, managed.Config{
-		GoPackagePrefix: managed.Override{Path: "acme", Value: "github.com/acme/project/gen"},
+		GoPackagePrefix: []managed.Override{{Path: "acme", Value: "github.com/acme/project/gen"}},
 	})
 
 	if got, want := fd.GetOptions().GetGoPackage(), "github.com/other/gen/other/widget/v1"; got != want {
@@ -120,4 +120,47 @@ func mustText(t *testing.T, m proto.Message) string {
 		t.Fatal(err)
 	}
 	return "\n" + string(b)
+}
+
+// TestApply_LastMatchingOverrideWins pins how several path-scoped overrides of
+// one file option settle, which is a measurement rather than a decision.
+//
+// Measured against the reference tool at 1.48.0, on a workspace with one
+// module root holding one/v1/a.proto, two/v1/b.proto and two/deep/v1/c.proto:
+//
+//	buf.gen.yaml override order        file            prefix applied
+//	(none), two, two/deep              two/deep/v1/c   two/deep
+//	two/deep, two, (none)              two/deep/v1/c   (none)
+//
+// So it is not the most specific selector that wins, it is the last one
+// declared that matches. The second row is what settles it: reversing the
+// order alone changes the answer.
+func TestApply_LastMatchingOverrideWins(t *testing.T) {
+	apply := func(name string, overrides ...managed.Override) string {
+		fd := &descriptorpb.FileDescriptorProto{
+			Name:    proto.String(name),
+			Package: proto.String("acme.widget.v1"),
+		}
+		managed.Apply(fd, managed.Config{GoPackagePrefix: overrides})
+		return fd.GetOptions().GetGoPackage()
+	}
+
+	broad := managed.Override{Value: "example.com/root/gen"}
+	narrow := managed.Override{Path: "acme/widget", Value: "example.com/widget/gen"}
+
+	if got, want := apply("acme/widget/v1/types.proto", broad, narrow),
+		"example.com/widget/gen/acme/widget/v1;widgetv1"; got != want {
+		t.Errorf("go_package = %q, want %q: the later, narrower override matches and wins", got, want)
+	}
+	if got, want := apply("acme/widget/v1/types.proto", narrow, broad),
+		"example.com/root/gen/acme/widget/v1;widgetv1"; got != want {
+		t.Errorf("go_package = %q, want %q: the later, broader override matches and wins too — it is order, not specificity", got, want)
+	}
+	if got, want := apply("acme/other/v1/types.proto", broad, narrow),
+		"example.com/root/gen/acme/other/v1;otherv1"; got != want {
+		t.Errorf("go_package = %q, want %q: the narrow override does not match this file", got, want)
+	}
+	if got := apply("acme/other/v1/types.proto", narrow); got != "" {
+		t.Errorf("go_package = %q, want it left unset: no override matches this file", got)
+	}
 }

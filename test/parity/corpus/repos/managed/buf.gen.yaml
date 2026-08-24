@@ -4,6 +4,15 @@ managed:
   override:
     - file_option: go_package_prefix
       value: github.com/example/parity/gen
+    - file_option: go_package_prefix
+      path: parity/order/v1
+      value: github.com/example/parity/gen/orderv1
+    - file_option: go_package_prefix
+      path: parity/order
+      value: github.com/example/parity/gen/order
+    - file_option: go_package_prefix
+      path: parity/internal
+      value: github.com/example/parity/gen/internal
 plugins:
   - local: protoc-gen-go
     out: gen
