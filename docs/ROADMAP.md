@@ -39,6 +39,15 @@ because each has already cost someone time.
   commits is the error, named at write time as well as at read time. Addresses are
   recorded as each manifest wrote them and are not normalised — see the decision
   recorded in `internal/lockfile/lock.go`.
+
+  That decision stands, and the walk no longer pays for it. Resolution now
+  deduplicates the walk by the cache's own notion of identity — host and path,
+  already what the cache treats as one entry — while the lock goes on recording
+  every `(git, ref)` a manifest states. Two notions of identity, each used for
+  the one thing it is right about. Before this, a repository the root declared
+  over `ssh` and a producer declared over `https` was fetched, walked and merged
+  twice, and its files were attributed to whichever address sorted first, which
+  made `export --dep` on the root's own dependency report an empty module.
 - ~~**#2 `migrate` emits `ssh://` addresses that fail in CI.**~~ Fixed. `migrate` now
   authors `https://` unconditionally, whatever the source `Makefile` used. It is the
   form both environments rewrite with `git config insteadOf`, so the emitted manifest

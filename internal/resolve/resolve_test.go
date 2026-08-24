@@ -687,3 +687,71 @@ func TestResolve_NonAuthoritativeConflictIsIdenticalInEveryOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestResolve_WalksOneRepositoryOnceOverTwoTransports pins that a repository
+// reached over ssh from one manifest and over https from another is walked
+// once, while both requests still reach the lock.
+//
+// The two facts are separate and both matter. Addresses are deliberately never
+// normalised, because a fork at the same path on another host is not the same
+// repository, and the lock is keyed by (git, ref) — what a manifest states and
+// what a pinned run looks up — so a request left unrecorded is one the next
+// run cannot answer. But the WALK has a different notion of identity, and it
+// is the cache's: host and path, which is already what the cache treats as one
+// entry. Walking the same tree twice hashes every file in it twice and files
+// every import path with two suppliers of identical bytes, for nothing.
+func TestResolve_WalksOneRepositoryOnceOverTwoTransports(t *testing.T) {
+	producer := repo(t, "producer", map[string]string{
+		"stele.yaml":                 "version: 1\nmodules:\n  - path: api\n",
+		"api/example/v1/place.proto": "syntax = \"proto3\";\n",
+	})
+	consumer := repo(t, "consumer", map[string]string{
+		"api/example/v1/order.proto": "syntax = \"proto3\";\n",
+	})
+
+	cfg := &config.File{
+		Version: 1,
+		Modules: []config.Module{{Path: "api"}},
+		Deps: []config.Dep{
+			{Name: "place-ssh", Git: "ssh://git@github.com/acme/producer.git", Ref: "v1.0.0", Module: "api"},
+			{Name: "place-https", Git: "https://github.com/acme/producer.git", Ref: "v1.0.0", Module: "api"},
+		},
+	}
+	fetch := fakeFetch(map[string]string{
+		"ssh://git@github.com/acme/producer.git": producer,
+		"https://github.com/acme/producer.git":   producer,
+	})
+
+	g, err := resolve.ResolveIn(context.Background(), consumer, cfg, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The consumer's own root plus the producer's, once.
+	if got := g.ImportRoots(); len(got) != 2 {
+		t.Errorf("import roots = %v, want 2: the producer's tree is one repository however many ways it was addressed", got)
+	}
+	f, ok := g.FileFor("example/v1/place.proto")
+	if !ok {
+		t.Fatal("example/v1/place.proto did not resolve")
+	}
+	if len(f.Sources) != 1 {
+		t.Errorf("sources = %v, want 1: the file was found once, not once per transport", f.Sources)
+	}
+	// The origin is the request that reached the repository, which with two
+	// suppliers of identical bytes used to be settled by supplier.less — and
+	// so by which address sorts first, not by which manifest asked. That is
+	// load-bearing beyond tidiness: export selects a dependency's files by
+	// comparing Origin.Git against the address the manifest wrote, so a
+	// repository the root declared over ssh and a producer declared over https
+	// had all its files attributed to the https request, and `export --dep`
+	// found none of them.
+	if f.Origin.Name != "place-ssh" {
+		t.Errorf("origin = %s, want the request that reached it — the root's first dep — not whichever address sorts first", f.Origin)
+	}
+	// Both requests are still recorded: the lock is keyed by what a manifest
+	// states, and dropping either would leave a pinned run unable to answer it.
+	if got := g.Deps(); len(got) != 2 {
+		t.Errorf("deps = %v, want both requests recorded", got)
+	}
+}

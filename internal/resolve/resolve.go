@@ -23,6 +23,7 @@ import (
 
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/hashing"
+	"github.com/thegorangers/stele/internal/source"
 	"gopkg.in/yaml.v3"
 )
 
@@ -73,10 +74,34 @@ func (o Origin) String() string {
 	return fmt.Sprintf("%s (%s@%s)", o.Name, o.Git, o.SHA)
 }
 
-// key identifies a fetched repository. A repository already visited at the
-// same commit is not visited twice; at a different commit it is a different
-// repository, and any import path it shares with itself is a conflict.
-func (o Origin) key() string { return o.Git + "@" + o.SHA }
+// key identifies a fetched repository FOR THE WALK. A repository already
+// visited at the same commit is not visited twice; at a different commit it is
+// a different repository, and any import path it shares with itself is a
+// conflict.
+//
+// The address is reduced to the cache's own notion of identity — host and
+// path, without the transport — because that is already what the cache treats
+// as one entry, and because the walk is about the tree: the same repository
+// cloned over ssh from a workstation and over https from CI is one tree, and
+// walking it twice hashes every file in it twice and files every import path
+// with two suppliers of identical bytes.
+//
+// This is deliberately NOT address normalisation, and it is not the lock's
+// key. Addresses are never normalised — a fork at the same path on another
+// host is not the same repository, which is why the host stays in the key —
+// and the lock goes on recording every (git, ref) a manifest states, because
+// that is what a pinned run looks up. Two notions of identity, each used for
+// the one thing it is right about.
+//
+// An address the parser does not understand is left as written. It cannot be
+// fetched either, so the walk will not get this far; falling back keeps this
+// function total rather than making it a second place an address is judged.
+func (o Origin) key() string {
+	if addr, err := source.ParseAddr(o.Git, nil); err == nil {
+		return addr.CacheKey() + "@" + o.SHA
+	}
+	return o.Git + "@" + o.SHA
+}
 
 // request identifies a dependency request as a manifest states it: an address
 // and a ref. It is the lock's key, and this is the one place the two notions

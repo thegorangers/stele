@@ -75,6 +75,29 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   broader `parity/order`, so a reading that preferred the most specific
   selector fails there.
 
+### Fixed
+
+- **A repository reached over two transports is walked once, and `export --dep`
+  finds its files again.** The lock identifies a dependency by `(git, ref)` and
+  addresses are never normalised — a fork at the same path on another host is
+  not the same repository — so both requests are still recorded, and a pinned
+  run can still answer either. But the *walk* now deduplicates by the cache's
+  own notion of identity, host and path, which is already what the cache treats
+  as one entry: the same repository cloned over `ssh` from a workstation and
+  over `https` from CI is one tree.
+
+  Walking it twice was not only wasted work. Two suppliers of identical bytes
+  were settled by address order, so a repository the root manifest declared
+  over `ssh` and a producer declared over `https` had every one of its files
+  attributed to the producer's request — and `stele export --dep <name>` then
+  reported that the module *contains no proto files*. Measured on a twelve-
+  dependency manifest of the fleet this tool was built for, with the shape
+  present: `export --dep` on the affected dependency wrote 0 files before and 8 after. Resolution
+  over the same manifest goes from 23 import roots to 21 and stops re-hashing
+  52 proto files, the drift report stops naming the same import path twice
+  (27 entries to 26), and the resolved file set — every import path, the bytes
+  it resolves to and the root that supplied it — is unchanged.
+
 ### Internal
 
 - **The reference tool's pin lives in one file.** `test/parity/corpus.yaml` now
