@@ -14,8 +14,17 @@ import (
 
 const migrateUsage = `stele migrate translates a buf configuration into stele.yaml.
 
-It reads buf.gen.yaml, buf.yaml if there is one, and the Makefile — the only
-place a vendored third-party tree records where it came from.
+It reads buf.gen.yaml, buf.yaml if there is one, the Makefile — the only place
+a vendored third-party tree records where it came from — and the repository's
+own .proto files.
+
+The protos are what decide the dependency set. A vendor target says which
+modules were copied in, not which are read, and the two are not the same
+number: one export of one registry module can bring in dozens of files where
+one is imported. So the imports are followed transitively, the well-known
+types the compiler carries are subtracted, and what is left is demanded file
+by file — which is also the paths: narrowing each dependency is emitted with.
+A vendored tree nothing imports is reported as drift and left out.
 
 The translation covers a measured subset of the buf format. Anything outside
 it is refused by name rather than approximated: a manifest that looks migrated

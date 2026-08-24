@@ -69,7 +69,10 @@ func annotateDeps(doc *yaml.Node, f *config.File) {
 		return
 	}
 	for i, d := range f.Deps {
-		if i >= len(deps.Content) || d.Ref != "" {
+		if i >= len(deps.Content) {
+			continue
+		}
+		if d.Ref != "" {
 			continue
 		}
 		deps.Content[i].HeadComment = fmt.Sprintf(

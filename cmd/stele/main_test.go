@@ -134,13 +134,29 @@ func TestMigrateWritesAndRefuses(t *testing.T) {
 	}
 
 	// An incomplete migration must fail: a manifest that looks migrated and
-	// is not is worse than no manifest.
+	// is not is worse than no manifest. The reference has to be one this
+	// repository actually reads — a vendored tree nothing imports is drift,
+	// and reporting it as a demand is what taught readers to skip the list.
+	if err := os.MkdirAll(filepath.Join(dir, "api", "example", "v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "third_party", "proto", "example", "schemas", "v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join("api", "example", "v1", "a.proto"),
+		"syntax = \"proto3\";\npackage example.v1;\nimport \"example/schemas/v1/s.proto\";\n")
+	write(filepath.Join("third_party", "proto", "example", "schemas", "v1", "s.proto"),
+		"syntax = \"proto3\";\npackage example.schemas.v1;\n")
+	write("buf.yaml", "version: v2\nmodules: [{path: api}, {path: third_party/proto}]\n")
 	write("Makefile", pinned+"\nvendor:\n\t@buf export buf.build/example/schemas --output=third_party/proto\n")
 	out.Reset()
 	errOut.Reset()
 	err := run(context.Background(), []string{"migrate", "--dir", dir}, &out, &errOut)
 	if err == nil || !strings.Contains(err.Error(), "buf.build/example/schemas") {
 		t.Fatalf("want a failure naming the untranslated reference, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "example/schemas/v1/s.proto") {
+		t.Fatalf("the failure does not name the file that is actually read: %v", err)
 	}
 }
 

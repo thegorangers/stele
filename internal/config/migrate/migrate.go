@@ -11,9 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/thegorangers/stele/internal/config"
@@ -45,10 +45,14 @@ const defaultTargetName = "default"
 // Makefile are optional — two of the measured repositories own no protos and
 // have no buf.yaml at all — but buf.gen.yaml is not: without it there is no
 // generation to describe.
-func FromDir(dir string) (*Result, error) {
+func FromDir(dir string) (*Result, error) { return FromFS(os.DirFS(dir)) }
+
+// FromFS translates the buf configuration of a working copy, reading the
+// repository's own protos from the same tree.
+func FromFS(fsys fs.FS) (*Result, error) {
 	optional := func(name string) ([]byte, error) {
-		b, err := os.ReadFile(filepath.Join(dir, name))
-		if errors.Is(err, os.ErrNotExist) {
+		b, err := fs.ReadFile(fsys, name)
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return b, err
@@ -61,20 +65,24 @@ func FromDir(dir string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	genRaw, err := os.ReadFile(filepath.Join(dir, "buf.gen.yaml"))
+	genRaw, err := fs.ReadFile(fsys, "buf.gen.yaml")
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%s: no buf.gen.yaml; there is nothing to migrate", dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, errors.New("no buf.gen.yaml; there is nothing to migrate")
 		}
 		return nil, err
 	}
-	return FromBuf(bufYAMLRaw, genRaw, makefile)
+	return fromBuf(fsys, bufYAMLRaw, genRaw, makefile)
 }
 
 // FromBuf translates one set of buf files. Any of bufYAML and makefile may be
 // nil; bufGenYAML may not.
 func FromBuf(bufYAMLRaw, bufGenYAMLRaw, makefile []byte) (*Result, error) {
-	m := &migration{}
+	return fromBuf(nil, bufYAMLRaw, bufGenYAMLRaw, makefile)
+}
+
+func fromBuf(fsys fs.FS, bufYAMLRaw, bufGenYAMLRaw, makefile []byte) (*Result, error) {
+	m := &migration{fsys: fsys}
 	if err := m.readBufYAML(bufYAMLRaw); err != nil {
 		return nil, err
 	}
@@ -92,6 +100,8 @@ func FromBuf(bufYAMLRaw, bufGenYAMLRaw, makefile []byte) (*Result, error) {
 
 // migration carries the state of one translation.
 type migration struct {
+	// fsys is the working copy, when there is one to read.
+	fsys    fs.FS
 	buf     bufYAML
 	gen     bufGenYAML
 	exports []bufExport
@@ -110,6 +120,33 @@ type migration struct {
 	// by the command each installs. They are where a plugin's version is
 	// written down; buf.gen.yaml names the plugin and nothing else.
 	installs map[string][]goInstall
+	// seedPrefixes are the workspace-relative paths this configuration
+	// generates from, which are the files the import walk starts at.
+	seedPrefixes []string
+	// seedAll says the configuration named no inputs, so buf would take the
+	// whole workspace and every module root is a seed.
+	seedAll bool
+	// analysed says the import graph was read. Without a working copy it
+	// cannot be, and the vendor target is all there is to go on.
+	analysed bool
+	// needed maps a vendored tree to the import paths under it that the
+	// files this configuration compiles actually read, transitively.
+	needed map[string][]string
+	// unknownImports are imports nothing in the working copy supplies.
+	unknownImports []string
+	// registryOf maps a vendored tree to the schema registry references that
+	// fill it. Such a reference carries no git address.
+	registryOf map[string][]string
+	// vendoredOrder is the order vendored trees were first seen in, so that
+	// what is reported about them does not reorder between runs.
+	vendoredOrder []string
+	// inputPaths records the paths a generate input selects from a
+	// dependency. They are generated from, so they are needed whether or not
+	// anything imports them.
+	inputPaths map[string][]string
+	// wideInput names the dependencies a generate input takes whole. There is
+	// no narrowing to derive for one.
+	wideInput map[string]bool
 	// rewritten records the addresses already reported as rewritten to
 	// https://, so that a producer exported by several invocations is
 	// mentioned once.
@@ -200,6 +237,10 @@ func (m *migration) build() error {
 	m.rewritten = map[string]bool{}
 	m.depPaths = map[string][]string{}
 	m.vendored = map[string][]string{}
+	m.needed = map[string][]string{}
+	m.registryOf = map[string][]string{}
+	m.inputPaths = map[string][]string{}
+	m.wideInput = map[string]bool{}
 
 	if err := m.buildDepsFromExports(); err != nil {
 		return err
@@ -218,6 +259,14 @@ func (m *migration) build() error {
 	if target.Inputs, err = m.buildInputs(modules); err != nil {
 		return err
 	}
+	// The imports are read last, because what this configuration compiles is
+	// not known until the inputs are translated, and it is the files it
+	// compiles — not the files somebody copied in — that decide which
+	// dependencies are real.
+	if err := m.analyse(); err != nil {
+		return err
+	}
+	m.attribute()
 	f := &config.File{Version: config.Version, Modules: modules, Generate: []config.GenTarget{target}}
 	for _, name := range m.depOrder {
 		d := m.deps[name]
@@ -235,10 +284,19 @@ func (m *migration) build() error {
 // is no git repository to name, and inventing one would be a guess.
 func (m *migration) buildDepsFromExports() error {
 	for _, e := range m.exports {
-		m.vendored[e.Output] = m.vendored[e.Output]
+		if _, seen := m.vendored[e.Output]; !seen {
+			m.vendored[e.Output] = nil
+			m.vendoredOrder = append(m.vendoredOrder, e.Output)
+		}
 		if e.Registry {
-			m.unresolved("Makefile: %s is a schema registry reference and has no git address; declare the producing repository by hand (its files are vendored under %s)",
-				e.Target, e.Output)
+			m.registryOf[e.Output] = append(m.registryOf[e.Output], e.Target)
+			if !m.willAnalyse() {
+				// Without the working copy there is no way to tell whether
+				// this reference is read at all, so it is reported as the
+				// vendor target states it.
+				m.unresolved("Makefile: %s is a schema registry reference and has no git address; declare the producing repository by hand (its files are vendored under %s)",
+					e.Target, e.Output)
+			}
 			continue
 		}
 		name := depName(e.Git)
@@ -436,6 +494,7 @@ func (m *migration) buildManaged() (*config.Managed, error) {
 // unnoticed.
 func (m *migration) buildInputs(modules []config.Module) ([]config.Input, error) {
 	if len(m.gen.Inputs) == 0 {
+		m.seedAll = true
 		out := m.wholeWorkspace(modules)
 		if len(out) == 0 {
 			return nil, errors.New("buf.gen.yaml: no inputs, and no modules to expand the default input into")
@@ -466,6 +525,7 @@ func (m *migration) buildInputs(modules []config.Module) ([]config.Input, error)
 		case in.Directory == "":
 			return nil, fmt.Errorf("buf.gen.yaml: inputs[%d]: neither directory nor git_repo", i)
 		}
+		m.seed(in)
 		got, err := m.directoryInput(i, in)
 		if err != nil {
 			return nil, err
@@ -485,6 +545,7 @@ func (m *migration) wholeWorkspace(modules []config.Module) []config.Input {
 	for _, mod := range m.buf.Modules {
 		for _, name := range m.vendored[path.Clean(mod.Path)] {
 			out = append(out, config.Input{Dep: name})
+			m.wideInput[name] = true
 		}
 	}
 	return out
@@ -532,6 +593,7 @@ func (m *migration) directoryInput(i int, in bufInput) ([]config.Input, error) {
 		out := make([]config.Input, 0, len(deps))
 		for _, name := range deps {
 			out = append(out, config.Input{Dep: name})
+			m.wideInput[name] = true
 		}
 		if len(out) == 0 {
 			m.unresolved("%s: directory %s is a vendored tree with no translatable source; declare the producing repository by hand", where, dir)
@@ -551,6 +613,7 @@ func (m *migration) directoryInput(i int, in bufInput) ([]config.Input, error) {
 			order = append(order, name)
 		}
 		byDep[name] = append(byDep[name], p)
+		m.inputPaths[name] = appendUnique(m.inputPaths[name], p)
 	}
 	out := make([]config.Input, 0, len(order))
 	for _, name := range order {
