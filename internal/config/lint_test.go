@@ -40,7 +40,7 @@ func TestLintBlockIsTranslated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := f.Lint.Config()
+	got := lint.ConfigFrom(f.Lint)
 	if len(got.Ignore) != 1 || got.Ignore[0] != "third_party" {
 		t.Errorf("Ignore = %v", got.Ignore)
 	}
@@ -69,7 +69,7 @@ func TestAbsentLintBlockIsAbsent(t *testing.T) {
 	if f.Lint != nil {
 		t.Fatalf("Lint = %v, want nil", f.Lint)
 	}
-	got := f.Lint.Config()
+	got := lint.ConfigFrom(f.Lint)
 	if len(got.Ignore) != 0 || len(got.Rules) != 0 {
 		t.Errorf("a nil block must translate to an empty configuration, got %+v", got)
 	}
@@ -106,7 +106,7 @@ func TestLintIgnoreAcceptsAScalar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := f.Lint.Config().Ignore; len(got) != 1 || got[0] != "third_party" {
+	if got := lint.ConfigFrom(f.Lint).Ignore; len(got) != 1 || got[0] != "third_party" {
 		t.Errorf("Ignore = %v", got)
 	}
 }

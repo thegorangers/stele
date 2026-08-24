@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/thegorangers/stele/internal/lint"
 	"gopkg.in/yaml.v3"
 )
 
@@ -147,7 +146,7 @@ func (l *Lint) validate() error {
 		if r.ID == "" {
 			return fmt.Errorf("lint.rules[%d].id: missing", i)
 		}
-		if err := lint.CheckID(r.ID); err != nil {
+		if err := checkLintRuleID(r.ID); err != nil {
 			return fmt.Errorf("lint.rules[%d].id: %w", i, err)
 		}
 		if first, dup := seen[r.ID]; dup {
@@ -155,13 +154,37 @@ func (l *Lint) validate() error {
 				"a rule has one severity, and the tool cannot honour two", i, r.ID, first)
 		}
 		seen[r.ID] = i
-		if r.Severity != "" {
-			if _, err := lint.ParseSeverity(r.Severity); err != nil {
-				return fmt.Errorf("lint.rules[%d].severity: %w", i, err)
-			}
+		if r.Severity != "" && !slices.Contains(LintSeverities, r.Severity) {
+			return fmt.Errorf("lint.rules[%d].severity: %q is not a severity; write one of %s",
+				i, r.Severity, strings.Join(LintSeverities, ", "))
 		}
 		if err := validateIgnore(fmt.Sprintf("lint.rules[%d].ignore", i), r.Ignore); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkLintRuleID checks the shape of a rule id: namespace/name, both parts
+// lower_snake_case. Whether a rule of that id exists is the engine's question,
+// and it is asked where the loaded rules are known.
+func checkLintRuleID(id string) error {
+	ns, name, ok := strings.Cut(id, "/")
+	if !ok {
+		return fmt.Errorf("%q is not a rule id; write it as namespace/name, such as stele/enum_value_prefix", id)
+	}
+	for label, part := range map[string]string{"namespace": ns, "name": name} {
+		if part == "" {
+			return fmt.Errorf("%q: the %s is empty; write it as namespace/name", id, label)
+		}
+		if part[0] < 'a' || part[0] > 'z' {
+			return fmt.Errorf("%q: the %s %q must start with a lower-case letter", id, label, part)
+		}
+		for i := 0; i < len(part); i++ {
+			c := part[i]
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+				return fmt.Errorf("%q: the %s %q must be lower_snake_case", id, label, part)
+			}
 		}
 	}
 	return nil

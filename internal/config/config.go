@@ -1,10 +1,7 @@
 // Package config parses and validates the stele.yaml manifest.
 package config
 
-import (
-	"github.com/thegorangers/stele/internal/lint"
-	"github.com/thegorangers/stele/internal/managed"
-)
+import "github.com/thegorangers/stele/internal/managed"
 
 // File is a parsed stele.yaml manifest.
 type File struct {
@@ -250,27 +247,13 @@ type LintRule struct {
 	Ignore []string `yaml:"ignore"`
 }
 
-// Config translates the manifest's lint block into the form the engine takes.
+// LintSeverities are the accepted spellings of LintRule.Severity, in the order
+// an error message should list them.
 //
-// A nil block is an empty configuration rather than an error, so that every
-// caller does not have to test for absence. Severities are already known to
-// parse: validation refused anything else before this was reachable.
-func (l *Lint) Config() lint.Config {
-	var c lint.Config
-	if l == nil {
-		return c
-	}
-	c.Ignore = l.Ignore
-	if len(l.Rules) == 0 {
-		return c
-	}
-	c.Rules = make(map[string]lint.RuleConfig, len(l.Rules))
-	for _, r := range l.Rules {
-		sev := lint.SeverityError
-		if r.Severity != "" {
-			sev, _ = lint.ParseSeverity(r.Severity)
-		}
-		c.Rules[r.ID] = lint.RuleConfig{Severity: sev, Ignore: r.Ignore}
-	}
-	return c
-}
+// They are spelled here rather than taken from the lint engine because the
+// dependency runs the other way: the engine reads manifests, so a manifest
+// parser that read the engine would be a cycle. That the two agree is not left
+// to inspection — a test in the lint package puts every spelling here through
+// the engine's own parser, and every rule id shape here through the engine's
+// own check.
+var LintSeverities = []string{"error", "warning", "off"}

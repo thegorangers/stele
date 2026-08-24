@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/thegorangers/stele/internal/config"
+	"github.com/thegorangers/stele/internal/lint"
 	"github.com/thegorangers/stele/internal/report"
 )
 
@@ -53,6 +54,18 @@ func TestCLI(t *testing.T) {
 		{name: "plugins help", args: []string{"plugins", "--help"}, help: true, wantHelp: "install"},
 		{name: "plugins needs a subcommand", args: []string{"plugins"}, wantErr: "list or install"},
 		{name: "plugins unknown subcommand is named", args: []string{"plugins", "nosuch"}, wantErr: `unknown subcommand "nosuch"`},
+		{name: "lint is listed in the usage", args: nil, help: true, wantHelp: "lint"},
+		{name: "lint help", args: []string{"lint", "--help"}, help: true},
+		{name: "lint documents dir", args: []string{"lint", "--help"}, help: true, wantHelp: "--dir"},
+		{name: "lint documents update", args: []string{"lint", "--help"}, help: true, wantHelp: "--update"},
+		{name: "lint documents cache-dir", args: []string{"lint", "--help"}, help: true, wantHelp: "--cache-dir"},
+		{name: "lint documents rules", args: []string{"lint", "--help"}, help: true, wantHelp: "--rules"},
+		// The help is where somebody adopting the tool over unlinted
+		// contracts is told how to get to a green build. If it stops saying
+		// so, the answer they find instead is allow_failure.
+		{name: "lint help states the adoption mechanism", args: []string{"lint", "--help"}, help: true, wantHelp: "severity: warning"},
+		{name: "lint unknown flag is named", args: []string{"lint", "--nosuch"}, wantErr: "not defined: -nosuch"},
+		{name: "lint positional argument refused", args: []string{"lint", "x"}, wantErr: `unexpected argument "x"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errOut strings.Builder
@@ -296,5 +309,76 @@ generate:
 	}
 	if len(entries) != 0 {
 		t.Errorf("listing wrote to the cache: %v", entries)
+	}
+}
+
+// TestLintRulesListsEveryRule. A rule id goes into somebody's manifest, so the
+// list has to be obtainable from the binary. A list somebody has to read the
+// source to find is one they will guess at.
+func TestLintRulesListsEveryRule(t *testing.T) {
+	var out, errOut strings.Builder
+	if err := run(context.Background(), []string{"lint", "--rules"}, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range lint.Builtin() {
+		if !strings.Contains(out.String(), r.ID()) {
+			t.Errorf("%s is not listed:\n%s", r.ID(), out.String())
+		}
+		if !strings.Contains(out.String(), r.Description()) {
+			t.Errorf("%s is listed without its description", r.ID())
+		}
+	}
+}
+
+// TestLintFailsOnFindingsAndSaysWhatToDo. The exit status is the contract with
+// CI; the message is the contract with whoever reads the log.
+func TestLintFailsOnFindingsAndSaysWhatToDo(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("stele.yaml", "version: 1\nmodules:\n  - path: api\n")
+	write("api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  PLACED = 1;
+}
+`)
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"lint", "--dir", dir}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a finding at severity error must fail the run")
+	}
+	if !strings.Contains(err.Error(), "lint.rules") {
+		t.Errorf("the failure does not say what to do about it:\n%v", err)
+	}
+	if !strings.Contains(out.String(), "api/example/v1/order.proto:6:") {
+		t.Errorf("the finding does not point at a file a reader can open:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "stele/enum_value_prefix") {
+		t.Errorf("the finding does not name the rule:\n%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "1 error") {
+		t.Errorf("the summary does not reach stderr:\n%s", errOut.String())
+	}
+
+	// The same repository, made green by the manifest rather than by a CI
+	// flag. This is the whole adoption argument, measured.
+	write("stele.yaml", "version: 1\nmodules:\n  - path: api\nlint:\n  rules:\n    - id: stele/enum_value_prefix\n      severity: warning\n")
+	out.Reset()
+	errOut.Reset()
+	if err := run(context.Background(), []string{"lint", "--dir", dir}, &out, &errOut); err != nil {
+		t.Fatalf("a demoted rule must not fail the run: %v", err)
+	}
+	if !strings.Contains(out.String(), ": warning: ") {
+		t.Errorf("a demoted rule must still report:\n%s", out.String())
 	}
 }
