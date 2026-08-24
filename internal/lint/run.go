@@ -11,7 +11,9 @@ import (
 
 	"github.com/thegorangers/stele/internal/compile"
 	"github.com/thegorangers/stele/internal/config"
+	"github.com/thegorangers/stele/internal/lint/host"
 	"github.com/thegorangers/stele/internal/pin"
+	"github.com/thegorangers/stele/internal/plugin"
 	"github.com/thegorangers/stele/internal/resolve"
 	"github.com/thegorangers/stele/internal/source"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -43,8 +45,9 @@ type Options struct {
 	// Fetch materialises dependency repositories. When nil, repositories are
 	// fetched from the network into CacheRoot.
 	Fetch resolve.FetchFunc
-	// CacheRoot is where fetched repositories are kept. Required only when
-	// Fetch is nil and the manifest declares dependencies.
+	// CacheRoot is where fetched repositories and installed plugins are kept.
+	// Required when Fetch is nil and the manifest declares dependencies, and
+	// when it declares a rule plugin this tool has to install or download.
 	CacheRoot string
 }
 
@@ -164,6 +167,20 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	if rules == nil {
 		rules = Builtin()
 	}
+	// The rule plugins are loaded before anything is fetched or compiled. Two
+	// reasons, and both are about when an error is known: a plugin that will
+	// not start has to be reported before a network round trip rather than
+	// after one, and the rules it serves have to exist before the engine can
+	// say whether a configured rule id names anything.
+	set, err := loadPlugins(ctx, cfg, dir, opts.CacheRoot)
+	if err != nil {
+		return nil, err
+	}
+	// The processes live exactly as long as the run that needs them. A rule
+	// left running after the tool exits would be a process per lint.
+	defer set.Close()
+	rules = append(append([]Rule(nil), rules...), set.Rules()...)
+
 	// The engine is built before anything is fetched or compiled: a rule id
 	// nothing carries is a defect in the manifest, and reporting it after a
 	// network round trip would be reporting it later than it is known.
@@ -215,6 +232,61 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return nil, errors.New("lint: no files were checked; every file this repository owns is covered by lint.ignore")
 	}
 	return rep, nil
+}
+
+// loadPlugins resolves and starts the rule plugins the manifest declares.
+//
+// Where each binary comes from is decided by internal/plugin, which is the
+// same code that decides it for a code generation plugin, so a rule plugin is
+// installed, downloaded and verified exactly as a generator is. What this adds
+// is the reason the answer matters here: a rule the tool cannot pin is a rule
+// that can change what it says about a repository between two runs of an
+// unchanged manifest.
+//
+// A plugin that cannot be resolved stops the run. There is no partial loading:
+// a run missing a rule has not checked what that rule checks, and reporting
+// the remaining rules' silence as a clean repository is the failure this whole
+// tool exists to remove.
+func loadPlugins(ctx context.Context, cfg *config.File, dir, cacheRoot string) (*host.Set, error) {
+	if cfg.Lint == nil || len(cfg.Lint.Plugins) == 0 {
+		return nil, nil
+	}
+	cache := plugin.Cache{Root: cacheRoot}
+	plugins := make([]host.Plugin, 0, len(cfg.Lint.Plugins))
+	for _, p := range cfg.Lint.Plugins {
+		if cache.Root == "" && (p.Module != "" || len(p.Downloads) > 0) {
+			tier := "downloads, which this tool fetches into its own cache"
+			if p.Module != "" {
+				tier = fmt.Sprintf("%s@%s, which this tool installs into its own cache", p.Module, p.Version)
+			}
+			return nil, fmt.Errorf("lint plugin %q: it declares %s, but this run was given no cache root", p.Name, tier)
+		}
+		bin, err := cache.Resolve(ctx, plugin.Spec{
+			Name: p.Name, Module: p.Module, Version: p.Version,
+			Downloads: pluginDownloads(p.Downloads), Path: p.Path, Dir: dir,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("lint: %w", err)
+		}
+		plugins = append(plugins, host.Plugin{Name: bin.Name, Path: bin.Path})
+	}
+	return host.Load(ctx, plugins)
+}
+
+// pluginDownloads translates the manifest's download entries into the
+// resolver's, as generation does. The two types stay separate so that the
+// resolver does not depend on the manifest parser.
+func pluginDownloads(ds []config.Download) []plugin.Download {
+	if len(ds) == 0 {
+		return nil
+	}
+	out := make([]plugin.Download, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, plugin.Download{
+			OS: d.OS, Arch: d.Arch, URL: d.URL, SHA256: d.SHA256, ArchivePath: d.ArchivePath,
+		})
+	}
+	return out
 }
 
 // owned returns the import paths this repository supplies, and where each was
