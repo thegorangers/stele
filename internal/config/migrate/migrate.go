@@ -175,7 +175,10 @@ func (m *migration) readMakefile(raw []byte) error {
 	if len(raw) == 0 {
 		return nil
 	}
-	installs, unreadable := parseInstalls(raw)
+	installs, unreadable, err := parseInstalls(raw)
+	if err != nil {
+		return err
+	}
 	for _, u := range unreadable {
 		m.unresolved("Makefile: could not read a `go install` invocation, so a plugin version may have been missed: %s", u)
 	}

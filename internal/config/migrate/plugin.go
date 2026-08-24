@@ -162,7 +162,15 @@ func isVarName(s string) bool {
 // parseInstalls recovers the `go install` invocations of a Makefile, grouped
 // by the command each one installs. An invocation it cannot read is reported
 // rather than skipped.
-func parseInstalls(makefile []byte) (map[string][]goInstall, []string) {
+//
+// The two returns say different things and must not be confused. The list
+// names invocations this reader could not read, one by one, and the caller
+// turns each into an item a human resolves by hand. The error says the file
+// as a whole is outside the model, so nothing read from it can be trusted —
+// the same condition parseExports refuses, refused here in the same shape.
+// Putting such a refusal in the list instead hid it: the caller aborts on the
+// error the other reader returns before the list is ever printed.
+func parseInstalls(makefile []byte) (map[string][]goInstall, []string, error) {
 	lines := strings.Split(string(makefile), "\n")
 	vars := parseVars(lines)
 
@@ -170,7 +178,7 @@ func parseInstalls(makefile []byte) (map[string][]goInstall, []string) {
 	var unparsed []string
 	logical, err := logicalLines(string(makefile))
 	if err != nil {
-		return out, []string{err.Error()}
+		return nil, nil, err
 	}
 	for _, line := range logical {
 		if !strings.Contains(line, "go install") {
@@ -195,7 +203,7 @@ func parseInstalls(makefile []byte) (map[string][]goInstall, []string) {
 		}
 		out[g.Name] = append(out[g.Name], g)
 	}
-	return out, unparsed
+	return out, unparsed, nil
 }
 
 // indexOfInstall finds the "install" word of a `go install` invocation.
