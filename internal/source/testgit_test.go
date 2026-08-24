@@ -91,3 +91,25 @@ func tagRepo(t *testing.T, dir, tag string) {
 		t.Fatalf("git tag: %v\n%s", err, out)
 	}
 }
+
+// commitMore adds files to a test repository as a second commit and returns
+// the SHA it created.
+func commitMore(t *testing.T, dir string, files map[string]string) string {
+	t.Helper()
+	home := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = gitEnv(home)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	writeFiles(t, dir, files)
+	run("add", "-A")
+	run("commit", "--quiet", "-m", "more")
+	return run("rev-parse", "HEAD")
+}

@@ -89,7 +89,7 @@ func Resolve(ctx context.Context, opts Options) (*resolve.Graph, error) {
 		return nil, err
 	}
 
-	p := &pinned{lock: lock, inner: opts.Fetch, index: index(lock), used: map[string]bool{}}
+	p := &pinned{lock: lock, lockPath: opts.LockPath, inner: opts.Fetch, index: index(lock), used: map[string]bool{}}
 	graph, err := resolve.ResolveIn(ctx, dir, opts.Manifest, p.fetch)
 	if err != nil {
 		return nil, err
@@ -216,8 +216,11 @@ func write(g *resolve.Graph, plugins []lockfile.Plugin, path string) error {
 
 // pinned is a fetcher that answers from the lock.
 type pinned struct {
-	lock  *lockfile.Lock
-	inner resolve.FetchFunc
+	lock *lockfile.Lock
+	// lockPath is named in errors because "the lock" is not a file a reader
+	// can go and open, and a repository may hold more than one.
+	lockPath string
+	inner    resolve.FetchFunc
 	// index maps a request as a manifest makes it — a repository and a ref —
 	// to the entry that pins it. The ref is part of the key because a lock may
 	// legitimately hold one repository twice, pinned from two refs, and a
@@ -252,9 +255,15 @@ func (p *pinned) fetch(ctx context.Context, git, ref string) (string, string, er
 	dir, sha, err := p.inner(ctx, git, entry.SHA)
 	if err != nil {
 		if errors.Is(err, source.ErrUnreachableSHA) {
-			return "", "", fmt.Errorf("the locked commit %s, resolved from ref %q, is no longer on %s. "+
-				"A squashed merge rewrites commits, which makes a pin vanish; re-resolve with --update: %w",
-				entry.SHA, entry.Ref, git, err)
+			// The sentinel is wrapped rather than the fetcher's own message:
+			// that message has to stand on its own for a caller with no lock,
+			// so it already explains a rewritten commit and names --update.
+			// Wrapping it here would print both explanations, which reads as
+			// two problems. What this layer adds instead is the fact only it
+			// knows — that the commit came from a lock, and from which file.
+			return "", "", fmt.Errorf("%s: the commit %s it records for ref %q is no longer on %s: %w. "+
+				"A squashed merge rewrites commits, which makes a pin vanish; re-resolve with --update",
+				p.lockPath, entry.SHA, entry.Ref, git, source.ErrUnreachableSHA)
 		}
 		return "", "", err
 	}

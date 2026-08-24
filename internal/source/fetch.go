@@ -30,7 +30,7 @@ var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 func FetchInto(ctx context.Context, cacheRoot, url, ref string) (string, string, error) {
 	sha, err := ResolveRef(ctx, url, ref)
 	if err != nil {
-		return "", "", err
+		return "", "", remoteProblem(url, ref, err)
 	}
 	final := CacheDir(cacheRoot, url, sha)
 	if _, err := os.Stat(final); err == nil {
@@ -58,7 +58,7 @@ func FetchInto(ctx context.Context, cacheRoot, url, ref string) (string, string,
 	defer os.RemoveAll(tmp)
 
 	if err := materialise(ctx, url, sha, tmp); err != nil {
-		return "", "", err
+		return "", "", remoteProblem(url, ref, err)
 	}
 	if err := os.Rename(tmp, final); err != nil {
 		// Losing the race is the expected outcome, not a failure: the entry is
@@ -97,7 +97,9 @@ func ResolveRef(ctx context.Context, url, ref string) (string, error) {
 	}
 	sha, ok := pickRef(out)
 	if !ok {
-		return "", fmt.Errorf("%s: ref %q does not exist on the remote", url, ref)
+		return "", fmt.Errorf("%s: ref %q does not exist on the remote.\n"+
+			"Check the ref in the manifest: a branch that was deleted after a merge, or a tag that was never "+
+			"pushed, both read this way. A commit SHA is accepted here as well and does not move.", url, ref)
 	}
 	return sha, nil
 }
@@ -181,7 +183,109 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		return "", &gitError{args: args, stderr: strings.TrimSpace(stderr.String()), err: err}
 	}
 	return string(out), nil
+}
+
+// gitError is a git invocation that failed, with what git said about it kept
+// apart from the command that was run.
+//
+// It is a type rather than a formatted string because the caller decides how a
+// failure reads: the same exit status 128 is an unreachable host, a refused
+// credential or a repository that is not there, and those have three different
+// recoveries. Classifying needs git's own words, so they are carried rather
+// than folded into a sentence at the point they are produced.
+type gitError struct {
+	args   []string
+	stderr string
+	err    error
+}
+
+func (e *gitError) Error() string {
+	return fmt.Sprintf("git %s: %v: %s", strings.Join(e.args, " "), e.err, e.stderr)
+}
+
+func (e *gitError) Unwrap() error { return e.err }
+
+// remoteProblem turns a git failure into a message a reader can act on.
+//
+// A raw git error is not an answer. It names neither the dependency as the
+// manifest wrote it nor the ref that was asked for, and it says nothing about
+// what to do — and these messages are read in CI logs, by somebody who did not
+// write the manifest. So the failure is classified from git's own words, the
+// words are quoted rather than replaced, and the recovery is stated.
+//
+// Errors this package authored itself, a cancelled context and ErrUnreachableSHA
+// pass through untouched: each already says what it means.
+func remoteProblem(url, ref string, err error) error {
+	var g *gitError
+	if err == nil || !errors.As(err, &g) {
+		return err
+	}
+	headline, advice := classify(g.stderr)
+	return &remoteError{
+		msg: fmt.Sprintf("%s at ref %q: %s\ngit said:\n%s\n%s\n"+
+			"Nothing was cached, so this run changed nothing: the first use of a dependency at a commit "+
+			"is the only step that reaches the remote at all.",
+			url, ref, headline, indent(g.stderr), advice),
+		err: err,
+	}
+}
+
+// remoteError is a fetch failure as a reader sees it. The git error it came
+// from is kept for errors.Is and errors.As, but is not printed a second time:
+// git's words are already quoted in the message, and repeating them is how a
+// diagnostic becomes something people scroll past.
+type remoteError struct {
+	msg string
+	err error
+}
+
+func (e *remoteError) Error() string { return e.msg }
+
+func (e *remoteError) Unwrap() error { return e.err }
+
+// indent marks git's own words as a quotation, so that a multi-line
+// diagnostic does not read as if this tool had written it.
+func indent(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i, line := range lines {
+		lines[i] = "  " + strings.TrimRight(line, " \t")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// classify reads git's diagnostics and decides which failure this is. The
+// alternative — one message for every failure — is what makes a tool's errors
+// worth skipping, and the three cases below have nothing in common but the
+// exit status.
+func classify(stderr string) (headline, advice string) {
+	low := strings.ToLower(stderr)
+	contains := func(needles ...string) bool {
+		for _, n := range needles {
+			if strings.Contains(low, n) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case contains("authentication failed", "could not read username", "could not read password",
+		"terminal prompts disabled", "permission denied (publickey", "invalid username or password",
+		"403 forbidden", "401 unauthorized", "access denied", "authentication required"):
+		return "the remote refused authentication",
+			"Check the credentials this machine offers git for that host: in CI that is a token in the job's " +
+				"git configuration or a credential helper, and on a workstation an ssh key or a stored login. " +
+				"Prompting is off in a non-interactive run, so a missing credential fails here rather than waiting."
+	case contains("not appear to be a git repository", "repository not found", "404 not found",
+		"no such file or directory", "does not exist"):
+		return "there is no repository at that address",
+			"Check the git: address in the manifest against the one the repository is actually served at; " +
+				"a private repository that is unreadable to this machine also answers this way."
+	default:
+		return "could not reach the remote",
+			"Check that this machine can reach that host. The first use of a dependency at a commit is the " +
+				"only step that needs the network; every later run answers from the cache."
+	}
 }

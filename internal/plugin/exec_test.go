@@ -52,6 +52,15 @@ func fakePlugin(mode string) int {
 			Name: proto.String("out.txt"), Content: proto.String("x"),
 		}}})
 		return 0
+	case "cache-url", "cache-install":
+		// Not a plugin at all: a second *process* using the plugin cache, so
+		// that concurrency can be measured between processes rather than
+		// between goroutines. That is the shape the cache is built for — a CI
+		// runner with several jobs on one shared HOME — and it is not the same
+		// as concurrency inside one process: stele has no goroutines, and a
+		// test that forked and exec'd while writing would be measuring the
+		// runtime's fd inheritance rather than this cache.
+		return cacheWorker(verb, strings.Split(arg, "|"))
 	case "exit":
 		fmt.Fprintln(os.Stderr, "the plugin says why it died")
 		return 3
@@ -64,6 +73,32 @@ func fakePlugin(mode string) int {
 	}
 	fmt.Fprintf(os.Stderr, "unknown fake plugin mode %q\n", mode)
 	return 2
+}
+
+// cacheWorker performs one cache operation and prints the path it resolved to.
+//
+// It exists so that concurrency can be measured between processes rather than
+// between goroutines. Between processes is the shape the cache is built for —
+// a CI runner with several jobs on one shared HOME — and it is not the same as
+// concurrency inside one process: stele has no goroutines at all, and a test
+// that forked and exec'd a binary while another goroutine was writing one
+// would be measuring the Go runtime's file-descriptor inheritance rather than
+// this cache.
+func cacheWorker(verb string, args []string) int {
+	c := plugin.Cache{Root: args[0]}
+	var p string
+	var err error
+	if verb == "cache-url" {
+		p, err = c.EnsureURL(context.Background(), args[1], args[2], args[3])
+	} else {
+		p, err = c.Ensure(context.Background(), args[1], args[2])
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Println(p)
+	return 0
 }
 
 func emit(resp *pluginpb.CodeGeneratorResponse) {

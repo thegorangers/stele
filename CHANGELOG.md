@@ -38,7 +38,52 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- A plugin published as an archive holding **two binaries** — one release
+  tarball, `protoc-gen-x` and `protoc-gen-x-plugin` beside it — could not be
+  used for both. The download cache was keyed by the archive's sha256 alone, so
+  the two entries shared one directory and one record of what had been
+  extracted; taking the second member overwrote the first member's record, and
+  every later run refused the first entry as corrupted. The message told the
+  reader to delete the directory, which the next run broke again. An entry is
+  now identified by the digest *and* the member taken from it. Nothing that
+  worked changes; a plugin already downloaded from an archive is fetched once
+  more, because it now lives at a different path inside the cache.
+- The lock is written through a temporary file and renamed into place instead
+  of being overwritten where it lies. A process killed mid-write, or a full
+  disk, used to leave a truncated `stele.lock` — and the dangerous truncation
+  is not the one that fails to parse but the one that lands on an entry
+  boundary and loads cleanly as a lock pinning fewer dependencies than the
+  build that wrote it consumed. A failed write now leaves the previous lock
+  exactly as it was.
+
+### Reports and messages
+
+- A dependency that cannot be fetched no longer reports a raw `git` error. The
+  failure is classified from git's own words and the message names the
+  repository, the ref that was asked for, what happened and what to do about
+  it: a refused credential, an address that serves no repository and a host
+  that cannot be reached have three different recoveries and now read as three
+  different problems. git's own output is quoted rather than replaced.
+- A ref that does not exist on the remote says what makes a ref disappear — a
+  branch deleted after a merge, a tag never pushed — and that a commit SHA is
+  accepted in its place.
+- A locked commit that is gone is explained once rather than twice. The lock
+  layer adds the fact only it knows — which file records that commit, and for
+  which ref — and no longer restates the fetcher's explanation of what a
+  rewritten commit is.
+
 ### Internal
+
+- Failure behaviour is tested rather than intended (milestone 5). An
+  interrupted clone, a killed process's abandoned scratch directory, a remote
+  that refuses authentication, one that answers with a server error, one that
+  closes mid-response, a truncated and a cancelled plugin download, an
+  interrupted `go install`, a cache that cannot be written to, and several
+  processes sharing one cold cache: each is exercised against real git
+  repositories, a real Go toolchain over a `file://` proxy and `httptest`
+  servers, offline. Two of the defects above were found this way.
 
 - Parity with the reference tool is measured in this repository's own CI, on
   every push and every pull request, against a corpus committed under

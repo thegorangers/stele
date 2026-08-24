@@ -14,10 +14,13 @@ Where `stele` stands and what it needs before it can be relied on.
 - Dependencies are pinned by commit; plugins are pinned by module+version or by
   per-platform digest, installed into the tool's own cache and verified after
   installation.
+- What an interrupted clone, an interrupted install, a cold cache with no network
+  and a refused write do is tested rather than intended, offline, against real git
+  repositories and a real Go toolchain (milestone 5).
 
-That is enough to migrate a repository deliberately, with a human watching. It is
-not yet enough to hand to someone who has not been in the room: what a cold
-cache, an interrupted clone or a full disk does is still untested (milestone 5).
+That is enough to migrate a repository deliberately, with a human watching. What is
+left before 1.0 is contract linting (milestone 6), and the honest caveats each
+milestone states about what its evidence does not reach.
 
 ## Milestone 1 — defects found by use
 
@@ -161,14 +164,63 @@ both: a checkout that declares `vendored` is compared against it.
 
 ## Milestone 5 — failure behaviour
 
-Concurrent cache access is tested. These are not:
+~~Concurrent cache access is tested. Interrupted downloads, a cold cache with no
+network and a full disk are not. The cache is content-addressed and written
+atomically, so the design intends these to be safe. Intent is not evidence.~~
+Done, and it found two defects.
 
-- interrupted download or clone; is a partial entry ever visible?
-- a cold cache with the network unavailable — does the error say what to do?
-- disk exhaustion during extraction.
+The design's claim held where it was made: no interrupted clone, cancelled fetch,
+truncated download or interrupted `go install` was ever able to publish an entry a
+later run would trust. What it did not cover is what the two defects were.
 
-The cache is content-addressed and written atomically, so the design intends these to
-be safe. Intent is not evidence.
+- **A partial entry is never reachable.** A clone is interrupted while git is
+  running, by cancelling the context once the scratch directory has content, and
+  the assertions are the two that matter: no directory that looks like a published
+  entry exists, and the next run succeeds completely. The case a cancelled context
+  cannot produce — the process itself killed, so no cleanup runs at all — is built
+  by hand, because a `SIGKILL` leaves nothing to ask: a half-populated scratch
+  directory is placed beside its destination and the next fetch must ignore it.
+  The same is asserted for a plugin download that is truncated by the server, one
+  cancelled mid-body, and an install interrupted while the toolchain is running.
+- **The cache was not the identity it claimed to be.** A plugin download was keyed
+  by the archive's sha256 alone, so two binaries published in one release archive
+  shared an entry, and the second one extracted made the first fail verification
+  for ever after — with a message telling the reader to delete a directory that the
+  next run would break again. An entry is now identified by the digest and the
+  member taken from it.
+- **The lock did not survive a half-write.** It was written with a plain
+  overwriting write, so a process killed mid-write — or a disk with no room left —
+  truncated the one record of what a pinned build consumed. The dangerous
+  truncation is not the one that fails to parse: YAML cut on an entry boundary
+  loads cleanly as a lock pinning fewer dependencies than the build that wrote it.
+  It is written through a temporary file and renamed now, and a failed `--update`
+  leaves the previous pins exactly as they were.
+- **A cold cache with no network says what to do.** A raw git error is not an
+  answer, and these messages are read in CI logs by somebody who did not write the
+  manifest. The failure is classified from git's own words: a refused credential,
+  an address serving no repository, and a host that cannot be reached have three
+  different recoveries and now read as three different problems. Each names the
+  repository and the ref, quotes what git said rather than replacing it, and says
+  that the first use of a dependency at a commit is the only step needing the
+  network at all. `ErrUnreachableSHA` is checked through the real path — a lock
+  pinning a commit no repository holds, fetched by the real fetcher — rather than
+  through a double.
+- **Concurrency beyond the one existing test.** Two refs of one repository fetched
+  side by side; a reader polling a cold entry while another run populates it; and
+  several *processes* — not goroutines — sharing one cache root, both installing
+  one plugin and downloading one pinned binary. Between processes is the shape the
+  cache is built for, a CI runner with several jobs on one `HOME`, and it is the
+  honest one: stele has no goroutines at all.
+
+What is **not** honestly covered, and why. A genuine `ENOSPC` needs a filesystem of
+its own and the privileges to mount one, so it is not simulated: the write is made
+to fail at the same syscall for the neighbouring reason, a cache directory that
+cannot be written to. That refuses a write rather than truncating one, which is the
+weaker half of the question. The stronger half — a *partial* write that must not
+become a cache hit — is covered for real on the fetch side, where a clone is
+interrupted with its tree half laid out on disk. There is no test of a disk filling
+during archive extraction; extraction happens entirely in memory before anything is
+written, which is why the gap is narrow, but it is a gap.
 
 ## Milestone 6 — lint
 

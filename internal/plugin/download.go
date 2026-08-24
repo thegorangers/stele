@@ -56,7 +56,7 @@ func (c Cache) EnsureURL(ctx context.Context, url, digest, member string) (strin
 	digest = strings.ToLower(digest)
 	bin := c.URLPath(url, digest, member)
 	if _, err := os.Stat(bin); err == nil {
-		return bin, verifyFile(bin, c.recordedDigest(digest), url)
+		return bin, verifyFile(bin, c.recordedDigest(digest, member), url)
 	}
 	if err := c.download(ctx, url, digest, member, bin); err != nil {
 		return "", err
@@ -68,7 +68,31 @@ func (c Cache) EnsureURL(ctx context.Context, url, digest, member string) (strin
 // or not it has been downloaded. It is exported for the same reason Path is:
 // a caller can say which binary would run without fetching anything.
 func (c Cache) URLPath(url, digest, member string) string {
-	return filepath.Join(c.Root, dirName, "url", strings.ToLower(digest), downloadName(url, member))
+	return filepath.Join(c.urlDir(digest, member), downloadName(url, member))
+}
+
+// urlDir is the directory one cache entry occupies.
+//
+// The digest alone is not the identity of the entry, and treating it as one
+// was a defect: several published plugins ship two binaries in one release
+// archive, so two entries share the archive's digest and differ only by which
+// member was taken. Keyed by the digest alone they overwrote each other's
+// recorded digest, and the second download made the first entry fail
+// verification for ever after — with a message telling the reader to delete a
+// directory, which the next run would break again.
+//
+// The member is folded into the path as a digest of its own rather than as
+// directories. It comes from a manifest, so it may be absolute, may climb out
+// with .., and may contain anything a tar header can hold; hashing it settles
+// all of that at once. A bare binary — no member — keeps the plain layout,
+// which is what nearly every entry is.
+func (c Cache) urlDir(digest, member string) string {
+	dir := filepath.Join(c.Root, dirName, "url", strings.ToLower(digest))
+	if member == "" {
+		return dir
+	}
+	sum := sha256.Sum256([]byte(path.Clean(member)))
+	return filepath.Join(dir, hex.EncodeToString(sum[:])[:16])
 }
 
 // recordedDigest is the file beside a cached entry holding the digest of the
@@ -81,8 +105,8 @@ func (c Cache) URLPath(url, digest, member string) string {
 // cache entry exploits. So the member's own digest is recorded when it is
 // extracted and re-checked on every use, exactly as a Go plugin's build
 // metadata is re-read on every use.
-func (c Cache) recordedDigest(digest string) string {
-	return filepath.Join(c.Root, dirName, "url", digest, ".digest")
+func (c Cache) recordedDigest(digest, member string) string {
+	return filepath.Join(c.urlDir(digest, member), ".digest")
 }
 
 // downloadName is what the cached binary is called. It is cosmetic — the
@@ -150,7 +174,7 @@ func (c Cache) download(ctx context.Context, url, digest, member, bin string) er
 	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 		return fmt.Errorf("downloading %s: %w", url, err)
 	}
-	if err := os.Rename(filepath.Join(stage, ".digest"), c.recordedDigest(digest)); err != nil {
+	if err := os.Rename(filepath.Join(stage, ".digest"), c.recordedDigest(digest, member)); err != nil {
 		return fmt.Errorf("downloading %s: %w", url, err)
 	}
 	if err := os.Rename(staged, bin); err != nil {
