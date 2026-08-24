@@ -38,7 +38,8 @@ func (r noTODO) Check(f rule.File) ([]rule.Finding, error) {
 		}
 		out = append(out, rule.Finding{
 			// The declaration, not the comment: a finding points at the
-			// thing that has to change.
+			// thing that has to change. A rule objecting to the comment
+			// itself would take c.LeadingPos instead, and say so.
 			Pos:     c.Pos,
 			Message: fmt.Sprintf("%s carries an unresolved TODO in its comment", c.Subject),
 			Fix: "resolve it before the contract ships, or move the note out of the comment: " +

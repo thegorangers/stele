@@ -46,10 +46,13 @@ message Order {
 
 // An enum at the top level.
 enum Status {
-  STATUS_UNSPECIFIED = 0;
+  STATUS_UNSPECIFIED = 0; // A trailing note, and no leading one.
 }
 
 // The service.
+//
+// Two comment lines, so that the position of a comment block is the first
+// of them and not the last.
 service Orders {
   // TODO: a method.
   rpc Get(Order) returns (Order);
@@ -207,4 +210,72 @@ func keys(m map[string]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// lineOf is where a line of the fixture is, one-based. The expectations below
+// are derived from the fixture rather than counted by hand, because a hand
+// count is what makes a position test wrong the first time the fixture grows.
+func lineOf(t *testing.T, substr string) int {
+	t.Helper()
+	for i, line := range strings.Split(fixture, "\n") {
+		if strings.Contains(line, substr) {
+			return i + 1
+		}
+	}
+	t.Fatalf("the fixture has no line containing %q", substr)
+	return 0
+}
+
+// TestAPositionIsTheDeclarationAndTheCommentIsReachable is gap 2 made
+// checkable. Finding.Pos means the declaration, so that two rules in one
+// repository point at the same place; a rule that wants the comment's own line
+// -- one that reports the comment as the defect rather than the declaration --
+// must be able to get it rather than being pushed into computing it, because a
+// rule computing it would compute it differently.
+func TestAPositionIsTheDeclarationAndTheCommentIsReachable(t *testing.T) {
+	f := compileFixture(t)
+	want := map[string]struct{ decl, comment int }{
+		"example.v1.Order":  {lineOf(t, "message Order {"), lineOf(t, "// TODO: rename this")},
+		"example.v1.Orders": {lineOf(t, "service Orders {"), lineOf(t, "// The service.")},
+	}
+	seen := 0
+	for c := range f.Comments() {
+		w, ok := want[c.Subject]
+		if !ok {
+			continue
+		}
+		seen++
+		if c.Pos.Line != w.decl {
+			t.Errorf("%s: Pos.Line = %d, want %d (the declaration)", c.Subject, c.Pos.Line, w.decl)
+		}
+		if c.LeadingPos.Line != w.comment {
+			t.Errorf("%s: LeadingPos.Line = %d, want %d (the first line of the comment)",
+				c.Subject, c.LeadingPos.Line, w.comment)
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("found %d of the %d commented declarations", seen, len(want))
+	}
+}
+
+// TestNoLeadingCommentHasNoPosition. A declaration with only a trailing
+// comment has no leading comment, and the zero Position is the honest answer:
+// pointing at the declaration and calling it the comment's position would be a
+// position that is right by accident.
+func TestNoLeadingCommentHasNoPosition(t *testing.T) {
+	f := compileFixture(t)
+	for c := range f.Comments() {
+		if c.Subject != "example.v1.STATUS_UNSPECIFIED" {
+			continue
+		}
+		if c.Leading != "" {
+			t.Fatalf("the fixture's trailing-only comment acquired a leading one: %q", c.Leading)
+		}
+		if c.LeadingPos != (rule.Position{}) {
+			t.Errorf("LeadingPos = %+v for a declaration with no leading comment, want the zero Position",
+				c.LeadingPos)
+		}
+		return
+	}
+	t.Fatal("no comment on example.v1.STATUS_UNSPECIFIED")
 }

@@ -13,6 +13,7 @@ package rule
 
 import (
 	"iter"
+	"strings"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -150,10 +151,25 @@ type Comment struct {
 	// the region rather than about the declaration, which is why protoc keeps
 	// them apart and why this does too.
 	Detached []string
-	// Pos is where the declaration is — the position a finding about it takes.
-	// See Finding.Pos for why it is the declaration rather than the comment,
-	// and LeadingPos for the rule that wants the other one.
+	// Pos is where the declaration is — the position a finding about it
+	// takes. See Finding.Pos for why a finding points at the declaration
+	// rather than at the comment.
 	Pos Position
+	// LeadingPos is where the leading comment block begins: its first line,
+	// not its last, and not the declaration's. It is the zero Position when
+	// there is no leading comment.
+	//
+	// It is here because the decision recorded on Finding.Pos — a finding
+	// points at the declaration — is only defensible if the rule that wants
+	// the other position can have it. A rule that had to compute this itself
+	// would compute it from the number of lines in the comment text, which is
+	// exactly what happens below, and four rules doing it would get the blank
+	// `//` line and the detached blocks differently wrong.
+	//
+	// Col is the declaration's column. Source information records where a
+	// declaration starts and not where its comment does, so there is nothing
+	// truer to report; the line is the part a reader navigates by.
+	LeadingPos Position
 }
 
 // Comments iterates every comment in the file, in the order source information
@@ -178,6 +194,7 @@ func (f File) Comments() iter.Seq[Comment] {
 			if d != nil {
 				subject = string(d.FullName())
 			}
+			pos := Position{Line: loc.StartLine + 1, Col: loc.StartColumn + 1}
 			c := Comment{
 				Path:     loc.Path,
 				Desc:     d,
@@ -185,7 +202,14 @@ func (f File) Comments() iter.Seq[Comment] {
 				Leading:  loc.LeadingComments,
 				Trailing: loc.TrailingComments,
 				Detached: loc.LeadingDetachedComments,
-				Pos:      Position{Line: loc.StartLine + 1, Col: loc.StartColumn + 1},
+				Pos:      pos,
+			}
+			if n := strings.Count(loc.LeadingComments, "\n"); n > 0 {
+				// Every line of a leading comment block ends in a newline, and
+				// the block is immediately above the declaration with no blank
+				// line between — that is what makes it leading rather than
+				// detached. So the block begins that many lines up.
+				c.LeadingPos = Position{Line: pos.Line - n, Col: pos.Col}
 			}
 			if !yield(c) {
 				return

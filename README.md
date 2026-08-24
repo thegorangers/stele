@@ -310,6 +310,21 @@ func (noTODO) Description() string { return "no declaration carries an unresolve
 func (noTODO) Check(f rule.File) ([]rule.Finding, error) { ... }
 ```
 
+`rule.File` carries the linked file and the means to locate things in it:
+`Pos` for a descriptor, `DescriptorAt` for the source path a location gives
+you, and `Comments` for every comment in the file with the declaration it is
+attached to. A rule about comments is a loop over `f.Comments()`; nothing in it
+spells out a descriptor-proto field number.
+
+**A finding's position is the declaration, not the comment above it.** A
+comment is evidence about a declaration, the edit lands on the declaration, and
+one repository runs rules from several authors — a position each rule chooses
+for itself is a report whose lines mean different things on different lines. A
+rule that really is reporting the comment itself takes `Comment.LeadingPos`,
+which is the first line of the comment block; it is supplied so that the
+decision is a decision rather than a limitation. This is stated on `Finding.Pos`
+in the [`rule`](rule) package, which is where a rule author reads it.
+
 A complete worked example, in its own Go module depending on nothing under
 `internal/`, is at
 [`internal/lint/host/testdata/examplerule`](internal/lint/host/testdata/examplerule).

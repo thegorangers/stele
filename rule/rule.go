@@ -91,6 +91,8 @@ func ParseSeverity(s string) (Severity, error) {
 // Position is where in a file a finding is, in the coordinates an editor and a
 // compiler both use: one-based line and column.
 //
+// A position names a declaration, never the comment above it. See Finding.Pos.
+//
 // A zero Line means the file itself is the subject and no smaller place
 // applies. It is never a missing position for something that has one — source
 // information is retained through compilation precisely so that this does not
@@ -115,7 +117,28 @@ type Finding struct {
 	Severity Severity
 	// Path is the import path of the file. The engine stamps it.
 	Path string
-	// Pos is where in the file the subject is.
+	// Pos is where in the file the subject is: the line and column of the
+	// declaration the finding is about.
+	//
+	// The declaration, and not the comment above it, even for a rule whose
+	// whole subject is that comment. Two reasons, and the second is the
+	// binding one:
+	//
+	//   - It is what the reader has to change. A comment is evidence about a
+	//     declaration; the edit lands on the declaration or on the lines it
+	//     owns, and an editor that jumped to the comment would have jumped
+	//     one line short of the thing.
+	//   - One repository runs rules from several authors, and a position
+	//     everybody chooses for themselves is a report whose lines mean
+	//     different things on different lines. This is the kind of decision
+	//     that has to be made once, by the interface, or it is made four
+	//     times.
+	//
+	// A rule that genuinely reports the comment itself — one that objects to
+	// what the comment says rather than to what it describes — takes
+	// Comment.LeadingPos and says so in its message. That position is
+	// supplied for exactly that case: a decision that leaves the other
+	// position unreachable is not a decision, it is a limitation.
 	Pos Position
 	// Message states what is wrong.
 	Message string
@@ -148,10 +171,13 @@ func (f Finding) String() string {
 // descriptor inside it.
 //
 // It is a struct rather than the descriptor itself so that what a rule is
-// handed can grow without every out-of-tree rule having to be rewritten. Pos
-// is here rather than left to each rule because reaching source locations
-// correctly is fiddly and getting it wrong is invisible until somebody reads a
-// finding that points at the wrong line.
+// handed can grow without every out-of-tree rule having to be rewritten. Pos,
+// DescriptorAt and Comments are here rather than left to each rule because
+// reaching source locations correctly is fiddly and getting it wrong is
+// invisible until somebody reads a finding that points at the wrong line.
+//
+// Positions from any of them name the declaration, which is what Finding.Pos
+// means; Comment.LeadingPos is the one exception and is documented as such.
 type File struct {
 	// Desc is the linked file. Its imports are reachable through it.
 	Desc protoreflect.FileDescriptor
