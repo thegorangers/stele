@@ -23,6 +23,14 @@ did not ask to change.
   closely. Including whitespace.
 - A manifest, lock file or repository layout that used to be accepted is now
   refused, or a command's exit status changes for an input that already worked.
+- **A new built-in lint rule.** It is a special case of the line above, and worth
+  naming because it does not look like one: the rule is an addition, but a
+  repository that lints a green tree today can fail on the next release without
+  changing anything it owns. The changelog entry names the rule, so that the
+  recovery — fix it, or set its severity in `stele.yaml` — is in front of whoever
+  reads it. The alternative, shipping new rules at `warning` for one release, was
+  rejected: a severity that means two things depending on when you adopted the
+  tool is worse than a version number that means what it says.
 - A command, flag or manifest field is removed or given a different meaning.
 - The lock file format changes such that an older stele cannot read a lock a
   newer one wrote, or the reverse.

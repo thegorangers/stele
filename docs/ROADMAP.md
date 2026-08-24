@@ -18,9 +18,14 @@ Where `stele` stands and what it needs before it can be relied on.
   and a refused write do is tested rather than intended, offline, against real git
   repositories and a real Go toolchain (milestone 5).
 
+- Contract linting has a first slice: an engine, a rule interface designed as the
+  one an out-of-tree rule implements, eight rules each measured against 35 real
+  proto files before it was chosen, and `stele lint`. No plugin host, no
+  breaking-change detection, no AIP profile (milestone 6).
+
 That is enough to migrate a repository deliberately, with a human watching. What is
-left before 1.0 is contract linting (milestone 6), and the honest caveats each
-milestone states about what its evidence does not reach.
+left before 1.0 is the rest of contract linting (milestone 6), and the honest
+caveats each milestone states about what its evidence does not reach.
 
 ## Milestone 1 — defects found by use
 
@@ -224,14 +229,116 @@ written, which is why the gap is narrow, but it is a gap.
 
 ## Milestone 6 — lint
 
-Deliberately last, and worth stating why the order is not laziness: in the fleet this
-tool was built for, contract linting **does not run at all** — not in CI, not on
-merge. There is no protection to preserve here, only protection to introduce. A lint
-that lands before the generation half is trustworthy would be a second thing to
-maintain and a first thing to switch off.
+~~Deliberately last, and worth stating why the order is not laziness: in the fleet
+this tool was built for, contract linting **does not run at all** — not in CI, not
+on merge. There is no protection to preserve here, only protection to introduce. A
+lint that lands before the generation half is trustworthy would be a second thing
+to maintain and a first thing to switch off.~~ First slice landed: the engine, the
+rule interface, eight rules and `stele lint`.
 
-When it lands it should use the plugin host, so the first rules are written against
-the same interface an outside contributor would use.
+The order argument is also the design argument. Because there is nothing to
+preserve, the only failure mode that matters is a lint that gets switched off, and
+every decision below is made against that.
+
+### What landed
+
+- **The rule interface, designed as the out-of-tree one.** A rule is handed one
+  linked file and returns findings. Nothing in it reaches the filesystem, the
+  manifest, the configuration or the process, because none of those survive a
+  process boundary — what crosses one is a set of descriptors and a list of
+  findings, which is exactly what `Check` takes and returns. The plugin host is a
+  later slice and must be a *transport* for this interface, not a second one.
+- **Rule ids are a public contract, and namespaced from the first release.** An id
+  is `namespace/name`; built-ins live in the reserved `stele` namespace. Under
+  `RELEASING.md` renaming an id is breaking, and retrofitting a namespace later
+  would be exactly that rename — one that does not fail loudly but silently stops
+  matching the ignore list that named it. An id no loaded rule carries is an error
+  naming it, never a line that does nothing.
+- **Severity is configuration, not a property of the rule.** `error`, `warning`,
+  `off`, per rule, in `stele.yaml`. This is the adoption mechanism, and it is
+  deliberately in a file reviewed with the contracts rather than in
+  `allow_failure: true` on a CI job that is invisible from here.
+- **`stele lint`,** checking only the modules this repository owns. Findings
+  render as `path:line:col: severity: rule: message` with what to do about it
+  indented beneath — the standard milestone 5's failure messages were held to.
+- **A run that checked no files is an error**, not a clean run. An ignore list
+  that grew until it covered everything, and a module path that no longer holds
+  protos, are silent otherwise: the build stays green and the protection is gone.
+
+### The rules, measured before they were chosen
+
+Each rule was run over 35 hand-written `.proto` files from fourteen services of
+the fleet described above — the same fleet where no lint runs today — before it
+was included. A rule that reddens a fleet on day one gets disabled and never
+returns, so the counts are the argument, not a footnote to it:
+
+| rule | findings | files affected |
+| --- | --- | --- |
+| `stele/syntax_declared` | 0 | 0/35 |
+| `stele/package_declared` | 0 | 0/35 |
+| `stele/package_lower_snake_case` | 0 | 0/35 |
+| `stele/package_version_suffix` | 0 | 0/35 |
+| `stele/directory_matches_package` | 0 | 0/35 |
+| `stele/enum_zero_value_unspecified` | 0 | 0/35 |
+| `stele/enum_value_prefix` | 40 | 1/35 |
+| `stele/enum_value_upper_snake_case` | 0 | 0/35 |
+
+Forty findings, all of one rule, all in one file: one service wrote its enums
+without the prefix and the other thirteen did not. That is a rule a fleet can
+switch on — one file to fix, or one `severity: warning` line while it is fixed.
+
+The measurement corpus is not committed and cannot be: it is an organisation's
+private repositories, and `internal/hygiene` forbids organisation-specific
+identifiers with no exemptions. What is committed is the neutral fixtures, and
+every rule is proved twice — that it fires on a file that breaks it, and,
+separately, that it says nothing about a file that keeps it. The second half is
+the one usually skipped, and a rule that fires on everything passes the first.
+
+### Measured and rejected
+
+These were implemented, measured against the same fleet, and left out. They are
+recorded because "we did not think of it" and "we measured it and it was wrong"
+are different answers.
+
+- **`rpc_response_named_for_method`** (a method `Foo` returns `FooResponse`) —
+  2 findings, both correct code. Both are server-streaming methods returning a
+  stream of domain events, which is what a streaming method should return. The
+  rule is right most of the time, and right most of the time is the property that
+  teaches people to ignore output.
+- **`rpc_request_named_for_method`**, **`rpc_types_not_shared`** — 0 findings, but
+  the same objection reaching further: two methods legitimately share an empty
+  request, and a rule cannot tell that from two methods that will need to evolve
+  apart.
+- **Message, field, service, rpc and oneof casing** — 0 findings, mechanical, and
+  left out anyway. They protect nothing the tool can name, and every id shipped is
+  one that can never be renamed. They are the obvious first batch to add if a
+  consumer wants them.
+
+### Not in this slice, and said plainly rather than implied
+
+- **The go-plugin host.** The interface is designed for it; it does not exist.
+- **The breadth of an AIP profile.** Eight rules is eight rules.
+- **Breaking-change detection.** Nothing compares this revision against a
+  previous one.
+- **A baseline.** `severity: warning` buys time to fix what is there. It does not
+  protect new code from the same mistake, and that gap is real: a baseline —
+  failing only on findings that were not already present — is the next thing this
+  milestone needs, and it is a second file format with its own drift questions.
+- **Suppression at the source.** Deliberate, not an oversight. A `// stele:ignore`
+  comment lives in the producer's file and travels to every consumer that vendors
+  it, carrying one repository's decision into repositories that never made it.
+  The manifest is where an exemption is auditable by the people it binds.
+
+### An argument against part of this, recorded
+
+Every built-in rule runs unless configured otherwise. That is right — a rule
+that shipped switched off would ship dead, and the whole point is protection that
+arrives. But it means **adding a built-in rule can turn a green build red**, which
+under `RELEASING.md` is a breaking change: "a command's exit status changes for an
+input that already worked". So it bumps the field that signals "read this before
+upgrading", and the changelog names the rule. The alternative — new rules default
+to `warning` for a release — was rejected as a rule that means two things
+depending on when you adopted it.
 
 ## Not planned
 

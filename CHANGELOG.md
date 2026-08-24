@@ -38,6 +38,54 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+
+- **`stele lint`** — a first slice of contract linting: an engine, a rule
+  interface, eight rules and a command. It compiles the protos this repository
+  owns and reports findings as `path:line:col: severity: rule: message` with
+  what to do about it on the line beneath. Nothing is written and nothing is
+  changed. Dependencies are compiled, because an import has to link, and are not
+  judged: a finding about somebody else's contract is one nobody here can act on.
+
+  The eight rules are `stele/syntax_declared`, `stele/package_declared`,
+  `stele/package_lower_snake_case`, `stele/package_version_suffix`,
+  `stele/directory_matches_package`, `stele/enum_zero_value_unspecified`,
+  `stele/enum_value_prefix` and `stele/enum_value_upper_snake_case`. Each was
+  measured against 35 hand-written proto files from a fleet where no lint runs
+  at all before it was included; the counts, and the rules that were measured
+  and rejected, are in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+  There is no plugin host, no breaking-change detection and no AIP profile in
+  this slice, and the README says so rather than implying more is covered.
+- **A `lint` block in `stele.yaml`**, and in the schema. It sets what a rule
+  costs — `error`, `warning` or `off` — and which import paths no rule, or one
+  rule, is applied to. This is the adoption mechanism: a repository that has
+  never linted has findings on the first run, and the way to a green build is a
+  reviewed field in the manifest rather than `allow_failure: true` in a CI job
+  that is invisible from the repository the rules are about. A `warning` does
+  not protect new code from the same mistake, and the roadmap says so.
+- **`stele lint --rules`**, printing the rules this build carries with their ids
+  and what each requires. A rule id is a public contract that goes into a
+  manifest; a list somebody has to read the source to find is one they guess at.
+
+### Refused input
+
+- A `lint` block that configures nothing, a rule id that is not
+  `namespace/name`, a severity outside `error`/`warning`/`off`, two entries
+  naming one rule, and an ignore entry that is empty or looks like a glob are
+  all refused, naming the field. A glob-looking entry matched literally would be
+  an exemption the author believes they have written and does not have.
+- A rule id no loaded rule carries fails the run, naming it and listing what is
+  loaded. A typo in an ignore list, or a rule that has been removed, otherwise
+  leaves the manifest claiming a protection or an exemption that does not exist.
+
+### Note for a future release
+
+Adding a built-in rule can turn a green build red. Under
+[RELEASING.md](RELEASING.md) that is a breaking change — "a command's exit status
+changes for an input that already worked" — so it bumps the field that signals
+"read this before upgrading", and the entry names the rule.
+
 ### Fixed
 
 - A plugin published as an archive holding **two binaries** — one release
