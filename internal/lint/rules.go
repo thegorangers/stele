@@ -72,14 +72,14 @@ func (syntaxDeclared) Description() string {
 // reflective descriptor, because that is the only place the difference
 // survives: a file that declares proto2 and a file that declares nothing are
 // both Proto2 reflectively, and only one of them is a mistake.
-func (r syntaxDeclared) Check(f File) []Finding {
+func (r syntaxDeclared) Check(f File) ([]Finding, error) {
 	if protodesc.ToFileDescriptorProto(f.Desc).GetSyntax() != "" {
-		return nil
+		return nil, nil
 	}
 	return []Finding{{
 		Message: "the file declares no syntax, so it is proto2",
 		Fix:     `add syntax = "proto3"; as the first statement, or declare proto2 explicitly if that is what is meant`,
-	}}
+	}}, nil
 }
 
 type packageDeclared struct{}
@@ -89,15 +89,15 @@ func (packageDeclared) Description() string {
 	return "a file declares a package"
 }
 
-func (r packageDeclared) Check(f File) []Finding {
+func (r packageDeclared) Check(f File) ([]Finding, error) {
 	if f.Desc.Package() != "" {
-		return nil
+		return nil, nil
 	}
 	return []Finding{{
 		Message: "the file declares no package, so everything it defines is in the global scope",
 		Fix: "declare a package matching the directory the file is in, such as " +
 			pathToPackage(path.Dir(string(f.Desc.Path()))),
-	}}
+	}}, nil
 }
 
 type packageLowerSnakeCase struct{}
@@ -107,10 +107,10 @@ func (packageLowerSnakeCase) Description() string {
 	return "every component of a package is lower_snake_case"
 }
 
-func (r packageLowerSnakeCase) Check(f File) []Finding {
+func (r packageLowerSnakeCase) Check(f File) ([]Finding, error) {
 	pkg := string(f.Desc.Package())
 	if pkg == "" {
-		return nil // packageDeclared has already said so
+		return nil, nil // packageDeclared has already said so
 	}
 	for _, c := range strings.Split(pkg, ".") {
 		if lowerSnake(c) != nil {
@@ -119,10 +119,10 @@ func (r packageLowerSnakeCase) Check(f File) []Finding {
 				Message: fmt.Sprintf("package %s has a component (%q) that is not lower_snake_case", pkg, c),
 				Fix: "write every component in lower_snake_case; a package is a directory on disk in every " +
 					"language the descriptor is generated into, and the case of a directory is not portable",
-			}}
+			}}, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 type packageVersionSuffix struct{}
@@ -132,21 +132,21 @@ func (packageVersionSuffix) Description() string {
 	return "a package ends in a version, such as v1 or v2beta1"
 }
 
-func (r packageVersionSuffix) Check(f File) []Finding {
+func (r packageVersionSuffix) Check(f File) ([]Finding, error) {
 	pkg := string(f.Desc.Package())
 	if pkg == "" {
-		return nil
+		return nil, nil
 	}
 	last := pkg[strings.LastIndex(pkg, ".")+1:]
 	if versionComponent(last) {
-		return nil
+		return nil, nil
 	}
 	return []Finding{{
 		Pos:     f.PosOfPackage(),
 		Message: fmt.Sprintf("package %s does not end in a version", pkg),
 		Fix: "append a version component, such as " + pkg + ".v1. Without one there is nowhere to put the " +
 			"next incompatible shape of this contract, so every consumer has to change on the same day",
-	}}
+	}}, nil
 }
 
 // versionComponent reports whether c is a version the way proto packages spell
@@ -192,10 +192,10 @@ func (directoryMatchesPackage) Description() string {
 // the only name a consumer has for a file, and when it does not follow from
 // the package, two repositories can supply one path with different contents
 // and nothing in the file says which is which.
-func (r directoryMatchesPackage) Check(f File) []Finding {
+func (r directoryMatchesPackage) Check(f File) ([]Finding, error) {
 	pkg := string(f.Desc.Package())
 	if pkg == "" {
-		return nil
+		return nil, nil
 	}
 	dir := path.Dir(string(f.Desc.Path()))
 	if dir == "." {
@@ -203,7 +203,7 @@ func (r directoryMatchesPackage) Check(f File) []Finding {
 	}
 	want := packageToPath(pkg)
 	if dir == want {
-		return nil
+		return nil, nil
 	}
 	return []Finding{{
 		Pos: f.PosOfPackage(),
@@ -212,7 +212,7 @@ func (r directoryMatchesPackage) Check(f File) []Finding {
 		Fix: fmt.Sprintf("move the file to %s/%s, or change the package to %s. The import path is the only "+
 			"name a consumer has for this file, and it should follow from the package rather than from where "+
 			"somebody put it", want, path.Base(string(f.Desc.Path())), pathToPackage(dir)),
-	}}
+	}}, nil
 }
 
 func packageToPath(pkg string) string { return strings.ReplaceAll(pkg, ".", "/") }
@@ -236,7 +236,7 @@ func (enumZeroValueUnspecified) Description() string {
 // stylistic one. In proto3 an unset field reads as the zero value, so an enum
 // whose zero value carries a meaning cannot tell "not set" from that meaning,
 // and no amount of care at the call site recovers the difference.
-func (r enumZeroValueUnspecified) Check(f File) []Finding {
+func (r enumZeroValueUnspecified) Check(f File) ([]Finding, error) {
 	var out []Finding
 	eachEnum(f.Desc, func(e protoreflect.EnumDescriptor) {
 		if e.Values().Len() == 0 {
@@ -255,7 +255,7 @@ func (r enumZeroValueUnspecified) Check(f File) []Finding {
 				"zero value, so whatever occupies zero cannot be distinguished from a field nobody set", want),
 		})
 	})
-	return out
+	return out, nil
 }
 
 type enumValuePrefix struct{}
@@ -269,7 +269,7 @@ func (enumValuePrefix) Description() string {
 // scope enclosing the enum, not in the enum: two enums in one package with a
 // value named the same thing do not compile together, and the failure lands on
 // whoever imports both rather than on whoever wrote either.
-func (r enumValuePrefix) Check(f File) []Finding {
+func (r enumValuePrefix) Check(f File) ([]Finding, error) {
 	var out []Finding
 	eachEnum(f.Desc, func(e protoreflect.EnumDescriptor) {
 		want := screamingSnake(string(e.Name())) + "_"
@@ -288,7 +288,7 @@ func (r enumValuePrefix) Check(f File) []Finding {
 			})
 		}
 	})
-	return out
+	return out, nil
 }
 
 type enumValueUpperSnakeCase struct{}
@@ -298,7 +298,7 @@ func (enumValueUpperSnakeCase) Description() string {
 	return "an enum's values are UPPER_SNAKE_CASE"
 }
 
-func (r enumValueUpperSnakeCase) Check(f File) []Finding {
+func (r enumValueUpperSnakeCase) Check(f File) ([]Finding, error) {
 	var out []Finding
 	eachEnum(f.Desc, func(e protoreflect.EnumDescriptor) {
 		for i := 0; i < e.Values().Len(); i++ {
@@ -315,7 +315,7 @@ func (r enumValueUpperSnakeCase) Check(f File) []Finding {
 			})
 		}
 	})
-	return out
+	return out, nil
 }
 
 // eachEnum visits every enum the file declares, nested ones included, in

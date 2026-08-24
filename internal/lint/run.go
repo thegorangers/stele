@@ -87,9 +87,15 @@ type Report struct {
 }
 
 // Failed reports whether the run should fail the build: an error-severity
-// finding, and nothing else. A warning is reported and costs nothing, which is
-// the entire point of it.
-func (r *Report) Failed() bool { return r.Errors > 0 }
+// finding, or a rule that could not run at all. A warning is reported and
+// costs nothing, which is the entire point of it.
+//
+// A failed rule fails the run regardless of what severity that rule was
+// configured at. Severity says what a *finding* costs; a rule that never
+// reached a finding has said nothing about this repository, and a run that
+// passed on its silence would be reporting an absence of evidence as evidence
+// of absence.
+func (r *Report) Failed() bool { return r.Errors > 0 || len(r.Failures) > 0 }
 
 // Write renders every finding, in order, one to a line with its fix indented
 // beneath.
@@ -100,6 +106,15 @@ func (r *Report) Failed() bool { return r.Errors > 0 }
 // and this repository's are the same import path and different files, and a
 // reader in a CI log has to know which one to go to.
 func (r *Report) Write(w io.Writer) {
+	// Failures first. They are the reason the rest of the output is
+	// incomplete, and a reader who sees the findings first reads them as the
+	// whole answer.
+	for _, f := range r.Failures {
+		if p, ok := r.disk[f.Path]; ok {
+			f.Path = p
+		}
+		fmt.Fprintln(w, f.String())
+	}
 	for _, f := range r.Findings {
 		if p, ok := r.disk[f.Path]; ok {
 			f.Path = p
@@ -112,9 +127,13 @@ func (r *Report) Write(w io.Writer) {
 // prints it too: a run that checked nothing looks exactly like a clean one
 // without it.
 func (r *Report) Summary() string {
-	return fmt.Sprintf("stele: lint checked %s with %s: %s, %s\n",
+	s := fmt.Sprintf("stele: lint checked %s with %s: %s, %s",
 		plural(r.Files, "file"), plural(r.Rules, "rule"),
 		plural(r.Errors, "error"), plural(r.Warnings, "warning"))
+	if n := len(r.Failures); n > 0 {
+		s += fmt.Sprintf(", and %s did not run", plural(n, "rule check"))
+	}
+	return s + "\n"
 }
 
 func plural(n int, unit string) string {
