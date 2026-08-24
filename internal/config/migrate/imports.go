@@ -441,3 +441,38 @@ func subsume(paths []string) []string {
 	}
 	return out
 }
+
+// isCommit reports whether a ref names content rather than a label.
+//
+// A commit SHA is the full hex digest and nothing else. An abbreviation is
+// deliberately not one: it identifies content only for as long as it stays
+// unambiguous in a repository that keeps growing.
+//
+// This is a warning and not a refusal, which is a decision worth writing down.
+// migrate refuses a shape it cannot translate faithfully, and a branch ref
+// translates perfectly: config.Dep documents a branch or a tag as what an
+// updating run resolves, `stele` loads such a manifest, and stele.lock pins
+// the commit it resolved to — so what is emitted here is a manifest the rest
+// of the tool accepts and builds reproducibly from. Refusing it would have
+// migrate legislate a policy the tool does not hold. The nearby refusals are
+// not counter-examples: `#branch=` is refused because buf's fragment is not a
+// ref at all, and an absent ref is refused because inventing one is
+// fabrication. Carrying across a ref somebody wrote is neither.
+//
+// It is not a lint rule either. internal/lint checks linked proto descriptors
+// and deliberately reaches nothing of the manifest, and every rule ID it
+// carries is permanent under RELEASING.md. A manifest check does not belong in
+// that surface, and inventing a second lint for one rule would be a larger
+// decision than this one. The roadmap records it as the open question it is.
+func isCommit(ref string) bool {
+	if len(ref) != 40 && len(ref) != 64 {
+		return false
+	}
+	for i := 0; i < len(ref); i++ {
+		c := ref[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}

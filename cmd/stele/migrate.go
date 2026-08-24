@@ -83,6 +83,9 @@ func runMigrate(_ context.Context, args []string, stdout, stderr io.Writer) erro
 	for _, n := range r.Notes {
 		fmt.Fprintf(stderr, "stele migrate: dropped: %s\n", n)
 	}
+	for _, w := range r.Warnings {
+		fmt.Fprintf(stderr, "stele migrate: warning: %s\n", w)
+	}
 	for _, u := range r.Unresolved {
 		fmt.Fprintf(stderr, "stele migrate: unresolved: %s\n", u)
 	}

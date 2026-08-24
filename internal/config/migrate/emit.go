@@ -48,6 +48,12 @@ func (r *Result) header() string {
 			lines = append(lines, "  - "+u)
 		}
 	}
+	if len(r.Warnings) > 0 {
+		lines = append(lines, "", "WARNING — translated faithfully, and worth reading before this is committed:")
+		for _, w := range r.Warnings {
+			lines = append(lines, "  - "+w)
+		}
+	}
 	if len(r.Notes) > 0 {
 		lines = append(lines, "", "Dropped on purpose (no counterpart in this tool):")
 		for _, n := range r.Notes {
@@ -72,11 +78,16 @@ func annotateDeps(doc *yaml.Node, f *config.File) {
 		if i >= len(deps.Content) {
 			continue
 		}
-		if d.Ref != "" {
-			continue
+		switch {
+		case d.Ref == "":
+			deps.Content[i].HeadComment = fmt.Sprintf(
+				"TODO: pin a commit. `buf export` took the default branch of %s\nand recorded nothing, so there is no ref to carry over.", d.Git)
+		case !isCommit(d.Ref):
+			// The manifest is where a reviewer looks, and a moving ref is
+			// spelled there exactly like a pinned one, minus nothing.
+			deps.Content[i].HeadComment = fmt.Sprintf(
+				"REVIEW: %q is not a full commit SHA. It is a label somebody else\ncan move, so an upstream merge can change this repository's generated\nbytes with no change here. stele.lock pins what each run resolved to,\nuntil the next --update.", d.Ref)
 		}
-		deps.Content[i].HeadComment = fmt.Sprintf(
-			"TODO: pin a commit. `buf export` took the default branch of %s\nand recorded nothing, so there is no ref to carry over.", d.Git)
 	}
 }
 
