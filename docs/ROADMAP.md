@@ -76,6 +76,22 @@ because each has already cost someone time.
   before and after; on the repository that produced the defect exactly one item
   disappears, the false one, and the other twelve remain.
 
+  The three shortfalls that fix left behind are closed. A `define`/`endef` body is
+  no longer read by its own indentation: a body is stored verbatim and means
+  whatever the place it is expanded makes it mean — probed against GNU Make 4.4.1,
+  which strips nothing inside a body, so `echo one # two` keeps its hash and
+  `a\#b` its backslash, and hands the same body to the shell when it is expanded
+  in a recipe. The body is dropped, and refused by name when it holds `buf export`
+  or `go install`, which was the only silent way past this reader's limits;
+  refusing every `define` instead would refuse Makefiles it translates correctly,
+  one of them in the measured fleet. `.RECIPEPREFIX` is now refused in one shape
+  rather than two: the plugin reader used to file it as an unreadable invocation,
+  where the run aborted on the export reader's error before anyone read it. And
+  `\#` is read by counting the backslash run, as measured: `a\\#b` is `a\` and a
+  comment, `a\\\#b` is `a\#b` entire, and a backslash with no hash after it is
+  left as written. Re-run over the same fleet, every unresolved report and every
+  emitted manifest is byte-identical to before.
+
 ## Milestone 2 — releases
 
 ~~Without this there is no way to answer "which version broke?" or to roll back.~~

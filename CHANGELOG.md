@@ -59,6 +59,21 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ### Refused input
 
+- **`stele migrate` refuses a `Makefile` whose `define` body holds `buf export`
+  or `go install`**, and one whose `define` has no `endef`. A `define` body is
+  stored verbatim and means whatever the place it is expanded makes it mean;
+  the Makefile reader does not follow expansion, so it used to read a body by
+  its own indentation and could recover an invocation that never runs, or lose
+  half of one that does, saying nothing either way. That was the one limit of
+  this reader that was silent — `.RECIPEPREFIX` was already refused outright.
+  A body holding neither word is dropped, which loses nothing the reader was
+  going to recover from it, so the ordinary uses of `define` still migrate.
+
+- **A `Makefile` this reader cannot read is refused whichever half reaches it
+  first.** `.RECIPEPREFIX` was an error from the export reader and, from the
+  plugin reader, an entry in the list of unreadable invocations — an entry
+  nobody ever saw, since the run aborted on the other reader's error first.
+
 - **A `lint.plugins` entry that declares no `module`, `downloads` or `path` is
   refused** unless it also says `unpinned: true`. Such an entry is whatever the
   machine's `PATH` resolves the name to. The vocabulary is deliberately shared
@@ -70,6 +85,16 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   be saying two things that cannot both be true.
 
 ### Reports and messages
+
+- **`stele migrate` reads a backslash run before a `#` in a `Makefile` as GNU
+  Make does.** It had a two-character lookahead, which agreed with Make only on
+  a single backslash: it read `a\\#b` as `a\\` where Make gives `a\`, and
+  `a\\\#b` as `a\\#b` where Make gives `a\#b`. Make collapses each pair of
+  backslashes in the run immediately before the hash, and a leftover odd
+  backslash escapes the hash; the behaviour was measured against GNU Make 4.4.1
+  rather than taken from its documentation, which is vague here. No repository
+  in the measured fleet writes such a line, so nothing in it changes; a
+  migration report that offered a guess as a reading would have.
 
 - **A finding's position means the declaration, not the comment above it**, and
   it now says so on `Finding.Pos`, on `Position` and in the README. Nothing
