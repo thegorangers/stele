@@ -360,27 +360,40 @@ func continued(t string) bool {
 
 // stripMakeComment removes a make comment from a logical line outside any
 // recipe. Quotes do not protect a `#` here; a backslash does.
+//
+// What a backslash does exactly was measured against GNU Make 4.4.1, since
+// its documentation is vague and no measured Makefile exercises it. In the run
+// of backslashes immediately before a `#`, every pair collapses to one
+// backslash; a leftover odd backslash then escapes the hash, and an even run
+// leaves the hash to open a comment. `a\\#b` is therefore `a\` and a comment,
+// while `a\\\#b` is `a\#b` entire. The collapsing is local to that run: a
+// backslash with no hash after it is left exactly as written, so `a\\b` stays
+// `a\\b`.
 func stripMakeComment(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\\':
-			if i+1 < len(s) && s[i+1] == '#' {
-				b.WriteString("#")
-				i++
-				continue
-			}
-			if i+1 < len(s) && s[i+1] == '\\' {
-				b.WriteString(`\\`)
-				i++
-				continue
-			}
-			b.WriteString(`\`)
-		case '#':
+		if s[i] == '#' {
 			return b.String()
-		default:
-			b.WriteByte(s[i])
 		}
+		if s[i] != '\\' {
+			b.WriteByte(s[i])
+			continue
+		}
+		n := 0
+		for i+n < len(s) && s[i+n] == '\\' {
+			n++
+		}
+		if i+n == len(s) || s[i+n] != '#' {
+			b.WriteString(strings.Repeat(`\`, n))
+			i += n - 1
+			continue
+		}
+		b.WriteString(strings.Repeat(`\`, n/2))
+		if n%2 == 0 {
+			return b.String()
+		}
+		b.WriteByte('#')
+		i += n
 	}
 	return b.String()
 }
