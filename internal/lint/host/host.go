@@ -78,6 +78,11 @@ type Plugin struct {
 type Set struct {
 	procs []*process
 	rules []rule.Rule
+	// owner maps a rule ID to the plugin serving it. A rule ID is what
+	// configuration names, and the plugin is what a reader has to go and
+	// edit; a listing that showed one without the other would name a rule
+	// nobody can find the declaration of.
+	owner map[string]string
 }
 
 // Rules returns the loaded rules, sorted by ID.
@@ -86,6 +91,15 @@ func (s *Set) Rules() []rule.Rule {
 		return nil
 	}
 	return s.rules
+}
+
+// PluginFor names the plugin serving the rule with this ID, or the empty
+// string when this set serves no such rule.
+func (s *Set) PluginFor(id string) string {
+	if s == nil {
+		return ""
+	}
+	return s.owner[id]
 }
 
 // Close stops every rule process. It is safe to call twice.
@@ -114,8 +128,8 @@ func (s *Set) Close() error {
 // A failure here stops every process already started. A tool that left them
 // running would leave a machine with a process per broken run.
 func Load(ctx context.Context, plugins []Plugin) (*Set, error) {
-	set := &Set{}
-	owner := make(map[string]string) // rule ID -> plugin name
+	set := &Set{owner: make(map[string]string)} // rule ID -> plugin name
+	owner := set.owner
 	for _, pl := range plugins {
 		p, err := start(ctx, pl)
 		if err != nil {

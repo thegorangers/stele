@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -380,5 +381,100 @@ enum OrderStatus {
 	}
 	if !strings.Contains(out.String(), ": warning: ") {
 		t.Errorf("a demoted rule must still report:\n%s", out.String())
+	}
+}
+
+// buildRulePlugin compiles the external example rule from source, offline.
+func buildRulePlugin(t *testing.T) string {
+	t.Helper()
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go toolchain on PATH; the external rule cannot be built")
+	}
+	src, err := filepath.Abs(filepath.Join("..", "..", "internal", "lint", "host", "testdata", "examplerule"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "stele-rule-example")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	cmd := exec.Command(goBin, "build", "-o", bin, ".")
+	cmd.Dir = src
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building the external rule: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// TestLintRulesListsTheRulesTheManifestLoads. A rule id is a public contract
+// that goes into lint.rules, and the ids an external plugin serves are exactly
+// the ones a reader cannot get from the source of this repository. A --rules
+// that listed only the built-ins would send them to guess.
+func TestLintRulesListsTheRulesTheManifestLoads(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "stele.yaml"),
+		[]byte("version: 1\nmodules:\n  - path: api\nlint:\n  plugins:\n    - name: example\n      path: "+
+			filepath.ToSlash(buildRulePlugin(t))+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut strings.Builder
+	if err := run(context.Background(), []string{"lint", "--rules", "--dir", dir}, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"example/no_todo", "example", "stele/enum_value_prefix"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the listing does not mention %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// TestLintSaysWhyItFailedWhenARuleDidNotRun. A run can fail with no findings
+// at all — every rule that had something to say may be the one that crashed —
+// and a message that could only count findings would report "0 findings at
+// severity error" and send the reader looking for a finding that is not there.
+func TestLintSaysWhyItFailedWhenARuleDidNotRun(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad, err := filepath.Abs(filepath.Join("..", "..", "internal", "lint", "host", "testdata", "badrule"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("no go toolchain on PATH")
+	}
+	bin := filepath.Join(t.TempDir(), "stele-rule-bad")
+	cmd := exec.Command(goBin, "build", "-o", bin, ".")
+	cmd.Dir = bad
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building the misbehaving rule: %v\n%s", err, out)
+	}
+	t.Setenv("MODE", "crash")
+
+	write("stele.yaml", "version: 1\nmodules:\n  - path: api\nlint:\n  plugins:\n    - name: bad\n      path: "+
+		filepath.ToSlash(bin)+"\n")
+	write("api/example/v1/order.proto", "syntax = \"proto3\";\npackage example.v1;\n\nmessage Order {\n  string id = 1;\n}\n")
+
+	var out, errOut strings.Builder
+	err = run(context.Background(), []string{"lint", "--dir", dir}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a rule that could not run must fail the run; silence is not cleanliness")
+	}
+	if strings.Contains(err.Error(), "0 finding") {
+		t.Errorf("the failure blames findings that do not exist:\n%v", err)
+	}
+	for _, want := range []string{"bad/crash", "did not run"} {
+		if !strings.Contains(err.Error()+out.String(), want) {
+			t.Errorf("the output does not say %q:\n%v\n%s", want, err, out.String())
+		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -232,6 +233,51 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		return nil, errors.New("lint: no files were checked; every file this repository owns is covered by lint.ignore")
 	}
 	return rep, nil
+}
+
+// Loaded is one rule a run would apply, and where it came from.
+type Loaded struct {
+	// Rule is the rule itself. A hosted rule is a rule.Rule like any other.
+	Rule
+	// Plugin is the manifest's name for the plugin serving it, or the empty
+	// string for a rule that ships with this tool.
+	Plugin string
+}
+
+// Rules returns every rule a lint run in dir would apply: the ones this build
+// carries, and the ones the manifest's plugins serve.
+//
+// It exists because a rule ID is a public contract that goes into lint.rules,
+// and the IDs an external plugin serves are exactly the ones nobody can read
+// out of this repository's source. A listing that showed only the built-ins
+// would send somebody configuring a third-party rule to guess its ID.
+//
+// The returned function stops the plugin processes; it is never nil. A
+// directory with no manifest yields the built-ins and no error: asking what
+// rules a binary carries is a fair question to ask outside a repository.
+func Rules(ctx context.Context, dir, cacheRoot string) ([]Loaded, func(), error) {
+	if dir == "" {
+		dir = "."
+	}
+	out := make([]Loaded, 0, len(Builtin()))
+	for _, r := range Builtin() {
+		out = append(out, Loaded{Rule: r})
+	}
+	cfg, err := config.Load(filepath.Join(dir, ManifestName))
+	if errors.Is(err, os.ErrNotExist) {
+		return out, func() {}, nil
+	}
+	if err != nil {
+		return nil, func() {}, err
+	}
+	set, err := loadPlugins(ctx, cfg, dir, cacheRoot)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	for _, r := range set.Rules() {
+		out = append(out, Loaded{Rule: r, Plugin: set.PluginFor(r.ID())})
+	}
+	return out, func() { set.Close() }, nil
 }
 
 // loadPlugins resolves and starts the rule plugins the manifest declares.

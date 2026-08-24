@@ -81,14 +81,12 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if rest := fs.Args(); len(rest) > 0 {
 		return fmt.Errorf("unexpected argument %q; stele lint takes flags only\n\n%s", rest[0], lintUsage)
 	}
-	if *rules {
-		writeRules(stdout)
-		return nil
-	}
-
 	root, err := cachedir.Root(*cacheDir)
 	if err != nil {
 		return err
+	}
+	if *rules {
+		return writeRules(ctx, stdout, *dir, root)
 	}
 	rep, err := lint.Run(ctx, lint.Options{
 		Dir:       *dir,
@@ -105,20 +103,51 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	// the findings somewhere does not swallow the count.
 	rep.Write(stdout)
 	fmt.Fprint(stderr, rep.Summary())
-	if rep.Failed() {
+	// The two ways a run fails are different failures with different fixes,
+	// and they are reported apart. A rule that could not run has said nothing
+	// about this repository: no severity applies to it, because severity says
+	// what a finding costs and there was no finding. Counting it as a finding
+	// would send the reader looking for one that does not exist.
+	switch {
+	case rep.Errors > 0 && len(rep.Failures) > 0:
+		return fmt.Errorf("lint: %d finding(s) at severity error, and %d rule check(s) did not run; "+
+			"fix the findings, or say what they cost this repository under lint.rules in %s — and see the "+
+			"lines above the findings for the rules that failed, whose silence is not a pass",
+			rep.Errors, len(rep.Failures), lint.ManifestName)
+	case len(rep.Failures) > 0:
+		return fmt.Errorf("lint: %d rule check(s) did not run, and nothing they check has been checked; "+
+			"the reason is printed above, one line each. Fix the rule, or drop its plugin from %s while it "+
+			"is fixed — severity cannot silence this, because a rule that did not run produced no finding "+
+			"for a severity to apply to", len(rep.Failures), lint.ManifestName)
+	case rep.Errors > 0:
 		return fmt.Errorf("lint: %d finding(s) at severity error; fix them, or say what they cost this "+
 			"repository under lint.rules in %s", rep.Errors, lint.ManifestName)
 	}
 	return nil
 }
 
-// writeRules prints the loaded rules. It is not decoration: a rule id is a
-// public contract that goes into a manifest, and a list somebody has to read
-// the source to find is a list they will guess at instead.
-func writeRules(w io.Writer) {
-	fmt.Fprintf(w, "Rules this build carries. Every one runs at severity error unless %s says otherwise.\n\n",
-		lint.ManifestName)
-	for _, r := range lint.Builtin() {
-		fmt.Fprintf(w, "  %-36s %s\n", r.ID(), r.Description())
+// writeRules prints the rules a run here would apply. It is not decoration: a
+// rule id is a public contract that goes into a manifest, and a list somebody
+// has to read the source to find is a list they will guess at instead.
+//
+// The rules the manifest's plugins serve are listed beside the built-ins, and
+// each says which plugin serves it. Those are the ids nobody can read out of
+// this repository's source, so a listing without them would be a listing that
+// omitted exactly the part that has to be looked up.
+func writeRules(ctx context.Context, w io.Writer, dir, cacheRoot string) error {
+	rules, stop, err := lint.Rules(ctx, dir, cacheRoot)
+	if err != nil {
+		return err
 	}
+	defer stop()
+	fmt.Fprintf(w, "Rules this run would apply. Every one runs at severity error unless %s says otherwise.\n\n",
+		lint.ManifestName)
+	for _, r := range rules {
+		origin := ""
+		if r.Plugin != "" {
+			origin = fmt.Sprintf("  (from the plugin %q)", r.Plugin)
+		}
+		fmt.Fprintf(w, "  %-36s %s%s\n", r.ID(), r.Description(), origin)
+	}
+	return nil
 }
