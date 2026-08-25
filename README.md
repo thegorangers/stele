@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.svg">
+  <img alt="stele" src="docs/brand/logo-light.svg" width="44" align="left" hspace="14" vspace="4">
+</picture>
+
 # stele
 
 `stele` is a protobuf contract tool that fetches dependencies straight from git.
