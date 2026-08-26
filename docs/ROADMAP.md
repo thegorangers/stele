@@ -217,6 +217,62 @@ because each has already cost someone time.
   as drift; and a tree filled by something other than a `buf export` the Makefile
   reader can see is still, as before, reported rather than guessed at.
 
+- ~~**#8 `deps[].paths` was read by one command out of three.**~~ Fixed. The
+  narrowing on a dependency was consumed by `export`; resolution ignored it and
+  pulled the producer's whole module into the graph, and `generate` narrowed by
+  the *input's* paths instead. The field a reader trusts was not the field that
+  decided.
+
+  The cost was not that the manifest read wrong. It was that files nobody
+  declared were judged: the one-import-path-one-content rule ran over them, and
+  the drift report named them. That is how one repository's stale vendored copy
+  of a well-known validation contract came into scope for a consumer that had
+  narrowed its dependency away from it — and a drift report that names paths a
+  consumer deliberately excluded trains people to skim a report whose whole
+  value is being read carefully.
+
+  The decision, and the two answers rejected:
+
+  - **Honour the field in resolution.** Taken. The narrowing is a property of
+    the manifest, not of one target, so it is identical for every target of
+    that manifest and honouring it cannot make one import path mean two files —
+    which is the reason a generate input's `paths:` must never reach the graph,
+    and it does not apply here.
+  - **Drop `paths:` from `deps` and let selection live only where it is
+    honoured.** Rejected. `export` needs it, every hand-written manifest in the
+    measured fleet wrote it, and `migrate` now derives it from the imports. A
+    field people reach for naturally and a tool emits by itself is not one to
+    delete; the defect was that it did too little, not that it existed.
+  - **Keep it and document that it does not affect resolution.** Rejected,
+    though it is the cheapest. It writes the inconsistency down instead of
+    removing it, and the thing being documented is invisible at the point of
+    use: nothing in a manifest, a report or an error would ever remind a reader
+    that this narrowing is decorative. It also does not address the measured
+    harm at all — the conflict rule and the drift report would go on judging
+    files the manifest excluded, so the note would explain the incident rather
+    than prevent it. Documentation is the right answer for a limit that cannot
+    be removed; this one could be.
+
+  **What happens to an import that leaves the narrowing.** A file inside the
+  narrowed subtree may import a sibling outside it. The sibling is offered
+  anyway: narrowing says what was asked for, not what those files are allowed
+  to need. The alternative — an error naming the import and the narrowing that
+  excluded it — makes the correctness of a consumer's manifest depend on the
+  producer's internal import structure, which moves under them; one upstream
+  commit would break every narrowed consumer, and their only recovery would be
+  to widen the narrowing to include a file they do not want to generate from,
+  re-acquiring exactly the extra packages #7 was about. It would also give
+  `paths:` a second meaning — a wall as well as a selection — where everywhere
+  else in the tool it selects output and lets imports follow.
+
+  **What this does not reach**, stated rather than glossed. `paths:` are
+  relative to the requested module, so they cannot exclude a producer's *other*
+  module roots; those still enter through the `buf.yaml` fallback, claimed or
+  not, and are still judged. Reachability is decided by scanning import
+  statements rather than by linking, because the graph is what the compiler is
+  built from and cannot be asked what belongs in it; where the two could
+  disagree, the compiler reports the missing file by name.
+
 ## Milestone 2 — releases
 
 ~~Without this there is no way to answer "which version broke?" or to roll back.~~
