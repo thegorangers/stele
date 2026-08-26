@@ -178,6 +178,45 @@ because each has already cost someone time.
   every command rather than one; that is a larger decision than this defect,
   and it is left open here rather than smuggled in with it.
 
+- ~~**#7 `migrate` widens a dependency to its directory name.**~~ Fixed. A buf
+  input selects out of the vendored tree; a stele input selects out of the
+  producing repository, and the translation used to carry the input's `paths:`
+  across as written. Where the `buf export` that filled the tree named a
+  `--path` narrower than the directory the input names, the two selections agree
+  on disk and disagree everywhere else: `paths: [example/place]` over a tree
+  holding only `example/place/v1` selected exactly `v1`, and the same line
+  against the place repository also selects `example/place/events/v1`.
+
+  Measured on a fleet migration of 14 repositories: it hit 3 of 11 dependencies
+  across two services, and the person migrating narrowed each by hand. The count
+  understates it. The failure mode is *extra* generated packages, and extra
+  packages compile — nothing errors, nothing is missing, the build is green, and
+  in one case an extra package registered a descriptor path that panics when
+  imported alongside another library. A tool whose report is trusted for what it
+  does not say must not produce a defect that produces no output of its own.
+
+  The source of truth for the narrowing is now the `--path` of the export that
+  filled the tree, intersected with the input path: what was actually copied.
+  Not the directory name, which is what over-selected; and not the import
+  closure, which is the right answer for the *dependency set* and the wrong one
+  for a generate input — a generate input exists to produce code for files
+  nothing imports yet. The two evidences answer different questions and are both
+  kept: #5's import walk decides which dependencies are real and what each is
+  read for, and the export's `--path` bounds what any input over that tree can
+  have selected. Where the export named no `--path` at all, the tree really does
+  hold the producer's whole module and nothing is narrowed.
+
+  This also reaches the widest form of the same mistake, which the fleet did not
+  happen to contain: an input naming the vendored tree and no `paths:` at all
+  used to become a dependency input with no narrowing — the producer's whole
+  module — where in buf it selected exactly what had been exported into that
+  tree.
+
+  What it does not reach: a vendored tree that is *wider* than what is imported
+  is left to #5's import walk, which drops the unread dependency and reports it
+  as drift; and a tree filled by something other than a `buf export` the Makefile
+  reader can see is still, as before, reported rather than guessed at.
+
 ## Milestone 2 — releases
 
 ~~Without this there is no way to answer "which version broke?" or to roll back.~~

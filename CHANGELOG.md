@@ -38,6 +38,28 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`stele migrate` no longer widens a dependency to the directory name an
+  input happened to use.** A buf input selects out of the vendored tree; a
+  stele input selects out of the producing repository. Where the `buf export`
+  that filled the tree named a `--path` narrower than the directory the input
+  names, the two agree on disk and disagree everywhere else — an input reading
+  `example/place` over a tree holding only `example/place/v1` used to emit a
+  manifest that also pulls `example/place/events/v1`. On the fleet this was
+  measured against it hit 3 of 11 dependencies across two services, each time
+  producing generated packages the repository never had. Those packages
+  compile, which is what made this worth naming: the build stayed green and the
+  report said nothing.
+
+  The narrowing emitted for a dependency and for its generate input is now the
+  input's path intersected with the export's `--path` — what was actually
+  copied in. An input that names a vendored tree and no paths at all is
+  narrowed the same way, instead of taking the producer's whole module. An
+  export that named no `--path` is unchanged: the tree does hold the whole
+  module. Migrations of configurations whose exports were not narrowed are
+  byte-identical.
+
 ### Added
 
 - **`stele migrate` works out which dependencies a repository actually has, by
