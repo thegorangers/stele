@@ -194,6 +194,12 @@ func selectFiles(cfg *config.File, g *resolve.Graph, dep string, paths []string)
 		// The dependency entry already states which part of the producer this
 		// manifest asked for. Applying it here rather than making the caller
 		// repeat it on the command line keeps one statement of that fact.
+		//
+		// Resolution honours the same narrowing, so most of what this would
+		// remove is not in the graph to begin with. It is applied again rather
+		// than dropped because the two answer different questions: resolution
+		// keeps an excluded file that a selected one imports, and an import is
+		// not something this manifest asked to vendor under its own name.
 		candidates, err = narrow(candidates, d.Paths, scope+": paths")
 		if err != nil {
 			return nil, err

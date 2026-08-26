@@ -39,7 +39,17 @@ type Dep struct {
 	// Module is the module of the producer to take, relative to its root.
 	Module string `yaml:"module"`
 	// Paths narrows what is taken, in coordinates relative to the root of the
-	// producer's module. Accepts a single string or a list of strings.
+	// producer's module. Accepts a single string or a list of strings. Absent
+	// takes the module whole.
+	//
+	// It is honoured by resolution, so it decides what the build has: a file
+	// outside it supplies no import path, is judged by no conflict rule and is
+	// named by no drift report. What it narrows is what is OFFERED, not what
+	// is reachable — a file it excluded is offered again if a file that
+	// survived it imports it, since the import structure inside a producer's
+	// module is the producer's business and not something a consumer's
+	// manifest is asserting anything about. A path that selects no file is an
+	// error naming what the module does supply.
 	Paths []string `yaml:"paths"`
 }
 
