@@ -755,3 +755,148 @@ func TestResolve_WalksOneRepositoryOnceOverTwoTransports(t *testing.T) {
 		t.Errorf("deps = %v, want both requests recorded", got)
 	}
 }
+
+// placeRepos lays out the shape the narrowing is about: a producer whose
+// module holds the subtree a consumer asked for, a second subtree it did not,
+// and a stale vendored copy of a contract whose owner the consumer also
+// depends on directly.
+func placeRepos(t *testing.T, placeImports string) (consumer string, fetch resolve.FetchFunc) {
+	t.Helper()
+	validate := repo(t, "validate", map[string]string{
+		"stele.yaml":                         "version: 1\nmodules:\n  - path: proto\n",
+		"proto/acme/validate/validate.proto": "syntax = \"proto3\";\n// the owner\n",
+	})
+	place := repo(t, "place", map[string]string{
+		"stele.yaml":                              "version: 1\nmodules:\n  - path: api\n",
+		"api/example/place/v1/place.proto":        "syntax = \"proto3\";\n" + placeImports,
+		"api/example/place/events/v1/event.proto": "syntax = \"proto3\";\n",
+		"api/acme/validate/validate.proto":        "syntax = \"proto3\";\n// a stale vendored copy\n",
+	})
+	consumer = repo(t, "consumer", map[string]string{
+		"api/example/order/v1/order.proto": "syntax = \"proto3\";\n",
+	})
+	return consumer, fakeFetch(map[string]string{
+		"gh:acme/place":    place,
+		"gh:acme/validate": validate,
+	})
+}
+
+// consumerCfg is the consumer manifest of placeRepos, with the narrowing under
+// test on the place dependency.
+func consumerCfg(paths ...string) *config.File {
+	return &config.File{
+		Version: 1,
+		Modules: []config.Module{{Path: "api"}},
+		Deps: []config.Dep{
+			{Name: "place", Git: "gh:acme/place", Ref: "v2.0.0", Module: "api", Paths: paths},
+			{Name: "validate", Git: "gh:acme/validate", Ref: "v1.0.0", Module: "proto"},
+		},
+	}
+}
+
+// TestResolve_DepPathsNarrowTheGraph pins what a dependency's paths mean: the
+// files outside the narrowing are not offered to the build at all, so they
+// supply no import path and are judged for neither conflict nor drift. Without
+// the narrowing the same closure is a genuine conflict, which is what makes
+// the difference observable.
+func TestResolve_DepPathsNarrowTheGraph(t *testing.T) {
+	consumer, fetch := placeRepos(t, "")
+
+	if _, err := resolve.ResolveIn(context.Background(), consumer, consumerCfg(), fetch); !errors.Is(err, resolve.ErrImportConflict) {
+		t.Fatalf("unnarrowed, the vendored copy must still conflict with its owner; got %v", err)
+	}
+
+	g, err := resolve.ResolveIn(context.Background(), consumer, consumerCfg("example/place/v1"), fetch)
+	if err != nil {
+		t.Fatalf("the narrowing must exclude the vendored copy the manifest did not ask for: %v", err)
+	}
+	if _, ok := g.FileFor("example/place/events/v1/event.proto"); ok {
+		t.Error("a file outside the narrowing must not be in the graph")
+	}
+	f, ok := g.FileFor("acme/validate/validate.proto")
+	if !ok {
+		t.Fatal("the owner of the contract must still supply it")
+	}
+	if f.Origin.Name != "validate" {
+		t.Errorf("supplied by %q, want the owner", f.Origin.Name)
+	}
+	if len(f.Sources) != 1 {
+		t.Errorf("sources: %v, want only the owner", f.Sources)
+	}
+	if d := g.Drift(); len(d) != 0 {
+		t.Errorf("drift must not name a file nobody asked for: %v", d)
+	}
+}
+
+// TestResolve_DepPathsKeepTransitiveImport states the answer to what happens
+// when a selected file imports a sibling the narrowing excluded: the sibling
+// is offered anyway. A narrowing says what was asked for, not what those files
+// are allowed to need.
+func TestResolve_DepPathsKeepTransitiveImport(t *testing.T) {
+	consumer, fetch := placeRepos(t, "import \"example/place/events/v1/event.proto\";\n")
+
+	g, err := resolve.ResolveIn(context.Background(), consumer, consumerCfg("example/place/v1"), fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok := g.FileFor("example/place/events/v1/event.proto")
+	if !ok {
+		t.Fatal("a sibling imported by a selected file must resolve")
+	}
+	if f.Origin.Name != "place" {
+		t.Errorf("supplied by %q, want the producer", f.Origin.Name)
+	}
+	v, ok := g.FileFor("acme/validate/validate.proto")
+	if !ok {
+		t.Fatal("the owner of the contract must still supply it")
+	}
+	if len(v.Sources) != 1 || v.Sources[0].Name != "validate" {
+		t.Errorf("reachability must pull in what is imported, not the rest of the module; sources: %v", v.Sources)
+	}
+}
+
+// TestResolve_DepPathsOrderIndependent keeps the guarantee the rest of
+// resolution holds to: two edges reaching one producer's module, one narrowed
+// and one not, offer the whole module whichever order they are listed in.
+func TestResolve_DepPathsOrderIndependent(t *testing.T) {
+	consumer, fetch := placeRepos(t, "")
+	narrowed := config.Dep{Name: "place", Git: "gh:acme/place", Ref: "v2.0.0", Module: "api", Paths: []string{"example/place/v1"}}
+	whole := config.Dep{Name: "place-whole", Git: "gh:acme/place", Ref: "v2.0.0", Module: "api"}
+
+	var first []string
+	for i, deps := range [][]config.Dep{{narrowed, whole}, {whole, narrowed}} {
+		cfg := &config.File{Version: 1, Modules: []config.Module{{Path: "api"}}, Deps: deps}
+		g, err := resolve.ResolveIn(context.Background(), consumer, cfg, fetch)
+		if err != nil {
+			t.Fatalf("permutation %d: %v", i, err)
+		}
+		got := g.ImportPaths()
+		if i == 0 {
+			first = got
+			if _, ok := g.FileFor("example/place/events/v1/event.proto"); !ok {
+				t.Error("an edge that narrows nothing offers the whole module")
+			}
+			continue
+		}
+		if strings.Join(got, ",") != strings.Join(first, ",") {
+			t.Errorf("permutation %d resolved %v, want %v", i, got, first)
+		}
+	}
+}
+
+// TestResolve_DepPathsMatchingNothingIsError refuses the silent empty result
+// the design forbids everywhere else: a path written in the wrong coordinates
+// selects no file, and the module's own paths are named so that the mistake is
+// visible.
+func TestResolve_DepPathsMatchingNothingIsError(t *testing.T) {
+	consumer, fetch := placeRepos(t, "")
+	_, err := resolve.ResolveIn(context.Background(), consumer, consumerCfg("api/example/place/v1"), fetch)
+	if err == nil {
+		t.Fatal("a narrowing that selects nothing must be an error")
+	}
+	for _, want := range []string{"place", "api/example/place/v1", "example/place/v1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error must name the dependency, the path and what is available; got: %v", err)
+		}
+	}
+}

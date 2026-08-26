@@ -1,13 +1,13 @@
 package migrate
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"io/fs"
 	"path"
 	"sort"
 	"strings"
+
+	"github.com/thegorangers/stele/internal/protoscan"
 )
 
 // This file is the answer to the question the rest of the package could not
@@ -89,7 +89,7 @@ func indexProtos(fsys fs.FS, roots []string) (*protoIndex, error) {
 			if _, seen := ix.files[ip]; seen {
 				return nil
 			}
-			ix.files[ip] = indexedFile{Root: root, Work: p, Imports: parseImports(b)}
+			ix.files[ip] = indexedFile{Root: root, Work: p, Imports: protoscan.Imports(b)}
 			ix.order = append(ix.order, ip)
 			return nil
 		})
@@ -163,84 +163,6 @@ func (ix *protoIndex) closure(seeds []string) (known, unknown []string) {
 	sort.Strings(unknown)
 	return known, unknown
 }
-
-// parseImports reads the import statements of one .proto.
-//
-// It is a scanner, not a parser, and the difference is deliberate: linking the
-// file would mean resolving it, which is the thing that cannot be done yet —
-// the dependencies this reads the imports to discover are exactly what a
-// resolver would need. What it models is the one statement it cares about:
-// `import`, optionally `public` or `weak`, then a quoted path. Comments are
-// stripped first so that a commented-out import is not counted, and a string
-// inside a comment marker inside a string is left alone.
-func parseImports(b []byte) []string {
-	var out []string
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	inBlockComment := false
-	for sc.Scan() {
-		line, _ := stripProtoComments(sc.Text(), &inBlockComment)
-		rest := strings.TrimSpace(line)
-		rest, ok := strings.CutPrefix(rest, "import")
-		if !ok || (rest != "" && !isSpace(rest[0])) {
-			continue
-		}
-		rest = strings.TrimSpace(rest)
-		for _, kw := range []string{"public", "weak"} {
-			if r, ok := strings.CutPrefix(rest, kw); ok && r != "" && isSpace(r[0]) {
-				rest = strings.TrimSpace(r)
-			}
-		}
-		if !strings.HasPrefix(rest, `"`) {
-			continue
-		}
-		if end := strings.IndexByte(rest[1:], '"'); end >= 0 {
-			out = append(out, rest[1:1+end])
-		}
-	}
-	return out
-}
-
-// stripProtoComments removes // and /* */ comments from one line, tracking an
-// open block comment across lines. Quoted strings are honoured so that a path
-// containing the comment markers survives.
-func stripProtoComments(line string, inBlock *bool) (string, bool) {
-	var b strings.Builder
-	var quote byte
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		switch {
-		case *inBlock:
-			if c == '*' && i+1 < len(line) && line[i+1] == '/' {
-				*inBlock = false
-				i++
-			}
-		case quote != 0:
-			b.WriteByte(c)
-			if c == '\\' && i+1 < len(line) {
-				i++
-				b.WriteByte(line[i])
-				continue
-			}
-			if c == quote {
-				quote = 0
-			}
-		case c == '"' || c == '\'':
-			quote = c
-			b.WriteByte(c)
-		case c == '/' && i+1 < len(line) && line[i+1] == '/':
-			return b.String(), true
-		case c == '/' && i+1 < len(line) && line[i+1] == '*':
-			*inBlock = true
-			i++
-		default:
-			b.WriteByte(c)
-		}
-	}
-	return b.String(), false
-}
-
-func isSpace(c byte) bool { return c == ' ' || c == '\t' }
 
 // willAnalyse reports whether the import graph can be read. Without a working
 // copy it cannot, and then the vendor target is the only evidence there is.

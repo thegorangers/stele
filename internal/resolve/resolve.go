@@ -23,6 +23,7 @@ import (
 
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/hashing"
+	"github.com/thegorangers/stele/internal/protoscan"
 	"github.com/thegorangers/stele/internal/source"
 	"gopkg.in/yaml.v3"
 )
@@ -135,16 +136,48 @@ type Resolved struct {
 // the file each import path resolves to.
 //
 // The graph holds every file of every module root reached through manifests,
-// not just the files a dep's paths select. An import path has to mean one file
-// for the whole build; if availability depended on the selection of one target
-// the same import could resolve differently in two targets of one manifest.
-// Narrowing by paths belongs to the commands that produce output.
+// narrowed by what the manifests asked for. Two narrowings are deliberately
+// not the same thing:
+//
+//   - A generate input's paths select what one TARGET is built from, and they
+//     never reach the graph. An import path has to mean one file for the whole
+//     build; if availability depended on the selection of one target the same
+//     import could resolve differently in two targets of one manifest.
+//   - A dependency's paths say what this manifest took from that producer.
+//     They are a property of the manifest, identical for every target of it,
+//     so honouring them cannot make one import mean two things — and not
+//     honouring them made the manifest a description of a build other than the
+//     one that ran. See narrow.
 type Graph struct {
 	files     map[string]Resolved
 	suppliers map[string][]supplier
 	roots     []string
 	deps      []Origin
 	drift     []Drift
+	// narrowings records, per requested module of per repository, what the
+	// dependency edges reaching it asked for.
+	narrowings map[string]*narrowing
+	// rootNarrowing maps a module root's directory to the key of the
+	// narrowing that governs it, so that a supplier found under that root can
+	// be matched back to what was asked for.
+	rootNarrowing map[string]string
+}
+
+// narrowing is the union of what every dependency edge reaching one module of
+// one repository asked for.
+//
+// It is a union, and it is collected from EVERY edge — including an edge to a
+// repository the walk has already visited — because the alternative is an
+// answer that depends on which manifest was read first. Two consumers of one
+// producer, one taking a subtree and one taking the module whole, offer the
+// module whole; that is the only reading that does not depend on their order.
+type narrowing struct {
+	// deps names the dependency entries that asked, for the error message.
+	deps []string
+	// whole records that some edge asked for the module without narrowing it.
+	whole bool
+	// paths is the union of the narrowings, cleaned, in the order first seen.
+	paths []string
 }
 
 // supplier is one root's offer of one import path, recorded during the walk.
@@ -242,7 +275,12 @@ func Resolve(ctx context.Context, root *config.File, fetch FetchFunc) (*Graph, e
 // ResolveIn resolves the closure of root, whose own modules are relative to
 // dir. The walk is breadth-first over manifests.
 func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFunc) (*Graph, error) {
-	g := &Graph{files: map[string]Resolved{}, suppliers: map[string][]supplier{}}
+	g := &Graph{
+		files:         map[string]Resolved{},
+		suppliers:     map[string][]supplier{},
+		narrowings:    map[string]*narrowing{},
+		rootNarrowing: map[string]string{},
+	}
 
 	// The root manifest is not fetched and is not deduplicated against
 	// anything: it is where the walk starts.
@@ -296,6 +334,13 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 				requested[request(d.Git, d.Ref)] = true
 				g.deps = append(g.deps, origin)
 			}
+			// What the edge asked for is recorded on every edge too, and for
+			// the same reason: a narrowing seen only on the first edge to
+			// reach a repository would make the offered files depend on the
+			// order the manifests were read in.
+			if err := g.note(origin, d); err != nil {
+				return nil, fmt.Errorf("dependency %q of %s: %w", d.Name, cur.origin, err)
+			}
 			// Walking, unlike recording, is per commit: the tree is the same
 			// whichever request reached it.
 			if visited[origin.key()] {
@@ -314,6 +359,9 @@ func ResolveIn(ctx context.Context, dir string, root *config.File, fetch FetchFu
 			}
 			queue = append(queue, pending{origin, manifest})
 		}
+	}
+	if err := g.narrow(); err != nil {
+		return nil, err
 	}
 	if err := g.resolveFiles(); err != nil {
 		return nil, err
@@ -353,6 +401,7 @@ func (g *Graph) addModule(origin Origin, modulePath string, authoritative bool) 
 	}
 
 	g.roots = append(g.roots, root)
+	g.rootNarrowing[root] = narrowKey(origin, rel)
 
 	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -391,6 +440,225 @@ func (g *Graph) addModule(origin Origin, modulePath string, authoritative bool) 
 		})
 		return nil
 	})
+}
+
+// narrowKey identifies one module of one repository: the unit a dependency
+// entry's paths narrow. The repository is reduced to the same identity the
+// walk uses, so that one tree reached over two transports is one subject.
+func narrowKey(o Origin, moduleRel string) string { return o.key() + "\x00" + moduleRel }
+
+// note records what one dependency edge asked for.
+func (g *Graph) note(origin Origin, d config.Dep) error {
+	rel, err := cleanModulePath(d.Module)
+	if err != nil {
+		return err
+	}
+	k := narrowKey(origin, rel)
+	n := g.narrowings[k]
+	if n == nil {
+		n = &narrowing{}
+		g.narrowings[k] = n
+	}
+	n.deps = appendUnique(n.deps, d.Name)
+	if len(d.Paths) == 0 {
+		n.whole = true
+		return nil
+	}
+	for _, raw := range d.Paths {
+		n.paths = appendUnique(n.paths, path.Clean(filepath.ToSlash(strings.TrimSpace(raw))))
+	}
+	return nil
+}
+
+// narrow removes from the graph the files no manifest asked for.
+//
+// Why this is here at all: `paths:` on a dependency used to be read by
+// `export` and by nothing else, so a manifest that said it took one subtree of
+// a producer had the producer's whole module in its graph. That is not
+// cosmetic. Every file that enters is judged by the one-import-path-one-content
+// rule and reported as drift when it disagrees with its owner, so a producer's
+// stale vendored copy of a well-known contract could conflict with, or be
+// reported against, a consumer that had explicitly narrowed it away — and a
+// report naming files nobody asked for is a report people learn to skim.
+//
+// What narrowing means, precisely, is what is OFFERED, not what is REACHABLE.
+// A file the narrowing excluded is put back if a file that survived imports
+// it, directly or transitively. The alternative — an error naming the import
+// and the narrowing that excluded it — was rejected: the import structure
+// inside the producer's module is the producer's business and changes without
+// the consumer touching anything, so an upstream commit adding one import
+// would break every narrowed consumer at once, with no fix available except to
+// widen the narrowing to include a file they deliberately do not want to
+// generate from. `paths:` selects; it has never been a wall, and a second
+// meaning for one word is how a manifest stops being readable.
+//
+// A narrowing that selects no file is an error rather than an empty offer,
+// for the same reason the same mistake is an error in `export` and in a
+// generate input: the commonest cause by far is a coordinate written relative
+// to the repository instead of the module root, and it would otherwise present
+// as a file missing somewhere else entirely.
+func (g *Graph) narrow() error {
+	// The whole pass is skipped unless something was actually narrowed, so
+	// that a build with no narrowing reads no file it would not otherwise
+	// have read.
+	if !g.anyNarrowed() {
+		return nil
+	}
+
+	matched := map[string]bool{}
+	offered := map[string][]string{}
+	excluded := map[string][]supplier{}
+	for importPath, offers := range g.suppliers {
+		var keep []supplier
+		for _, o := range offers {
+			n := g.narrowings[g.rootNarrowing[o.root]]
+			if n == nil || n.whole {
+				keep = append(keep, o)
+				continue
+			}
+			offered[g.rootNarrowing[o.root]] = append(offered[g.rootNarrowing[o.root]], importPath)
+			hit := false
+			for _, want := range n.paths {
+				if importPath == want || strings.HasPrefix(importPath, want+"/") {
+					matched[g.rootNarrowing[o.root]+"\x00"+want] = true
+					hit = true
+				}
+			}
+			if hit {
+				keep = append(keep, o)
+				continue
+			}
+			excluded[importPath] = append(excluded[importPath], o)
+		}
+		if len(keep) == 0 {
+			delete(g.suppliers, importPath)
+			continue
+		}
+		g.suppliers[importPath] = keep
+	}
+
+	if err := g.checkNarrowingsMatched(matched, offered); err != nil {
+		return err
+	}
+	if err := g.restoreReachable(excluded); err != nil {
+		return err
+	}
+	return nil
+}
+
+// anyNarrowed reports whether any module was asked for by paths alone.
+func (g *Graph) anyNarrowed() bool {
+	for _, n := range g.narrowings {
+		if !n.whole && len(n.paths) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// checkNarrowingsMatched refuses a path that selected no file, naming what the
+// module does supply.
+func (g *Graph) checkNarrowingsMatched(matched map[string]bool, offered map[string][]string) error {
+	keys := make([]string, 0, len(g.narrowings))
+	for k := range g.narrowings {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		n := g.narrowings[k]
+		if n.whole {
+			continue
+		}
+		var missed []string
+		for _, want := range n.paths {
+			if !matched[k+"\x00"+want] {
+				missed = append(missed, want)
+			}
+		}
+		if len(missed) == 0 {
+			continue
+		}
+		available := appendUnique(nil, offered[k]...)
+		sort.Strings(available)
+		return fmt.Errorf("dependency %s: paths matched no files: %s; the module supplies: %s",
+			strings.Join(n.deps, ", "), strings.Join(missed, ", "), strings.Join(available, ", "))
+	}
+	return nil
+}
+
+// restoreReachable puts back every excluded file that a file still offered
+// imports, transitively.
+//
+// The imports are read by scanning the file rather than by linking it, because
+// linking is what this graph is being built for: the compiler is handed the
+// graph and cannot be asked what belongs in it. The scanner reads the one
+// statement that matters and strips comments first; where it and the compiler
+// could disagree — an import written in a way no scanner sees — the compiler
+// reports the missing file by name, which is a legible failure rather than a
+// silent one.
+func (g *Graph) restoreReachable(excluded map[string][]supplier) error {
+	if len(excluded) == 0 {
+		return nil
+	}
+	queue := make([]string, 0, len(g.suppliers))
+	for importPath := range g.suppliers {
+		queue = append(queue, importPath)
+	}
+	sort.Strings(queue)
+
+	seen := make(map[string]bool, len(queue))
+	for _, p := range queue {
+		seen[p] = true
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		offers := g.suppliers[cur]
+		if len(offers) == 0 {
+			continue
+		}
+		best := offers[0]
+		for _, o := range offers[1:] {
+			if o.less(best) {
+				best = o
+			}
+		}
+		body, err := os.ReadFile(best.path)
+		if err != nil {
+			return err
+		}
+		for _, imp := range protoscan.Imports(body) {
+			if seen[imp] {
+				continue
+			}
+			back, ok := excluded[imp]
+			if !ok {
+				continue
+			}
+			seen[imp] = true
+			g.suppliers[imp] = append(g.suppliers[imp], back...)
+			delete(excluded, imp)
+			queue = append(queue, imp)
+		}
+	}
+	return nil
+}
+
+// appendUnique appends the values not already present, preserving order.
+func appendUnique(dst []string, vals ...string) []string {
+	for _, v := range vals {
+		found := false
+		for _, have := range dst {
+			if have == v {
+				found = true
+				break
+			}
+		}
+		if !found {
+			dst = append(dst, v)
+		}
+	}
+	return dst
 }
 
 // resolveFiles settles every import path once all of its suppliers are known.
