@@ -36,38 +36,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely — the categories above replace its fixed set for the reason given.
 Versions follow the policy in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [v0.2.0] — 2026-08-26
 
-### Added
+### Generated output
 
-- **Releases are signed.** `SHA256SUMS` is signed with cosign, keylessly,
-  through the OIDC identity GitHub issues to the release workflow, and
-  `SHA256SUMS.sig` and `SHA256SUMS.pem` are published beside it. The digest
-  file alone only ever established that a download arrived intact — whoever can
-  publish a release can publish matching checksums beside it — and the tool is
-  now baked into a CI image other repositories build against, so provenance is
-  a question their supply chain is entitled to ask. Verification asks for the
-  signer by name; the recipe is in the README and in RELEASING.md.
+- **A generate input that names no paths of its own, over a dependency that
+  narrows, now generates from the narrowed set** rather than from the
+  producer's whole module. The extra packages that input used to produce are
+  gone, which is a diff to review. This is the byte-visible half of the
+  `paths:` change described under *Refused input*, and it is recorded here as
+  well because a category of change that looks like nothing in a diff of
+  features and fixes is the one this section exists for.
 
-### Internal
+  Nothing else here moves bytes. That is measured rather than claimed:
 
-- **Releases are cut by goreleaser.** It replaced a hand-written loop over four
-  platforms, `sha256sum` and `gh release create`; signing is what earned it its
-  place, since it has cosign support built in. Nothing a consumer fetches
-  changed: the same four raw binaries under the same names, the same
-  `SHA256SUMS`, plus the two signature files above.
+  - The parity corpus is byte-identical, and the release is gated on it.
+  - Every manifest whose dependencies declare no `paths:` is unchanged by
+    construction — there is no narrowing to honour.
+  - The fleet this tool was built for was run twice, once with the commit it
+    pins today and once with this release, over `origin/master` of all
+    fourteen repositories — thirteen services and an acceptance suite — and
+    every one of the fourteen declares `paths:` on its dependencies. The
+    generated trees and `stele.lock` were byte-identical in all fourteen: no
+    package disappeared, none appeared, no file's contents differed. Those
+    manifests give their generate inputs paths of their own, which is the
+    shape that is unaffected.
 
-  Version stamping stays with the Go toolchain. goreleaser's default `-ldflags
-  -X` stamping is turned off, for a reason that was measured rather than
-  argued: its default flags carry a wall-clock `-X main.date`, the whole
-  `-ldflags` string is recorded in the binary's build settings, and two builds
-  of one tag twenty seconds apart produced different bytes. With it off, a
-  published binary is byte-identical to a plain `go build -trimpath` at the same
-  tag — so a release can be re-derived without goreleaser installed. See
-  RELEASING.md.
-
-  The reproducibility check now covers all four platforms rather than
-  `linux/amd64` alone, and fails if a build leaves the working tree dirty.
+  So the shape that changes is real and is described above, and the corpus it
+  was looked for in did not contain it. A repository that lets an input take
+  whatever its dependency offers should regenerate and read the diff before
+  upgrading.
 
 ### Refused input
 
@@ -114,29 +112,73 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   generates from the narrowed set rather than the producer's whole module — the
   extra packages it used to produce are gone, which is a diff to review.
 
-### Fixed
 
-- **`stele migrate` no longer widens a dependency to the directory name an
-  input happened to use.** A buf input selects out of the vendored tree; a
-  stele input selects out of the producing repository. Where the `buf export`
-  that filled the tree named a `--path` narrower than the directory the input
-  names, the two agree on disk and disagree everywhere else — an input reading
-  `example/place` over a tree holding only `example/place/v1` used to emit a
-  manifest that also pulls `example/place/events/v1`. On the fleet this was
-  measured against it hit 3 of 11 dependencies across two services, each time
-  producing generated packages the repository never had. Those packages
-  compile, which is what made this worth naming: the build stayed green and the
-  report said nothing.
+- **`stele migrate` refuses a `Makefile` whose `define` body holds `buf export`
+  or `go install`**, and one whose `define` has no `endef`. A `define` body is
+  stored verbatim and means whatever the place it is expanded makes it mean;
+  the Makefile reader does not follow expansion, so it used to read a body by
+  its own indentation and could recover an invocation that never runs, or lose
+  half of one that does, saying nothing either way.
+  A body holding neither word is dropped, which loses nothing the reader was
+  going to recover from it, so the ordinary uses of `define` still migrate.
+  The refusal is keyword-shaped, and that is now written down where the
+  reader's other limits are — see *Reports and messages*.
 
-  The narrowing emitted for a dependency and for its generate input is now the
-  input's path intersected with the export's `--path` — what was actually
-  copied in. An input that names a vendored tree and no paths at all is
-  narrowed the same way, instead of taking the producer's whole module. An
-  export that named no `--path` is unchanged: the tree does hold the whole
-  module. Migrations of configurations whose exports were not narrowed are
-  byte-identical.
+- **A `Makefile` this reader cannot read is refused whichever half reaches it
+  first.** `.RECIPEPREFIX` was an error from the export reader and, from the
+  plugin reader, an entry in the list of unreadable invocations — an entry
+  nobody ever saw, since the run aborted on the other reader's error first.
+
+- **A `lint.plugins` entry that declares no `module`, `downloads` or `path` is
+  refused** unless it also says `unpinned: true`. Such an entry is whatever the
+  machine's `PATH` resolves the name to. The vocabulary is deliberately shared
+  with code generation plugins, and it stays shared — what differs is the
+  consequence: a generator that changes writes different generated code into a
+  diff somebody reviews, and a rule that changes writes a different judgement,
+  which leaves no artefact at all. The error says how to pin it and how to opt
+  in. `unpinned: true` beside a declared tier is refused too: the manifest would
+  be saying two things that cannot both be true.
+
+- **Two `managed.override` entries for one file option at one path are
+  refused**, whether their values agree or not. The reference tool takes the
+  last of the two in silence; one of the lines then describes output nothing
+  ever has. Overriding one option at *different* paths is what is now allowed,
+  and is the point.
+
+- **An override `path` with a leading or trailing slash is refused.** The
+  reference tool refuses both spellings, so accepting them would produce a
+  manifest that cannot be written back out as a configuration the other tool
+  reads.
+
+
+- A `lint` block that configures nothing, a rule id that is not
+  `namespace/name`, a severity outside `error`/`warning`/`off`, two entries
+  naming one rule, and an ignore entry that is empty or looks like a glob are
+  all refused, naming the field. A glob-looking entry matched literally would be
+  an exemption the author believes they have written and does not have.
+- A rule plugin that is not named, is named as though it were a rule id, shares
+  a name with another, or declares where its binary comes from in two ways at
+  once — or in one way, incompletely — is refused naming the field, exactly as a
+  code generation plugin is and by the same code.
+- A rule plugin claiming a rule id in the reserved `stele` namespace is refused
+  naming the plugin and the id, and two plugins claiming one id are refused
+  naming both. An id is a public contract that appears in somebody's ignore
+  list; there is no declaration order worth inventing to resolve a collision.
+- A rule id no loaded rule carries fails the run, naming it and listing what is
+  loaded. A typo in an ignore list, or a rule that has been removed, otherwise
+  leaves the manifest claiming a protection or an exemption that does not exist.
 
 ### Added
+
+- **Releases are signed.** `SHA256SUMS` is signed with cosign, keylessly,
+  through the OIDC identity GitHub issues to the release workflow, and
+  `SHA256SUMS.sig` and `SHA256SUMS.pem` are published beside it. The digest
+  file alone only ever established that a download arrived intact — whoever can
+  publish a release can publish matching checksums beside it — and the tool is
+  now baked into a CI image other repositories build against, so provenance is
+  a question their supply chain is entitled to ask. Verification asks for the
+  signer by name; the recipe is in the README and in RELEASING.md.
+
 
 - **`stele migrate` works out which dependencies a repository actually has, by
   reading its protos.** Before this it copied the `Makefile`'s vendor target,
@@ -210,6 +252,27 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ### Fixed
 
+- **`stele migrate` no longer widens a dependency to the directory name an
+  input happened to use.** A buf input selects out of the vendored tree; a
+  stele input selects out of the producing repository. Where the `buf export`
+  that filled the tree named a `--path` narrower than the directory the input
+  names, the two agree on disk and disagree everywhere else — an input reading
+  `example/place` over a tree holding only `example/place/v1` used to emit a
+  manifest that also pulls `example/place/events/v1`. On the fleet this was
+  measured against it hit 3 of 11 dependencies across two services, each time
+  producing generated packages the repository never had. Those packages
+  compile, which is what made this worth naming: the build stayed green and the
+  report said nothing.
+
+  The narrowing emitted for a dependency and for its generate input is now the
+  input's path intersected with the export's `--path` — what was actually
+  copied in. An input that names a vendored tree and no paths at all is
+  narrowed the same way, instead of taking the producer's whole module. An
+  export that named no `--path` is unchanged: the tree does hold the whole
+  module. Migrations of configurations whose exports were not narrowed are
+  byte-identical.
+
+
 - **A repository reached over two transports is walked once, and `export --dep`
   finds its files again.** The lock identifies a dependency by `(git, ref)` and
   addresses are never normalised — a fork at the same path on another host is
@@ -231,61 +294,24 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   (27 entries to 26), and the resolved file set — every import path, the bytes
   it resolves to and the root that supplied it — is unchanged.
 
-### Internal
 
-- **The reference tool's pin lives in one file.** `test/parity/corpus.yaml` now
-  carries `buf_downloads` beside `buf_version`: one `os`/`arch`/`url`/`sha256`
-  entry per platform, in exactly the vocabulary a manifest uses to pin a
-  plugin, and the harness fetches and verifies it through the same cache and
-  the same digest check a pinned plugin goes through. The sha256 used to sit in
-  the CI workflow while the version sat in the corpus. That failed closed, but a
-  pin split across two files can be half-updated, and only CI read the half that
-  named the bytes — a workstation run measured against whatever `buf` the
-  machine had. The CI step that installed the tool is gone with it.
-
-- **The translation from a manifest's `downloads` entries to the plugin
-  resolver's own type is written once**, as `config.PluginDownloads`. It had
-  been written twice, in generation and in lint, and the parity harness would
-  have been the third.
-
-### Refused input
-
-- **`stele migrate` refuses a `Makefile` whose `define` body holds `buf export`
-  or `go install`**, and one whose `define` has no `endef`. A `define` body is
-  stored verbatim and means whatever the place it is expanded makes it mean;
-  the Makefile reader does not follow expansion, so it used to read a body by
-  its own indentation and could recover an invocation that never runs, or lose
-  half of one that does, saying nothing either way.
-  A body holding neither word is dropped, which loses nothing the reader was
-  going to recover from it, so the ordinary uses of `define` still migrate.
-  The refusal is keyword-shaped, and that is now written down where the
-  reader's other limits are — see *Reports and messages*.
-
-- **A `Makefile` this reader cannot read is refused whichever half reaches it
-  first.** `.RECIPEPREFIX` was an error from the export reader and, from the
-  plugin reader, an entry in the list of unreadable invocations — an entry
-  nobody ever saw, since the run aborted on the other reader's error first.
-
-- **A `lint.plugins` entry that declares no `module`, `downloads` or `path` is
-  refused** unless it also says `unpinned: true`. Such an entry is whatever the
-  machine's `PATH` resolves the name to. The vocabulary is deliberately shared
-  with code generation plugins, and it stays shared — what differs is the
-  consequence: a generator that changes writes different generated code into a
-  diff somebody reviews, and a rule that changes writes a different judgement,
-  which leaves no artefact at all. The error says how to pin it and how to opt
-  in. `unpinned: true` beside a declared tier is refused too: the manifest would
-  be saying two things that cannot both be true.
-
-- **Two `managed.override` entries for one file option at one path are
-  refused**, whether their values agree or not. The reference tool takes the
-  last of the two in silence; one of the lines then describes output nothing
-  ever has. Overriding one option at *different* paths is what is now allowed,
-  and is the point.
-
-- **An override `path` with a leading or trailing slash is refused.** The
-  reference tool refuses both spellings, so accepting them would produce a
-  manifest that cannot be written back out as a configuration the other tool
-  reads.
+- A plugin published as an archive holding **two binaries** — one release
+  tarball, `protoc-gen-x` and `protoc-gen-x-plugin` beside it — could not be
+  used for both. The download cache was keyed by the archive's sha256 alone, so
+  the two entries shared one directory and one record of what had been
+  extracted; taking the second member overwrote the first member's record, and
+  every later run refused the first entry as corrupted. The message told the
+  reader to delete the directory, which the next run broke again. An entry is
+  now identified by the digest *and* the member taken from it. Nothing that
+  worked changes; a plugin already downloaded from an archive is fetched once
+  more, because it now lives at a different path inside the cache.
+- The lock is written through a temporary file and renamed into place instead
+  of being overwritten where it lies. A process killed mid-write, or a full
+  disk, used to leave a truncated `stele.lock` — and the dangerous truncation
+  is not the one that fails to parse but the one that lands on an entry
+  boundary and loads cleanly as a lock pinning fewer dependencies than the
+  build that wrote it consumed. A failed write now leaves the previous lock
+  exactly as it was.
 
 ### Reports and messages
 
@@ -369,26 +395,6 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   each naming its plugin: those ids are precisely the ones that cannot be read
   out of this repository's source.
 
-### Refused input
-
-- A `lint` block that configures nothing, a rule id that is not
-  `namespace/name`, a severity outside `error`/`warning`/`off`, two entries
-  naming one rule, and an ignore entry that is empty or looks like a glob are
-  all refused, naming the field. A glob-looking entry matched literally would be
-  an exemption the author believes they have written and does not have.
-- A rule plugin that is not named, is named as though it were a rule id, shares
-  a name with another, or declares where its binary comes from in two ways at
-  once — or in one way, incompletely — is refused naming the field, exactly as a
-  code generation plugin is and by the same code.
-- A rule plugin claiming a rule id in the reserved `stele` namespace is refused
-  naming the plugin and the id, and two plugins claiming one id are refused
-  naming both. An id is a public contract that appears in somebody's ignore
-  list; there is no declaration order worth inventing to resolve a collision.
-- A rule id no loaded rule carries fails the run, naming it and listing what is
-  loaded. A typo in an ignore list, or a rule that has been removed, otherwise
-  leaves the manifest claiming a protection or an exemption that does not exist.
-
-### Reports and messages
 
 - `stele lint` counted findings when it failed, so a run that failed only
   because a rule could not run said "0 finding(s) at severity error; fix them" —
@@ -397,34 +403,6 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   reported apart, and the one that means "this repository has not been checked"
   says so and says what to do.
 
-### Note for a future release
-
-Adding a built-in rule can turn a green build red. Under
-[RELEASING.md](RELEASING.md) that is a breaking change — "a command's exit status
-changes for an input that already worked" — so it bumps the field that signals
-"read this before upgrading", and the entry names the rule.
-
-### Fixed
-
-- A plugin published as an archive holding **two binaries** — one release
-  tarball, `protoc-gen-x` and `protoc-gen-x-plugin` beside it — could not be
-  used for both. The download cache was keyed by the archive's sha256 alone, so
-  the two entries shared one directory and one record of what had been
-  extracted; taking the second member overwrote the first member's record, and
-  every later run refused the first entry as corrupted. The message told the
-  reader to delete the directory, which the next run broke again. An entry is
-  now identified by the digest *and* the member taken from it. Nothing that
-  worked changes; a plugin already downloaded from an archive is fetched once
-  more, because it now lives at a different path inside the cache.
-- The lock is written through a temporary file and renamed into place instead
-  of being overwritten where it lies. A process killed mid-write, or a full
-  disk, used to leave a truncated `stele.lock` — and the dangerous truncation
-  is not the one that fails to parse but the one that lands on an entry
-  boundary and loads cleanly as a lock pinning fewer dependencies than the
-  build that wrote it consumed. A failed write now leaves the previous lock
-  exactly as it was.
-
-### Reports and messages
 
 - A dependency that cannot be fetched no longer reports a raw `git` error. The
   failure is classified from git's own words and the message names the
@@ -441,6 +419,41 @@ changes for an input that already worked" — so it bumps the field that signals
   rewritten commit is.
 
 ### Internal
+
+- **Releases are cut by goreleaser.** It replaced a hand-written loop over four
+  platforms, `sha256sum` and `gh release create`; signing is what earned it its
+  place, since it has cosign support built in. Nothing a consumer fetches
+  changed: the same four raw binaries under the same names, the same
+  `SHA256SUMS`, plus the two signature files above.
+
+  Version stamping stays with the Go toolchain. goreleaser's default `-ldflags
+  -X` stamping is turned off, for a reason that was measured rather than
+  argued: its default flags carry a wall-clock `-X main.date`, the whole
+  `-ldflags` string is recorded in the binary's build settings, and two builds
+  of one tag twenty seconds apart produced different bytes. With it off, a
+  published binary is byte-identical to a plain `go build -trimpath` at the same
+  tag — so a release can be re-derived without goreleaser installed. See
+  RELEASING.md.
+
+  The reproducibility check now covers all four platforms rather than
+  `linux/amd64` alone, and fails if a build leaves the working tree dirty.
+
+
+- **The reference tool's pin lives in one file.** `test/parity/corpus.yaml` now
+  carries `buf_downloads` beside `buf_version`: one `os`/`arch`/`url`/`sha256`
+  entry per platform, in exactly the vocabulary a manifest uses to pin a
+  plugin, and the harness fetches and verifies it through the same cache and
+  the same digest check a pinned plugin goes through. The sha256 used to sit in
+  the CI workflow while the version sat in the corpus. That failed closed, but a
+  pin split across two files can be half-updated, and only CI read the half that
+  named the bytes — a workstation run measured against whatever `buf` the
+  machine had. The CI step that installed the tool is gone with it.
+
+- **The translation from a manifest's `downloads` entries to the plugin
+  resolver's own type is written once**, as `config.PluginDownloads`. It had
+  been written twice, in generation and in lint, and the parity harness would
+  have been the third.
+
 
 - Failure behaviour is tested rather than intended (milestone 5). An
   interrupted clone, a killed process's abandoned scratch directory, a remote
@@ -477,6 +490,13 @@ changes for an input that already worked" — so it bumps the field that signals
   weakened to a skip when no corpus declared an export block; now that one
   does, a skip would mean a corpus had lost its export blocks and nobody was
   told.
+
+### Note for a future release
+
+Adding a built-in rule can turn a green build red. Under
+[RELEASING.md](RELEASING.md) that is a breaking change — "a command's exit status
+changes for an input that already worked" — so it bumps the field that signals
+"read this before upgrading", and the entry names the rule.
 
 ## [v0.1.0] — 2026-08-23
 
