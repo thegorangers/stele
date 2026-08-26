@@ -163,3 +163,42 @@ import "example/catalog/events/v1/events.proto";
 		t.Fatalf("the emitted manifest does not carry the ref:\n%s", out)
 	}
 }
+
+// TestExportNarrowingSurvivesTheImportAnalysis guards the interaction between
+// the two narrowings. The dependency set is derived from what the protos
+// import; the input's paths are derived from what the export copied in. A
+// generate input has to keep selecting files nothing imports — that is what
+// generating them is for — but it must not select files that were never
+// copied in either.
+func TestExportNarrowingSurvivesTheImportAnalysis(t *testing.T) {
+	r := mustMigrateFS(t, map[string]string{
+		"buf.yaml": bufYAMLVendored,
+		"buf.gen.yaml": `
+version: v2
+plugins: [{local: protoc-gen-go, out: gen}]
+inputs:
+  - directory: api
+  - directory: third_party/proto
+    paths: [third_party/proto/example/place]
+`,
+		"Makefile": pinnedPlugin + "vendor:\n" +
+			"\t@buf export \"ssh://git@git.example.com/group/place.git#subdir=api,ref=0123456789abcdef0123456789abcdef01234567\"" +
+			" --exclude-imports --path example/place/v1 --output=third_party/proto\n",
+		"api/example/orders/v1/orders.proto": `syntax = "proto3";
+package example.orders.v1;
+import "example/place/v1/types.proto";
+`,
+		"third_party/proto/example/place/v1/types.proto":   "syntax = \"proto3\";\npackage example.place.v1;\n",
+		"third_party/proto/example/place/v1/service.proto": "syntax = \"proto3\";\npackage example.place.v1;\n",
+	})
+	if len(r.File.Deps) != 1 {
+		t.Fatalf("deps = %#v, want the one recovered dependency", r.File.Deps)
+	}
+	if got := r.File.Deps[0].Paths; len(got) != 1 || got[0] != "example/place/v1" {
+		t.Fatalf("dep paths = %#v, want the exported narrowing", got)
+	}
+	in := r.File.Generate[0].Inputs
+	if len(in) != 2 || in[1].Dep != "place" || len(in[1].Paths) != 1 || in[1].Paths[0] != "example/place/v1" {
+		t.Fatalf("inputs = %#v, want the input narrowed to the exported paths", in)
+	}
+}

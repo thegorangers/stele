@@ -433,3 +433,67 @@ vendor:
 		t.Fatalf("notes = %#v, want the rewritten address named", r.Notes)
 	}
 }
+
+// TestInputPathWiderThanTheExportIsNarrowed is the defect measured on a real
+// fleet migration. A buf input selects a directory of the vendored tree; the
+// export that filled that directory named a --path narrower than the
+// directory. Against the vendored tree the two select the same files, because
+// nothing else was ever copied in. Against the producing repository they do
+// not: the directory selects everything the producer keeps under it. Carried
+// across verbatim the manifest generates packages the repository never had —
+// and they compile, so nothing says so.
+func TestInputPathWiderThanTheExportIsNarrowed(t *testing.T) {
+	r := mustMigrate(t, `
+version: v2
+modules: [{path: api}, {path: third_party/proto}]
+`, `
+version: v2
+plugins: [{local: protoc-gen-go, out: gen}]
+inputs:
+  - directory: api
+  - directory: third_party/proto
+    paths:
+      - third_party/proto/example/place
+`, `
+vendor:
+	@buf export "ssh://git@git.example.com/group/place.git#subdir=api" \
+		--exclude-imports --path example/place/v1 --output=third_party/proto
+`)
+	in := r.File.Generate[0].Inputs
+	if len(in) != 2 || in[1].Dep != "place" {
+		t.Fatalf("inputs = %#v, want the vendored input turned into a dep input", in)
+	}
+	if !reflect.DeepEqual(in[1].Paths, []string{"example/place/v1"}) {
+		t.Fatalf("input paths = %#v, want only what the export copied in", in[1].Paths)
+	}
+	if !reflect.DeepEqual(r.File.Deps[0].Paths, []string{"example/place/v1"}) {
+		t.Fatalf("dep paths = %#v, want only what the export copied in", r.File.Deps[0].Paths)
+	}
+}
+
+// TestWholeVendoredDirectoryIsNarrowedToTheExport is the same defect at its
+// widest. An input that names the vendored tree and no paths at all selects,
+// in buf, exactly what was exported into it — not the producer's whole module.
+func TestWholeVendoredDirectoryIsNarrowedToTheExport(t *testing.T) {
+	r := mustMigrate(t, `
+version: v2
+modules: [{path: api}, {path: third_party/proto}]
+`, `
+version: v2
+plugins: [{local: protoc-gen-go, out: gen}]
+inputs:
+  - directory: api
+  - directory: third_party/proto
+`, `
+vendor:
+	@buf export "ssh://git@git.example.com/group/place.git#subdir=api" \
+		--exclude-imports --path example/place/v1 --output=third_party/proto
+`)
+	in := r.File.Generate[0].Inputs
+	if len(in) != 2 || in[1].Dep != "place" {
+		t.Fatalf("inputs = %#v, want the vendored input turned into a dep input", in)
+	}
+	if !reflect.DeepEqual(in[1].Paths, []string{"example/place/v1"}) {
+		t.Fatalf("input paths = %#v, want only what the export copied in", in[1].Paths)
+	}
+}

@@ -604,6 +604,13 @@ func (m *migration) directoryInput(i int, in bufInput) ([]config.Input, error) {
 	if len(paths) == 0 {
 		out := make([]config.Input, 0, len(deps))
 		for _, name := range deps {
+			// The tree holds what was exported into it, which is not the
+			// producer's whole module when the export named --path.
+			if ep := m.exported(name); len(ep) > 0 {
+				out = append(out, config.Input{Dep: name, Paths: ep})
+				m.inputPaths[name] = appendUnique(m.inputPaths[name], ep...)
+				continue
+			}
 			out = append(out, config.Input{Dep: name})
 			m.wideInput[name] = true
 		}
@@ -624,14 +631,58 @@ func (m *migration) directoryInput(i int, in bufInput) ([]config.Input, error) {
 		if _, ok := byDep[name]; !ok {
 			order = append(order, name)
 		}
-		byDep[name] = append(byDep[name], p)
-		m.inputPaths[name] = appendUnique(m.inputPaths[name], p)
+		sel := m.copied(name, p)
+		byDep[name] = appendUnique(byDep[name], sel...)
+		m.inputPaths[name] = appendUnique(m.inputPaths[name], sel...)
 	}
 	out := make([]config.Input, 0, len(order))
 	for _, name := range order {
 		out = append(out, config.Input{Dep: name, Paths: byDep[name]})
 	}
 	return out, nil
+}
+
+// exported is the narrowing a dependency's export invocations named, in the
+// producer's module coordinates. Empty means the export named no --path at
+// all, which is the one case where a vendored tree really does hold the
+// producer's whole module.
+func (m *migration) exported(name string) []string {
+	return subsume(appendUnique(nil, m.depPaths[name]...))
+}
+
+// copied answers what a buf input path actually selected.
+//
+// This is the difference between the two coordinate systems the translation
+// straddles, and it is invisible in the source configuration. A buf input
+// selects out of the vendored tree — a directory somebody filled with `buf
+// export --path`. A stele input selects out of the producing repository. Where
+// the export was narrower than the directory the input names, the two agree on
+// disk and disagree everywhere else: `paths: [example/place]` over a tree
+// holding only example/place/v1 selects exactly v1, and the same line against
+// the place repository also selects example/place/events/v1, a package this
+// repository never had.
+//
+// The evidence for what the tree held is the export that filled it, so the
+// selection is the input path intersected with the export's --path: an input
+// path that covers a narrower export becomes that export's paths, and an input
+// path at or below one is already inside what was copied and is kept as
+// written.
+//
+// This over-selection is the failure mode a migration tool must not have,
+// because it does not fail. An extra generated package compiles, imports, and
+// ships; the reader of the report sees no line about it, and a report is
+// trusted for what it does not say as much as for what it does.
+func (m *migration) copied(name, p string) []string {
+	var out []string
+	for _, ep := range m.exported(name) {
+		if strings.HasPrefix(ep, p+"/") {
+			out = append(out, ep)
+		}
+	}
+	if len(out) == 0 {
+		return []string{p}
+	}
+	return out
 }
 
 // ownerOf decides which dependency a path under a vendored tree came from. An
