@@ -1,0 +1,125 @@
+# How a tag becomes published binaries.
+#
+# goreleaser replaced a hand-written build/checksum/upload loop for exactly one
+# reason: signing. Checksums say a download was not corrupted; they say nothing
+# about who published it, because whoever can publish a release can publish a
+# matching SHA256SUMS beside it. This tool is baked into a CI image that other
+# repositories build against, so "who built this" is a question their supply
+# chain is entitled to ask. goreleaser has cosign support built in; the loop
+# did not, and would have grown it by hand.
+#
+# What did NOT change is the shape of a release. The published assets are still
+# four raw binaries named exactly as before plus a SHA256SUMS file, because
+# consumers fetch those names by URL. Signatures are additions beside them.
+#
+# ---------------------------------------------------------------------------
+# Version stamping: goreleaser's default is off, deliberately.
+# ---------------------------------------------------------------------------
+#
+# goreleaser stamps `-ldflags "-s -w -X main.version=... -X main.date=..."` by
+# default. This project removed -ldflags version stamping in favour of the
+# toolchain's own VCS data, and the move to goreleaser does not bring it back.
+# Two measurements decided it, both taken at v0.1.0 with go1.26.0:
+#
+#   1. goreleaser does NOT suppress VCS stamping. A binary built by it carries
+#      `vcs=git`, `vcs.modified=false` and `mod ... v0.1.0`, and reports
+#      v0.1.0 through `stele version`. So the toolchain's fact survives the
+#      move; adopting -X would make it the second copy of a fact that is
+#      already correct, which is the situation the flag was removed over.
+#
+#   2. goreleaser's default stamping is not reproducible. `-X main.date` is the
+#      wall clock at build time, and even though this codebase has no
+#      `main.version` for the linker to write into, the whole -ldflags string
+#      is recorded in the binary's own build settings. Two builds of one tag,
+#      twenty seconds apart, produced different bytes. Turning the stamping off
+#      is what keeps the release reproducible.
+#
+# `ldflags: [""]` is how goreleaser is told to pass no linker flags at all,
+# rather than fall back to its default set. The measured consequence is worth
+# stating: the binary goreleaser produces is byte-identical to a plain
+# `go build -trimpath ./cmd/stele` at the same tag with the same Go version.
+# Anybody can re-derive a published binary without installing goreleaser.
+version: 2
+
+project_name: stele
+
+builds:
+  - id: stele
+    main: ./cmd/stele
+    binary: stele
+    env:
+      - CGO_ENABLED=0 # the host C toolchain is not an input to the bytes
+    # The set is defended in RELEASING.md. Briefly: linux/amd64 is the CI
+    # images this tool exists to run in, the arm64 pair covers arm runners and
+    # Apple Silicon, darwin/amd64 covers the Intel Macs still in service.
+    # Windows is absent because nothing here has ever been tested there, and
+    # publishing a binary is a claim that somebody checked.
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath      # the build machine's paths are not in the binary
+      - -buildvcs=true # this is what stamps the version; see above
+    ldflags: [""]      # not goreleaser's default set; see above
+    # Binary mtimes come from the commit, not from the clock, so that the file
+    # metadata of a release is a function of the tag like everything else.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    hooks:
+      post:
+        # The check that replaces -ldflags: a binary that does not report the
+        # tag it was built from stops the release. It runs here, inside the
+        # build, so it gates publishing rather than reporting after the fact.
+        - cmd: ./.github/scripts/verify-version.sh "{{ .Path }}" "{{ .Target }}"
+          env:
+            - 'RELEASE_TAG={{ .Tag }}'
+            - 'IS_SNAPSHOT={{ .IsSnapshot }}'
+
+archives:
+  # Raw binaries, not tarballs. The previous workflow published bare
+  # executables under these exact names and consumers fetch them by URL; a move
+  # to .tar.gz would be a breaking change wearing a packaging change's clothes.
+  - id: stele
+    ids: [stele]
+    formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+signs:
+  # Keyless, through GitHub's OIDC token: there is no key to hold, rotate or
+  # lose, and what a verifier learns is the useful fact — that these bytes were
+  # produced by this repository's release workflow at this tag — rather than
+  # that somebody had a file. The certificate is short-lived and the signature
+  # is logged in Rekor, so verification works long after it expires.
+  #
+  # Only SHA256SUMS is signed, and that is a complete chain rather than a
+  # shortcut: the file names the digest of every published binary, so a
+  # verified signature over it plus a digest check over a download says as much
+  # about that download as a signature on the download would. Signing each
+  # binary as well would be a second copy of a claim already made — the same
+  # argument that keeps -ldflags out of this file.
+  - id: cosign
+    cmd: cosign
+    artifacts: checksum
+    certificate: "${artifact}.pem"
+    output: true
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - --yes
+
+changelog:
+  # The release notes come from CHANGELOG.md, which is written for the person
+  # upgrading. A generated list of commit subjects is a different document with
+  # a worse audience.
+  disable: true
+
+release:
+  draft: false
+  prerelease: auto
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"

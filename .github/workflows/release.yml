@@ -1,16 +1,28 @@
 # Publishes the binaries for a tag, and refuses to publish anything it cannot
 # vouch for.
 #
-# The two rules this file exists to enforce:
+# The rules this file exists to enforce:
 #
-#   - A tag cannot publish a broken build. The tests run first, in the same job,
-#     and nothing is built until they pass.
+#   - A tag cannot publish a broken build. gofmt, vet, the test suite and the
+#     parity suite run first, in the same job, and nothing is built until they
+#     pass. Parity is the acceptance criterion for this tool — the bytes it
+#     writes are its contract — so a release that has not been measured against
+#     the reference tool is not a release.
 #   - A published binary cannot claim a version it was not built from. There is
-#     no -ldflags stamping here; the Go toolchain records the tag by itself, and
-#     the verify step asserts that what it recorded is exactly the tag being
-#     released. A checkout that lost the tag, or a build that lost its VCS
-#     information, fails the release instead of shipping a binary that says
-#     (devel).
+#     no -ldflags stamping; the Go toolchain records the tag by itself, and a
+#     goreleaser post-build hook asserts that what it recorded is exactly the
+#     tag being released. A checkout that lost the tag, or a build that lost its
+#     VCS information, fails the release instead of shipping a binary that says
+#     (devel). See .goreleaser.yaml for the measurements behind that choice.
+#   - Two builds of one tag are the same bytes. Checked, not asserted: the
+#     binaries are built twice and the digests compared before anything is
+#     uploaded.
+#   - A consumer can tell a release published by this repository from one
+#     published by somebody who got hold of the token. SHA256SUMS is signed
+#     with cosign, keyless, through the OIDC token GitHub issues to this
+#     workflow. Checksums alone answer "did the download arrive intact"; they
+#     cannot answer "who published it", because whoever can publish a release
+#     can publish matching checksums beside it.
 name: Release
 
 on:
@@ -26,6 +38,11 @@ on:
 
 permissions:
   contents: write
+  # Keyless signing. This is the whole of the trust root: cosign exchanges this
+  # short-lived token for a certificate that names the repository, the workflow
+  # and the ref, so verification can ask for that identity by name and there is
+  # no signing key anywhere to hold, rotate or lose.
+  id-token: write
 
 env:
   # Pinned exactly, not by minor. The compiler is an input to the bytes: a
@@ -59,7 +76,7 @@ jobs:
           ref: ${{ steps.tag.outputs.tag }}
           # The version comes from the tag the toolchain can see, so the whole
           # history and every tag must be present. A shallow checkout would
-          # produce a pseudo-version and fail the verify step below, which is
+          # produce a pseudo-version and fail the verify hook below, which is
           # the right failure but a slow way to learn it.
           fetch-depth: 0
 
@@ -88,96 +105,119 @@ jobs:
 
       # Output bytes are the contract this tool publishes, so a tag that
       # generates something different from the reference tool is not
-      # releasable, however green the unit tests are. Same steps as CI runs on
-      # every change, so a release cannot be measured differently from the
-      # change that produced it.
+      # releasable, however green the unit tests are. Same composite action CI
+      # runs on every change, so a release cannot be measured differently from
+      # the change that produced it.
       - name: Parity with the reference tool
         uses: ./.github/actions/parity
 
-      - name: Build the binaries
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          # The set is defended in RELEASING.md. Briefly: the fleets that run
-          # this in CI are linux/amd64, the arm64 pair covers the arm CI images
-          # and Apple Silicon, and darwin/amd64 covers the Intel Macs still in
-          # use. Windows is absent because nothing consuming this runs on it and
-          # nothing here has ever been tested there.
-          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            goos="${platform%/*}"
-            goarch="${platform#*/}"
-            out="dist/stele_${TAG}_${goos}_${goarch}"
-            # -trimpath removes the build machine's paths from the binary and
-            # CGO_ENABLED=0 removes the host C toolchain from the inputs; both
-            # are here so that two builds of one tag are the same bytes.
-            # buildvcs is left on deliberately: it is what stamps the version.
-            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-              go build -trimpath -buildvcs=true -o "$out" ./cmd/stele
-          done
-          ls -l dist
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
 
-      # The check that replaces -ldflags. A binary that does not report the tag
-      # it was built from does not get published.
-      - name: Verify the built binary reports the tag
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
+      # Pinned exactly, like the Go version and for a weaker version of the
+      # same reason. goreleaser does not compile anything — the bytes of a
+      # binary come from the toolchain, and are the same as a plain
+      # `go build -trimpath` would produce — but it decides the asset names,
+      # the checksum file and the signing invocation, and those are the
+      # release's shape. A floating version could change that shape between
+      # two tags without anything in this repository moving.
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+          version: v2.18.0
+
+      # Reproducibility is claimed, so it is checked before anything is
+      # uploaded rather than asserted afterwards. Two full builds of all four
+      # platforms, compared by digest. The version guard runs inside each of
+      # them, as a post-build hook, so a binary that misreports its version
+      # also stops here.
+      #
+      # The tree must be clean for this to mean anything: an untracked file
+      # makes the toolchain stamp +dirty, which both changes the bytes and
+      # fails the guard. That is exactly how it was found the hard way, when
+      # the build wrote into a dist/ that was not ignored. dist/ is
+      # goreleaser's default output directory and is ignored; this asserts it
+      # rather than trusting it.
+      - name: Build twice and compare
         run: |
           set -euo pipefail
-          reported="$(./dist/stele_${TAG}_linux_amd64 version --json | \
-            python3 -c 'import json,sys; print(json.load(sys.stdin)["components"]["stele"]["version"])')"
-          echo "binary reports: $reported"
-          if [ "$reported" != "$TAG" ]; then
-            echo "the binary reports $reported but the tag is $TAG; refusing to publish" >&2
+          goreleaser build --clean
+          find dist -type f -name stele -printf '%P\n' | sort | \
+            while read -r p; do sha256sum "dist/$p"; done | sed 's| dist/| |' >/tmp/first.txt
+          cat /tmp/first.txt
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "the build left the tree dirty; the second build would not be comparable" >&2
+            git status --porcelain >&2
             exit 1
           fi
-
-      # Reproducibility is claimed, so it is checked rather than asserted.
-      - name: Rebuild and compare
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -trimpath -buildvcs=true -o /tmp/stele_rebuild ./cmd/stele
-          a="$(sha256sum "dist/stele_${TAG}_linux_amd64" | cut -d' ' -f1)"
-          b="$(sha256sum /tmp/stele_rebuild | cut -d' ' -f1)"
-          echo "first build:  $a"
-          echo "second build: $b"
-          if [ "$a" != "$b" ]; then
+          goreleaser build --clean
+          find dist -type f -name stele -printf '%P\n' | sort | \
+            while read -r p; do sha256sum "dist/$p"; done | sed 's| dist/| |' >/tmp/second.txt
+          if ! diff -u /tmp/first.txt /tmp/second.txt; then
             echo "two builds of one tag differ; the release is not reproducible" >&2
             exit 1
           fi
+          echo "two builds of ${{ steps.tag.outputs.tag }} produced identical bytes"
 
-      - name: Checksums
-        run: |
-          set -euo pipefail
-          cd dist
-          sha256sum stele_* >SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Publish the release
+      - name: Release notes from the changelog
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          notes_file="$(mktemp)"
+          # The section for this tag, if the changelog has one.
+          : >/tmp/notes.md
           if [ -f CHANGELOG.md ]; then
-            # The section for this tag, if the changelog has one.
             awk -v tag="$TAG" '
               $0 ~ "^## \\[" tag "\\]" || $0 ~ "^## " tag "( |$)" { inside=1; next }
               inside && /^## / { exit }
               inside { print }
-            ' CHANGELOG.md >"$notes_file"
+            ' CHANGELOG.md >/tmp/notes.md
           fi
-          if [ ! -s "$notes_file" ]; then
-            echo "No changelog entry for $TAG." >"$notes_file"
+          if [ ! -s /tmp/notes.md ]; then
+            echo "No changelog entry for $TAG." >/tmp/notes.md
           fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/stele_* dist/SHA256SUMS --clobber
-          else
-            gh release create "$TAG" dist/stele_* dist/SHA256SUMS \
-              --title "$TAG" --notes-file "$notes_file"
+
+      # Builds a third time, signs SHA256SUMS with the workflow's OIDC identity
+      # and uploads. The bytes it publishes are the bytes the step above proved
+      # reproducible — that is what reproducible means — and the assertion
+      # after it says so out loud rather than assuming.
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          goreleaser release --clean --release-notes /tmp/notes.md
+
+      - name: The published bytes are the bytes that were checked
+        run: |
+          set -euo pipefail
+          # dist/SHA256SUMS names the archived binaries; /tmp/first.txt names
+          # the same bytes under their per-target build paths. Compare the
+          # digest sets.
+          cut -d' ' -f1 /tmp/first.txt | sort >/tmp/a
+          cut -d' ' -f1 dist/SHA256SUMS | sort >/tmp/b
+          if ! diff -u /tmp/a /tmp/b; then
+            echo "the published binaries are not the ones that were verified" >&2
+            exit 1
           fi
+          echo "published digests match the verified build"
+
+      - name: Say how to verify what was published
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          {
+            echo "### Verifying $TAG"
+            echo
+            echo '```sh'
+            echo "gh release download $TAG -R ${{ github.repository }} \\"
+            echo "  -p SHA256SUMS -p SHA256SUMS.sig -p SHA256SUMS.pem"
+            echo
+            echo "cosign verify-blob SHA256SUMS \\"
+            echo "  --signature SHA256SUMS.sig \\"
+            echo "  --certificate SHA256SUMS.pem \\"
+            echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/\.github/workflows/release\.yml@' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

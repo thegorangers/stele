@@ -38,6 +38,37 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Releases are signed.** `SHA256SUMS` is signed with cosign, keylessly,
+  through the OIDC identity GitHub issues to the release workflow, and
+  `SHA256SUMS.sig` and `SHA256SUMS.pem` are published beside it. The digest
+  file alone only ever established that a download arrived intact — whoever can
+  publish a release can publish matching checksums beside it — and the tool is
+  now baked into a CI image other repositories build against, so provenance is
+  a question their supply chain is entitled to ask. Verification asks for the
+  signer by name; the recipe is in the README and in RELEASING.md.
+
+### Internal
+
+- **Releases are cut by goreleaser.** It replaced a hand-written loop over four
+  platforms, `sha256sum` and `gh release create`; signing is what earned it its
+  place, since it has cosign support built in. Nothing a consumer fetches
+  changed: the same four raw binaries under the same names, the same
+  `SHA256SUMS`, plus the two signature files above.
+
+  Version stamping stays with the Go toolchain. goreleaser's default `-ldflags
+  -X` stamping is turned off, for a reason that was measured rather than
+  argued: its default flags carry a wall-clock `-X main.date`, the whole
+  `-ldflags` string is recorded in the binary's build settings, and two builds
+  of one tag twenty seconds apart produced different bytes. With it off, a
+  published binary is byte-identical to a plain `go build -trimpath` at the same
+  tag — so a release can be re-derived without goreleaser installed. See
+  RELEASING.md.
+
+  The reproducibility check now covers all four platforms rather than
+  `linux/amd64` alone, and fails if a build leaves the working tree dirty.
+
 ### Refused input
 
 - **A dependency's `paths:` now decide what enters the resolved graph.** The

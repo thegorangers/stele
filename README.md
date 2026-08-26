@@ -556,8 +556,15 @@ in the corpus that says so:
 Each release publishes binaries for `linux/amd64`, `linux/arm64`,
 `darwin/amd64` and `darwin/arm64`, with a `SHA256SUMS` file beside them, so
 using the tool does not require a Go toolchain. Take them from the
-[releases page](https://github.com/thegorangers/stele/releases), and check the
-digest:
+[releases page](https://github.com/thegorangers/stele/releases).
+
+`SHA256SUMS` is signed with [cosign](https://github.com/sigstore/cosign), and
+verifying the signature is the step worth taking. The digest on its own only
+tells you the download arrived intact; it says nothing about who published it,
+because whoever can publish a release can publish a matching `SHA256SUMS`
+beside it. The signature is keyless — there is no public key to fetch — and
+what it establishes is the useful fact: these bytes came out of this
+repository's release workflow, at this tag.
 
 ```bash
 tag=v0.1.0
@@ -565,9 +572,32 @@ os=linux arch=amd64
 base="https://github.com/thegorangers/stele/releases/download/$tag"
 curl -fsSLO "$base/stele_${tag}_${os}_${arch}"
 curl -fsSLO "$base/SHA256SUMS"
+curl -fsSLO "$base/SHA256SUMS.sig"
+curl -fsSLO "$base/SHA256SUMS.pem"
+
+# Who published these checksums. Fails if the certificate was not issued to
+# this repository's release workflow by GitHub's OIDC provider.
+cosign verify-blob SHA256SUMS \
+  --signature SHA256SUMS.sig \
+  --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp \
+    '^https://github.com/thegorangers/stele/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# Only now does the digest mean anything.
 sha256sum --ignore-missing -c SHA256SUMS
+
 install -m 0755 "stele_${tag}_${os}_${arch}" /usr/local/bin/stele
 ```
+
+Run the two checks in that order. `sha256sum -c` against an unverified
+`SHA256SUMS` compares a download to a claim from the same source, which is a
+consistency check and not a provenance one.
+
+The binaries are reproducible: at a given tag, `go build -trimpath ./cmd/stele`
+with the Go version the release was built with produces the same bytes as the
+published binary for that platform, so a digest can also be re-derived from
+source rather than taken on trust. See [RELEASING.md](RELEASING.md).
 
 With a Go toolchain:
 

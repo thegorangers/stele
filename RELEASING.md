@@ -107,16 +107,115 @@ the truth — the bytes may still move, and when they do you will be told.
 The workflow can also be run by hand (`workflow_dispatch`) against an existing
 tag, which is how it was exercised before the first real release.
 
+To see what a release would produce without publishing anything:
+
+```bash
+goreleaser release --snapshot --clean --skip=publish,sign
+```
+
+`--skip=sign` is needed because keyless signing wants the workflow's OIDC
+identity; run locally, cosign falls back to an interactive browser flow and
+hangs. That is the one part of the release path that can only be exercised in
+CI, and the first tag after this change is what exercises it.
+
 ## What the workflow guarantees
 
-- **A tag cannot publish a broken build.** `gofmt`, `go vet` and `go test ./...`
-  run before anything is built, in the same job.
+- **A tag cannot publish a broken build.** `gofmt`, `go vet`, `go test ./...`
+  and the parity suite run before anything is built, in the same job. Parity is
+  the acceptance criterion for this tool, through the same composite action CI
+  runs on every change, so a release cannot be measured differently from the
+  change that produced it.
 - **A published binary cannot claim a version it was not built from.** There is
-  no `-ldflags` stamping. The Go toolchain records the tag by itself, and the
-  workflow then runs the freshly built binary and refuses to publish unless it
-  reports exactly the tag being released. A checkout that lost the tag, or a
-  build that lost its VCS information, fails the release rather than shipping a
-  binary that says `(devel)`.
+  no `-ldflags` stamping. The Go toolchain records the tag by itself, and
+  `.github/scripts/verify-version.sh` runs as a goreleaser post-build hook,
+  refusing to let the release continue unless the freshly built binary reports
+  exactly the tag. A checkout that lost the tag, or a build that lost its VCS
+  information, fails the release rather than shipping a binary that says
+  `(devel)`.
+- **Two builds of one tag are the same bytes.** Checked before anything is
+  uploaded, not asserted; see below.
+- **A release can be told apart from one published by somebody else.**
+  `SHA256SUMS` is signed with cosign; see below.
+
+## goreleaser, and what it did and did not replace
+
+Releases are cut by [goreleaser](https://goreleaser.com), configured in
+`.goreleaser.yaml`. It replaced a hand-written loop over four platforms, a
+`sha256sum` invocation and a `gh release create`. That loop was not painful,
+and it was deliberately kept while checksums were the whole of the release's
+integrity story.
+
+**Signing is what earned goreleaser its place.** goreleaser has cosign support
+built in; the loop did not, and would have grown it by hand. What is published
+is otherwise unchanged: the same four raw binaries under the same names, and
+the same `SHA256SUMS` — consumers fetch those URLs, and packaging them into
+tarballs would have been a breaking change wearing a packaging change's
+clothes.
+
+What goreleaser did **not** take over:
+
+- Version stamping. Its default is `-ldflags -X`, and it is turned off. See
+  below.
+- The changelog. Release notes are the `CHANGELOG.md` section for the tag,
+  extracted by the workflow and passed in; goreleaser's generated list of
+  commit subjects is a different document with a worse audience.
+- The reproducibility check and the version guard, which are the two things the
+  hand-written workflow existed to enforce and are both still enforced —
+  the guard as a build hook, the check as a step that must pass before the
+  publishing step runs.
+
+## Signing
+
+`SHA256SUMS` is signed with [cosign](https://github.com/sigstore/cosign), and
+the signature (`SHA256SUMS.sig`) and certificate (`SHA256SUMS.pem`) are
+published beside it.
+
+**Why, given there were already checksums.** A checksum protects against a
+corrupted download, not a hostile one. Whoever can publish a release can publish
+a matching `SHA256SUMS` next to it, so the digest only ever established that a
+download matched what the release said — never who the release was from. This
+tool is baked into a CI image that other repositories build against, which
+makes that a question their supply chain is entitled to ask.
+
+**Keyless.** The signature is made with a short-lived certificate that cosign
+obtains by exchanging the OIDC token GitHub issues to this workflow, which is
+why `id-token: write` is in the workflow's permissions. There is no signing key
+in a secret, so there is none to hold, rotate, lose or leak, and what a verifier
+learns is the fact worth learning: *these bytes were produced by this
+repository's release workflow, at this tag*. A key would have established only
+that somebody had the key. The certificate expires in minutes; the signature
+stays verifiable because it is recorded in the public Rekor transparency log.
+
+**Only `SHA256SUMS` is signed**, and that is a complete chain rather than a
+shortcut. The file names the digest of every published binary, so a verified
+signature over it, plus a digest check over a download, says everything about
+that download that a signature on the download itself would. Signing each
+binary as well would be a second copy of a claim already made — the same
+argument that keeps `-ldflags` out of this project.
+
+Verifying, which is now part of the release contract and is documented in the
+README for consumers:
+
+```bash
+tag=v0.1.0
+base="https://github.com/thegorangers/stele/releases/download/$tag"
+curl -fsSLO "$base/SHA256SUMS" "$base/SHA256SUMS.sig" "$base/SHA256SUMS.pem"
+
+cosign verify-blob SHA256SUMS \
+  --signature SHA256SUMS.sig \
+  --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp \
+    '^https://github.com/thegorangers/stele/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+The identity flags are not optional decoration. `cosign verify-blob` without
+them checks that *somebody* signed the file, which is close to no check at all;
+the regexp is what pins the signer to this repository's release workflow, and
+`--certificate-oidc-issuer` is what stops a certificate from a different
+identity provider satisfying it.
 
 ### Version stamping, and why there is no `-ldflags`
 
@@ -140,6 +239,49 @@ release that calls itself a development build; passing it by hand on a dirty
 tree ships a development build that calls itself a release. Removing the flag
 removes both, and the verify step covers what remains.
 
+#### Moving to goreleaser did not change this, and here is the measurement
+
+goreleaser's default is exactly the `-ldflags -X` stamping this project
+removed, so the move put the decision back on the table. Half the original
+argument does dissolve: goreleaser never forgets to pass the flag. The other
+half does not — two independent sources for one fact can still disagree, and
+the one that is checked is the one the toolchain records.
+
+Two measurements settled it, both taken at `v0.1.0` on go1.26.0, with
+goreleaser v2.18.0:
+
+1. **goreleaser does not suppress VCS stamping.** This was the thing worth
+   checking rather than assuming, because a build tool that sets its own flags
+   could easily have. It does not: a binary it builds carries `vcs=git`,
+   `vcs.revision`, `vcs.modified=false` and `mod github.com/thegorangers/stele
+   v0.1.0`, and `stele version` reports `v0.1.0`. The toolchain's fact survives
+   the move intact, so adopting `-X` would be adding a second copy beside a
+   first copy that is already right.
+
+2. **goreleaser's default stamping is not reproducible.** Its default flags
+   include `-X main.date=<wall clock>`. This codebase has no `main.version` or
+   `main.date` for the linker to write into, so the `-X` values go nowhere —
+   but the *whole `-ldflags` string is recorded in the binary's own build
+   settings*, timestamp included. Two builds of `v0.1.0` twenty seconds apart
+   produced `e875728…` and `a38af6b…`: different bytes, for a tool whose
+   release workflow fails when two builds of one tag differ. Turning the
+   stamping off is not a preference here; it is what keeps the release
+   reproducible at all.
+
+So `.goreleaser.yaml` sets `ldflags: [""]`, which tells goreleaser to pass no
+linker flags rather than fall back to its defaults, and `flags: [-trimpath,
+-buildvcs=true]`. The measured consequence is worth stating on its own:
+
+    $ goreleaser build --clean --single-target   # at v0.1.0
+    $ go build -trimpath -buildvcs=true -o hand ./cmd/stele
+    4279a86351581b8563bea3a1e85d37220fabf417fb7060a98fda75ac2b309673  (both)
+
+The published binary is byte-identical to what a plain `go build -trimpath`
+produces at the same tag with the same Go version. Nobody needs goreleaser
+installed to re-derive a release and check it against the published digest,
+which is a stronger position than the hand-written workflow was in and the
+opposite of what adopting a build tool usually costs.
+
 ## Reproducibility
 
 Two builds of one tag produce identical binaries. What makes that true:
@@ -154,8 +296,23 @@ Two builds of one tag produce identical binaries. What makes that true:
   time, so it does not cost reproducibility.
 - Dependencies pinned by `go.sum`.
 
-The workflow does not merely claim this. It builds `linux/amd64` twice and fails
-the release if the two SHA-256 digests differ.
+- No `-ldflags`, so no wall-clock timestamp is recorded in the build settings.
+  This is not a theoretical entry: it is the concrete defect goreleaser's
+  defaults would have introduced, measured above.
+
+The workflow does not merely claim this. It builds **all four platforms twice**,
+before anything is uploaded, and fails the release if any digest differs — a
+widening from the old check, which built `linux/amd64` twice and said nothing
+about the other three. The step also fails if the build left the working tree
+dirty, which is how this went wrong once before: the release wrote into `dist/`,
+`dist/` was not in `.gitignore`, the second build saw a modified tree and
+stamped `+dirty`, and the two builds differed for a reason that had nothing to
+do with the compiler. `dist/` is goreleaser's default output directory and is
+ignored; the step asserts that rather than trusting it.
+
+After publishing, the digests in the uploaded `SHA256SUMS` are compared against
+the ones that were verified, so a release that somehow shipped different bytes
+from the ones that passed the check fails loudly rather than quietly.
 
 **What is not covered.** Reproducibility is guaranteed for the same Go version
 on the same builder OS. A different Go patch release will produce different
