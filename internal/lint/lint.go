@@ -102,8 +102,15 @@ type Config struct {
 	// one file and `a/b` names everything under it.
 	Ignore []string
 	// Rules is what is said about individual rules, by ID. A rule not named
-	// here runs at SeverityError over every path.
+	// here runs at DefaultSeverity for its namespace over every path.
 	Rules map[string]RuleConfig
+	// Only, when non-empty, narrows the run to the rules it names. It is not
+	// configuration a manifest can hold: it is what `stele lint --rule` asks
+	// for at a terminal, to read one rule's findings after the report rolled
+	// them up into a count. A manifest that could narrow a run this way would
+	// be a manifest that could switch every other rule off in one line
+	// nobody reviewing it would read as switching anything off.
+	Only []string
 }
 
 // DefaultSeverity is what a finding of a rule the manifest says nothing about
@@ -133,6 +140,16 @@ func DefaultSeverity(id string) Severity {
 		return SeverityWarning
 	}
 	return SeverityError
+}
+
+// contains reports whether ids holds id.
+func contains(ids []string, id string) bool {
+	for _, s := range ids {
+		if s == id {
+			return true
+		}
+	}
+	return false
 }
 
 // ignores reports whether path is covered by one of the entries.
@@ -194,6 +211,17 @@ func New(rules []Rule, cfg Config) (*Engine, error) {
 			"run `stele lint --rules` for the list (known: %s)",
 			strings.Join(unknown, ", "), strings.Join(known, ", "))
 	}
+	var missing []string
+	for _, id := range cfg.Only {
+		if !byID[id] {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, fmt.Errorf("lint: asked for %s, which is not a rule this tool has; "+
+			"run `stele lint --rules` for the list", strings.Join(missing, ", "))
+	}
 	sorted := append([]Rule(nil), rules...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID() < sorted[j].ID() })
 	return &Engine{rules: sorted, cfg: cfg}, nil
@@ -254,6 +282,9 @@ func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 		}
 		f := File{Desc: fd}
 		for _, r := range e.rules {
+			if len(e.cfg.Only) > 0 && !contains(e.cfg.Only, r.ID()) {
+				continue
+			}
 			rc, configured := e.cfg.Rules[r.ID()]
 			if configured && (rc.Severity == SeverityOff || ignores(rc.Ignore, path)) {
 				continue

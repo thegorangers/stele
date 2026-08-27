@@ -46,6 +46,9 @@ type Options struct {
 	// Fetch materialises dependency repositories. When nil, repositories are
 	// fetched from the network into CacheRoot.
 	Fetch resolve.FetchFunc
+	// Only, when non-empty, narrows the run to the rules it names and prints
+	// every finding they make. It is what `stele lint --rule` passes.
+	Only []string
 	// CacheRoot is where fetched repositories and installed plugins are kept.
 	// Required when Fetch is nil and the manifest declares dependencies, and
 	// when it declares a rule plugin this tool has to install or download.
@@ -89,6 +92,10 @@ type Report struct {
 	// printed above the findings for that reason — a reader who meets them
 	// afterwards has already read the findings as the whole answer.
 	Notes []string
+	// Detail names the rules whose findings are printed one to a line
+	// however many there are. It is what `stele lint --rule` sets. Empty
+	// means the threshold below decides.
+	Detail []string
 	// disk maps an import path to the path on disk it was read from, so that
 	// output points at a file a reader can open rather than at a name only
 	// the resolver uses.
@@ -127,12 +134,97 @@ func (r *Report) Write(w io.Writer) {
 		}
 		fmt.Fprintln(w, f.String())
 	}
+	rolled := r.rollUp()
 	for _, f := range r.Findings {
+		if rolled[f.Rule] > 0 {
+			continue
+		}
 		if p, ok := r.disk[f.Path]; ok {
 			f.Path = p
 		}
 		fmt.Fprintln(w, f.String())
 	}
+	for _, id := range sortedKeys(rolled) {
+		fmt.Fprintln(w, r.rollUpLine(id))
+	}
+}
+
+// SummaryThreshold is how many warnings one rule may report before the report
+// prints a count instead of the findings.
+//
+// The number is not load-bearing and it is not tuned; what matters is that
+// there is one. Below it the detail is cheaper than the round trip to fetch
+// it, above it the detail is a page of output that answers a question the
+// reader did not ask. Five findings are ten lines, because each carries its
+// fix, and ten lines is about where a reader stops reading and starts
+// scrolling.
+const SummaryThreshold = 5
+
+// rollUp returns the rules whose findings are replaced by a count, and how
+// many findings each has.
+//
+// Two conditions, and neither of them is the rule's namespace. That is the
+// decision this function exists to make, and making it by severity rather
+// than by who wrote the rule is what keeps it honest in both directions: a
+// stele rule a repository has lowered to warning while it works through two
+// hundred findings is rolled up too, and an aip rule a repository has raised
+// to error prints in full — which is exactly what raising it asked for.
+//
+//   - Every finding of the rule is a warning. An error is the build failing
+//     now, and a failure that will not say what it was is not one anybody can
+//     act on. A warning is information a reader may act on later, and a count
+//     is enough to decide with.
+//   - There are more of them than SummaryThreshold, and the reader did not ask
+//     for the rule by name.
+func (r *Report) rollUp() map[string]int {
+	detail := make(map[string]bool, len(r.Detail))
+	for _, id := range r.Detail {
+		detail[id] = true
+	}
+	counts := make(map[string]int)
+	errored := make(map[string]bool)
+	for _, f := range r.Findings {
+		counts[f.Rule]++
+		if f.Severity != SeverityWarning {
+			errored[f.Rule] = true
+		}
+	}
+	for id, n := range counts {
+		if errored[id] || detail[id] || n <= SummaryThreshold {
+			delete(counts, id)
+		}
+	}
+	return counts
+}
+
+// rollUpLine is what one rolled-up rule prints instead of its findings.
+//
+// It carries three things and each is there for a reason a summary usually
+// misses: the count, so that the size of the thing is known without fetching
+// it; the number of files, so that a hundred findings in one file reads
+// differently from a hundred across thirty; and the exact command that prints
+// them, so that the detail is a paste away rather than a flag somebody has to
+// go and look up.
+func (r *Report) rollUpLine(id string) string {
+	n := 0
+	files := make(map[string]bool)
+	for _, f := range r.Findings {
+		if f.Rule == id {
+			n++
+			files[f.Path] = true
+		}
+	}
+	return fmt.Sprintf("stele: %s: %s in %s; see `stele lint --rule %s`",
+		id, plural(n, "warning"), plural(len(files), "file"), id)
+}
+
+func sortedKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Summary is one line saying what was checked and what was found. A clean run
@@ -199,7 +291,9 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	// The engine is built before anything is fetched or compiled: a rule id
 	// nothing carries is a defect in the manifest, and reporting it after a
 	// network round trip would be reporting it later than it is known.
-	engine, err := New(rules, ConfigFrom(cfg.Lint))
+	ecfg := ConfigFrom(cfg.Lint)
+	ecfg.Only = opts.Only
+	engine, err := New(rules, ecfg)
 	if err != nil {
 		return nil, err
 	}
@@ -238,13 +332,22 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	for _, f := range compiled {
 		files = append(files, f)
 	}
-	rep := &Report{Result: engine.Check(files), disk: disk, Notes: unpinnedNotes(unpinned)}
+	rep := &Report{Result: engine.Check(files), disk: disk, Notes: unpinnedNotes(unpinned), Detail: opts.Only}
 	// A run that checked nothing is not a clean run. The two ways to reach
 	// here are an ignore list that grew until it covered everything and a
 	// module path that no longer holds any protos, and both are silent: the
 	// build stays green and the protection has gone.
 	if rep.Files == 0 {
 		return nil, errors.New("lint: no files were checked; every file this repository owns is covered by lint.ignore")
+	}
+	// A run narrowed to a rule the manifest switches off would print nothing
+	// and look exactly like a rule with nothing to say. The reader asked to
+	// see this rule's findings; the answer is that there are none to be had
+	// until the manifest changes, and that is a sentence rather than silence.
+	if len(opts.Only) > 0 && rep.Rules == 0 {
+		return nil, fmt.Errorf("lint: %s is off in %s, so it has checked nothing; "+
+			"a run narrowed to it has nothing to report",
+			strings.Join(opts.Only, ", "), ManifestName)
 	}
 	return rep, nil
 }

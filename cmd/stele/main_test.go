@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -345,6 +346,13 @@ func TestLintRulesListsEveryRule(t *testing.T) {
 			t.Errorf("%s is listed without its description", r.ID())
 		}
 	}
+	// The listing is how somebody decides whether to configure a rule, and
+	// the rules no longer all cost the same thing. A listing that showed a
+	// rule that warns the way it shows a rule that fails the build would omit
+	// the one difference between them.
+	if !strings.Contains(out.String(), "warns") {
+		t.Errorf("the listing does not say which rules only warn:\n%s", out.String())
+	}
 }
 
 // TestLintFailsOnFindingsAndSaysWhatToDo. The exit status is the contract with
@@ -492,5 +500,72 @@ func TestLintSaysWhyItFailedWhenARuleDidNotRun(t *testing.T) {
 		if !strings.Contains(err.Error()+out.String(), want) {
 			t.Errorf("the output does not say %q:\n%v\n%s", want, err, out.String())
 		}
+	}
+}
+
+// TestLintRuleFlagExpandsARolledUpRule is the second half of the roll-up: the
+// summary line names a command, and the command has to be the one it names.
+// A summary that points at a flag that does not exist is worse than no summary.
+func TestLintRuleFlagExpandsARolledUpRule(t *testing.T) {
+	dir := t.TempDir()
+	writeFile := func(name, body string) {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("stele.yaml", "version: 1\nmodules:\n  - path: api\n")
+	// Six timestamps named the way the measured fleet names them: one more
+	// than the threshold, so the report rolls them up.
+	var fields strings.Builder
+	for i := 1; i <= 6; i++ {
+		fmt.Fprintf(&fields, "  google.protobuf.Timestamp f%d_at = %d;\n", i, i)
+	}
+	writeFile("api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+import "google/protobuf/timestamp.proto";
+
+message Order {
+`+fields.String()+`}
+`)
+	const ruleID = "aip/142_timestamp_field_time_suffix"
+
+	var out, errOut strings.Builder
+	if err := run(context.Background(), []string{"lint", "--dir", dir}, &out, &errOut); err != nil {
+		t.Fatalf("no aip rule may fail a build by default: %v", err)
+	}
+	want := "see `stele lint --rule " + ruleID + "`"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("the report does not roll the rule up and name the command:\n%s", out.String())
+	}
+	if strings.Count(out.String(), ruleID+":") > 1 {
+		t.Errorf("the rolled-up rule printed its findings as well:\n%s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if err := run(context.Background(), []string{"lint", "--dir", dir, "--rule", ruleID}, &out, &errOut); err != nil {
+		t.Fatalf("asking for one rule must not fail the run: %v", err)
+	}
+	if n := strings.Count(out.String(), ruleID); n != 6 {
+		t.Errorf("want the 6 findings of the rule asked for, got %d:\n%s", n, out.String())
+	}
+	if strings.Contains(out.String(), "--rule") {
+		t.Errorf("a rule asked for by name must not be summarised again:\n%s", out.String())
+	}
+
+	// A rule that does not exist is a typo, and a run that silently checked
+	// nothing would report a clean repository.
+	out.Reset()
+	errOut.Reset()
+	err := run(context.Background(), []string{"lint", "--dir", dir, "--rule", "aip/no_such_rule"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("--rule with an id nothing carries must be refused, not silently ignored")
+	}
+	if !strings.Contains(err.Error(), "aip/no_such_rule") {
+		t.Errorf("the failure does not name what was asked for: %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/thegorangers/stele/internal/cachedir"
 	"github.com/thegorangers/stele/internal/lint"
@@ -20,10 +21,24 @@ finding about somebody else's contract is one nobody here can act on.
 Findings are printed as path:line:col: severity: rule: message, with what to
 do about it on the line beneath. The run fails when any finding is an error.
 
+A rule that reports more warnings than a handful prints one line saying how
+many and where, instead of one line each, and that line names the command
+that prints them. Errors are never rolled up: a build that fails without
+saying what failed is not one anybody can fix.
+
+The rules in the aip/ namespace implement the API Improvement Proposals
+(https://google.aip.dev). They are on for every repository and they warn:
+they say where a contract could be a better one, and none of them can fail a
+build until stele.yaml says it should.
+
 Usage:
   stele lint [flags]
 
 Flags:
+  --rule ID           check only this rule, and print every finding it makes
+                      rather than a count. It is what the summary line of a
+                      rolled-up rule tells you to run. Repeatable.
+  --all-findings      print every finding of every rule, rolling nothing up
   --rules             print the rules a run here would apply, with their ids,
                       and exit. A rule id is what goes in stele.yaml, so this
                       is the list to write one from. It loads the rule plugins
@@ -93,8 +108,11 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		cacheDir = fs.String("cache-dir", "", "where fetched repositories are kept")
 		update   = fs.Bool("update", false, "re-resolve every ref and rewrite stele.lock")
 		rules    = fs.Bool("rules", false, "print the rules this build carries and exit")
+		only     multiFlag
+		all      = fs.Bool("all-findings", false, "print every finding rather than rolling warnings up")
 		help     = fs.Bool("help", false, "show this help")
 	)
+	fs.Var(&only, "rule", "check only this rule and print every finding it makes; repeatable")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, lintUsage)
@@ -119,11 +137,20 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	rep, err := lint.Run(ctx, lint.Options{
 		Dir:       *dir,
 		Update:    *update,
+		Only:      only,
 		CacheRoot: root,
 		Warn:      stderr,
 	})
 	if err != nil {
 		return err
+	}
+	if *all {
+		// Naming every rule is the same request as naming one, made of all of
+		// them. There is no second mode in the renderer for it, because a
+		// second mode is a second thing to be wrong.
+		for _, r := range allRuleIDs(ctx, *dir, root) {
+			rep.Detail = append(rep.Detail, r)
+		}
 	}
 	// Findings go to stdout: they are the output of the command, and a
 	// pipeline that collects them should not have to read stderr. The
@@ -162,25 +189,55 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 // each says which plugin serves it. Those are the ids nobody can read out of
 // this repository's source, so a listing without them would be a listing that
 // omitted exactly the part that has to be looked up.
+// multiFlag collects a repeatable string flag.
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ", ") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+// allRuleIDs returns every rule a run here would apply. A failure to load the
+// plugins is not reported: the run this is called after has already loaded
+// them successfully, and what is being built is a list of rules to print in
+// full rather than a judgement about anything.
+func allRuleIDs(ctx context.Context, dir, cacheRoot string) []string {
+	loaded, stop, err := lint.Rules(ctx, dir, cacheRoot)
+	if err != nil {
+		return nil
+	}
+	defer stop()
+	out := make([]string, 0, len(loaded))
+	for _, r := range loaded {
+		out = append(out, r.ID())
+	}
+	return out
+}
+
 func writeRules(ctx context.Context, w io.Writer, dir, cacheRoot string) error {
 	rules, stop, err := lint.Rules(ctx, dir, cacheRoot)
 	if err != nil {
 		return err
 	}
 	defer stop()
-	fmt.Fprintf(w, "Rules this run would apply. Every one runs at severity error unless %s says otherwise.\n\n",
-		lint.ManifestName)
+	fmt.Fprintf(w, "Rules this run would apply, with what a finding costs when %s says nothing "+
+		"about the rule.\n\n", lint.ManifestName)
 	for _, r := range rules {
 		origin := ""
 		if r.Plugin != "" {
 			origin = fmt.Sprintf("  (from the plugin %q)", r.Plugin)
 		}
-		fmt.Fprintf(w, "  %-36s %s%s\n", r.ID(), r.Description(), origin)
+		// A rule that only warns and one that fails the build are different
+		// things to a reader deciding whether to act, and the difference is
+		// not visible in the id.
+		cost := "fails the build"
+		if lint.DefaultSeverity(r.ID()) == lint.SeverityWarning {
+			cost = "warns"
+		}
+		fmt.Fprintf(w, "  %-38s %-16s %s%s\n", r.ID(), cost, r.Description(), origin)
 		// An unpinned rule listed the way a pinned one is would be the one
 		// thing in this listing a reader has to act on, printed as if it were
 		// not there.
 		if r.Unpinned != "" {
-			fmt.Fprintf(w, "  %-36s   %s\n", "", r.Unpinned)
+			fmt.Fprintf(w, "  %-38s %-16s   %s\n", "", "", r.Unpinned)
 		}
 	}
 	return nil
