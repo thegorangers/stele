@@ -699,7 +699,7 @@
         "id": {
           "description": "The rule, as `namespace/name`. Rules that ship with this tool live in the reserved `stele` namespace; a third-party rule declares its own. Run `stele lint --rules` for the list that is loaded.\n\nA rule id is a public contract: it appears in this file, so renaming one is a breaking change under the versioning policy. That is why the namespace is here from the first release rather than added at the first collision.",
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$",
+          "pattern": "^[a-z][a-z0-9_]*/[a-z0-9][a-z0-9_]*$",
           "examples": [
             "stele/enum_value_prefix",
             "stele/package_version_suffix"

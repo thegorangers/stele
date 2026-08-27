@@ -11,3 +11,8 @@ lint:
         - api/example/legacy
     - id: stele/package_version_suffix
       severity: "off"
+    # An AIP rule id leads with the number of the AIP, which is what a reader
+    # searches for. rule.CheckID allows it deliberately, and the schema has to
+    # agree or an editor reddens a line the tool accepts.
+    - id: aip/142_timestamp_field_time_suffix
+      severity: error

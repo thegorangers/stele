@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/thegorangers/stele/rule"
 	"gopkg.in/yaml.v3"
 )
 
@@ -244,27 +245,22 @@ func (p *LintPlugin) source(field string) binarySource {
 	}
 }
 
-// checkLintRuleID checks the shape of a rule id: namespace/name, both parts
-// lower_snake_case. Whether a rule of that id exists is the engine's question,
-// and it is asked where the loaded rules are known.
+// checkLintRuleID checks the shape of a rule id. Whether a rule of that id
+// exists is the engine's question, and it is asked where the loaded rules are
+// known.
+//
+// It defers to rule.CheckID rather than restating the spelling. This file
+// carried its own copy, and the copy drifted the moment the published rule
+// widened a name to lead with a digit for the AIP rules: every `aip/` id was
+// then refused by the manifest, so the rules that ship at warning could not be
+// raised, ignored or switched off — the whole adoption story for them — and
+// nothing failed until a schema example asked both halves the same question.
+// A public identifier has one spelling, defined in the package that publishes
+// it.
 func checkLintRuleID(id string) error {
-	ns, name, ok := strings.Cut(id, "/")
-	if !ok {
-		return fmt.Errorf("%q is not a rule id; write it as namespace/name, such as stele/enum_value_prefix", id)
-	}
-	for label, part := range map[string]string{"namespace": ns, "name": name} {
-		if part == "" {
-			return fmt.Errorf("%q: the %s is empty; write it as namespace/name", id, label)
-		}
-		if part[0] < 'a' || part[0] > 'z' {
-			return fmt.Errorf("%q: the %s %q must start with a lower-case letter", id, label, part)
-		}
-		for i := 0; i < len(part); i++ {
-			c := part[i]
-			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
-				return fmt.Errorf("%q: the %s %q must be lower_snake_case", id, label, part)
-			}
-		}
+	if err := rule.CheckID(id); err != nil {
+		return fmt.Errorf("%w; write it as namespace/name, such as %s/enum_value_prefix",
+			err, rule.NamespaceBuiltin)
 	}
 	return nil
 }

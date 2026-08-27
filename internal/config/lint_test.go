@@ -267,3 +267,25 @@ func TestUnpinnedOnAPinnedTierIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestAnAipRuleCanBeConfigured is a defect this repository shipped: the
+// manifest parser carried its own copy of the rule-id spelling rule, and the
+// copy did not move when rule.CheckID was widened to let a name lead with a
+// digit for the AIP rules. Every `aip/` id was therefore refused by the
+// manifest — so the five rules that ship at warning could not be raised to
+// error, ignored on a path, or switched off, which is the whole adoption
+// story for them.
+//
+// One rule about one public identifier, in the package that publishes it.
+func TestAnAipRuleCanBeConfigured(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stele.yaml")
+	body := "version: 1\nmodules:\n  - path: api\nlint:\n  rules:\n" +
+		"    - id: aip/142_timestamp_field_time_suffix\n      severity: error\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("an aip rule id is a rule id: %v", err)
+	}
+}
