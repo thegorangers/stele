@@ -239,20 +239,50 @@ descriptors. It changes nothing; it reports.
 $ stele lint
 api/example/v1/order.proto:6:3: error: stele/enum_value_prefix: value PLACED of enum OrderStatus is not prefixed with ORDER_STATUS_
     rename it to ORDER_STATUS_PLACED. Enum values live in the scope around the enum, not inside it, so an unprefixed name collides with the same name in any other enum of this package — and the collision is a compile error for a consumer, not for this file
-stele: lint checked 1 file with 8 rules: 1 error, 0 warnings
+stele: aip/142_timestamp_field_time_suffix: 6 warnings in 1 file; see `stele lint --rule aip/142_timestamp_field_time_suffix`
+stele: lint checked 1 file with 13 rules: 1 error, 6 warnings
 ```
 
-`stele lint --rules` prints what this build carries.
+`stele lint --rules` prints what this build carries, and what a finding of
+each rule costs.
+
+### Two kinds of rule, and two things a finding costs
+
+The rules in the `stele/` namespace fail the build. Each was measured against a
+real fleet before it shipped and cost that fleet almost nothing, so a finding is
+evidence of a mistake rather than of a different tradition.
+
+The rules in the `aip/` namespace implement the
+[API Improvement Proposals](https://google.aip.dev). They are on for every
+repository and they **warn**: they say where a contract could be a better one,
+and none of them fails a build until `stele.yaml` says it should.
+
+A rule reporting more than a handful of warnings prints **one line** instead of
+one line per finding:
+
+```
+stele: aip/158_list_response_next_page_token: 15 warnings in 8 files; see `stele lint --rule aip/158_list_response_next_page_token`
+```
+
+`stele lint --rule ID` narrows the run to that rule and prints every finding it
+makes; `--all-findings` does it for all of them. Errors are never rolled up: a
+build that fails without saying what failed is not one anybody can fix. What
+decides is severity and volume, not the namespace — a `stele/` rule lowered to
+`warning` while a repository works through two hundred findings is rolled up
+too, and an `aip/` rule raised to `error` prints in full.
 
 ### What it does not do yet
 
 This is the first slice, and the boundary is worth stating plainly rather than
 leaving to be discovered.
 
-- **This is not an AIP profile.** Eight built-in rules, listed below, chosen
-  because each is mechanical and each was measured against real contracts
-  first. A repository that wants more writes them, or takes somebody else's:
-  see [rules from outside this repository](#rules-from-outside-this-repository).
+- **This is not AIP coverage.** Five `aip/` rules across three AIPs, out of 29
+  of the 73 general AIPs that are decidable from a descriptor at all — and 32
+  that are not decidable from one by anybody. The inventory that says so, per
+  AIP, is [docs/AIP.md](docs/AIP.md); a tool claiming AIP coverage without
+  saying which AIPs a descriptor cannot decide is claiming something it cannot
+  do. A repository that wants more writes them, or takes somebody else's: see
+  [rules from outside this repository](#rules-from-outside-this-repository).
 - **There is no breaking-change detection.** Nothing here compares this
   revision against a previous one. It is the obvious next thing and it is not
   in this slice.
@@ -282,6 +312,25 @@ fourteen services, before it was included. The counts are in
 | `stele/enum_zero_value_unspecified` | an enum's first value is zero and named `ENUM_NAME_UNSPECIFIED` |
 | `stele/enum_value_prefix` | an enum's values are prefixed with the enum's name |
 | `stele/enum_value_upper_snake_case` | an enum's values are `UPPER_SNAKE_CASE` |
+
+The `aip/` rules were measured the same way, with the rule itself, over a
+re-measured fleet of 59 hand-written files. The counts are what decided the set:
+a rule whose count is the same on every run of every repository — every method
+missing `google.api.http`, every field missing a `field_behavior` — teaches
+nothing however it is printed, and none of those shipped.
+
+| id | what it requires | fleet findings |
+| --- | --- | --- |
+| `aip/135_delete_returns_empty` | a method named `DeleteX` returns `google.protobuf.Empty`, or the soft-deleted `X` | 7, in 4 files |
+| `aip/142_timestamp_field_time_suffix` | a `google.protobuf.Timestamp` field is named `*_time`, or `*_times` when repeated | 111, in 19 files |
+| `aip/158_list_request_page_size` | the request of a `ListX` method carries an `int32 page_size` | 14, in 8 files |
+| `aip/158_list_request_page_token` | the request of a `ListX` method carries a `string page_token` | 15, in 8 files |
+| `aip/158_list_response_next_page_token` | the response of a `ListX` method carries a `string next_page_token` | 15, in 8 files |
+
+No `aip/` rule reads an annotation, and that is a constraint rather than a
+preference: at a descriptor, a file that does not import
+`google/api/annotations.proto` is indistinguishable from a file whose author did
+not annotate.
 
 The set has two halves and each answers "what breaks if I ignore this?". Where
 a file lives and what it declares is the ambiguity this tool's own resolver

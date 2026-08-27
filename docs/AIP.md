@@ -6,6 +6,15 @@ does this repository hold a list of an external corpus without the list rotting"
 This document answers that, and it is measurement first because every number
 below changes what the design has to be.
 
+> **Overruled, and where.** This document was written before any rule existed
+> and it recommended, in §6, that AIP rules be a profile a manifest opts into.
+> That recommendation was **overruled by the owner** when the first rules
+> landed. §6 is left standing as written, with the decision and its reasoning
+> recorded in §10: the argument that beat it is this document's own §9, "a
+> profile that nobody enables is a profile that ships dead". §3's estimates have
+> been re-measured with the rules themselves, and one of them was wrong by
+> nearly a factor of two.
+
 Nothing here writes a rule. What it lands is the inventory: `internal/aip`, a
 derived snapshot of upstream, a ledger of decisions, and a test that fails when
 the two disagree.
@@ -91,8 +100,8 @@ the 73 general AIPs, the ledger classifies:
 
 | disposition | count | what it means |
 | --- | --- | --- |
-| implemented | 3 | rules exist today |
-| candidate | 26 | decidable from a descriptor, no rule yet |
+| implemented | 6 | rules exist today (3 when this was written; §10 added AIP-135, AIP-142 and AIP-158) |
+| candidate | 23 | decidable from a descriptor, no rule yet |
 | declined | 12 | deliberately no rule (10 state no requirement about a file; 2 were measured and rejected) |
 | undecidable | 32 | states a requirement about protos that no descriptor can decide |
 
@@ -177,6 +186,33 @@ and eight fixes.
 **None of this makes those rules wrong.** It makes them a profile a repository
 opts into, which is section 5.
 
+### Re-measured, with the rules
+
+The counts above came from a throwaway parser. Five rules have since been
+written and run over the fleet as rules, and the fleet has been re-enumerated at
+**59 hand-written files**, deduplicated by import path across every service
+rather than the 35 of one export set. This is the standard the roadmap sets, and
+what follows is why it is the standard:
+
+| rule | findings | files |
+| --- | --- | --- |
+| `aip/135_delete_returns_empty` | 7 | 4/59 |
+| `aip/142_timestamp_field_time_suffix` | 111 | 19/59 |
+| `aip/158_list_request_page_size` | 14 | 8/59 |
+| `aip/158_list_request_page_token` | 15 | 8/59 |
+| `aip/158_list_response_next_page_token` | 15 | 8/59 |
+| `aip/148_standard_field_type` (written, not shipped) | 0 | 0/59 |
+| `aip/161_field_mask_type` (written, not shipped) | 0 | 0/59 |
+
+Two disagree with the estimate, and in opposite directions. AIP-158's
+`page_size` was estimated at 8 and measures **14**. AIP-135 was estimated at 8
+and measures **7**, because the rule accepts the soft-delete shape and
+`google.longrunning.Operation` and the estimate accepted neither. An estimate is
+not a conservative version of a measurement; it is a different number.
+
+AIP-142's 111 reproduced exactly, and it is the one that mattered most: it is
+the rule that forced the roll-up in §10.
+
 ## 4. Rule identity: `aip/<number>_<name>`
 
 Existing ids are `stele/<name>` and the `stele` namespace is reserved for
@@ -208,8 +244,9 @@ Three alternatives were considered.
   exactly the rules whose id begins `aip/`, derived rather than enumerated.
 
 Reserving the `aip` namespace is itself a change and it should land before the
-first `aip/` rule does, alongside the existing reservation of `stele`. It is free
-today and breaking later: a third-party rule that claims `aip/135_…` first is a
+first `aip/` rule does, alongside the existing reservation of `stele`. **It has
+landed**, as `rule.NamespaceAIP` and `rule.Reserved`, in the commit before the
+first rule. It was free then and breaking later: a third-party rule that claims `aip/135_…` first is a
 rule this tool would then have to either displace or work around.
 
 The number is a prefix rather than a suffix so that ids sort into AIP order, and
@@ -284,6 +321,11 @@ the snapshot changing *is* the signal.
 
 ## 6. Adoption, and what `severity` does not give
 
+> The conclusion of this section — that AIP rules must not be built-ins — was
+> overruled. It is left as written, because a document that quietly agrees with
+> whatever was decided last is not evidence of anything. §10 says what shipped
+> and why this reasoning did not survive.
+
 The fleet's contracts were not written to AIP, and the numbers in section 3 say
 what that means: four checks would redden every file on day one.
 
@@ -349,10 +391,8 @@ Three costs, in increasing order of unpleasantness.
 
 ## 8. Deliberately not in this slice
 
-- **Any `aip/` rule.** The measurement is what decides which ones, and it is what
-  this slice was for.
-- **Reserving the `aip` namespace in `rule`.** It should land with the first rule
-  and it is one constant.
+- ~~**Any `aip/` rule.**~~ Five landed; see §10.
+- ~~**Reserving the `aip` namespace in `rule`.**~~ Landed, before the first rule.
 - **Profile selection in the manifest.** `lint.profiles` is sketched above and
   not designed; it is a change to a schema that is already released.
 - **The baseline.** Named again here because section 6 makes it a blocker for
@@ -383,3 +423,102 @@ Three costs, in increasing order of unpleasantness.
   have, and it is accepted because the measured alternative is reddening every
   repository in a fleet on upgrade. If no repository enables the profile, that is
   evidence about the profile and it should be recorded, not explained away.
+
+  *This is the argument that won.* See §10.
+- **A roll-up is a place for findings to hide.** True. One line saying "111" is
+  a line somebody can look at every day without ever reading what is behind it,
+  and that is a real failure mode rather than a hypothetical: it is how
+  `allow_failure: true` on a CI job behaves, only tidier. The defence is that
+  the alternative measured worse — 111 printed lines are scrolled past rather
+  than read — and that the count is on the line, so a number that grows is
+  visible where a wall of identical lines is not. It is a defence, not a proof.
+
+## 10. What shipped, and the decision that overruled section 6
+
+Section 6 concluded that AIP rules must not be built-ins. The owner overruled
+it. The rules are **on for every repository, and they warn**.
+
+**Why the conclusion was wrong.** Section 6's argument was sound about the cost
+and wrong about the alternative. It weighed "reddens every repository on
+upgrade" against "a profile a manifest opts into", and did not weigh the third
+option that §9 had already named as the profile's own fatal objection: a profile
+nobody enables ships dead. The value of this guidance is entirely that it
+reaches somebody who was not already looking for it — a repository that knows
+enough about AIP to type `profiles: [aip]` is the one that needs the rules
+least. And "reddens every repository" was never a property of the rules; it was
+a property of shipping them at `error`. A warning reddens nothing.
+
+**What that leaves, and it is the real problem.** 111 warnings from one rule.
+One line per finding is not a signal: it is a wall a reader learns to scroll
+past, and a rule whose output is scrolled past is off in every way but the
+configuration. That is the same failure as the profile nobody enables, wearing a
+different colour.
+
+**So the output is rolled up.** A rule reporting more than `SummaryThreshold`
+warnings prints one line — the count, the number of files, and the exact command
+that prints the detail — instead of one line each:
+
+```
+stele: aip/142_timestamp_field_time_suffix: 111 warnings in 19 files; see `stele lint --rule aip/142_timestamp_field_time_suffix`
+```
+
+Four decisions inside that, and each was a real fork.
+
+1. **What decides is severity, not namespace.** Errors are never rolled up: an
+   error is the build failing now, and a failure that will not say what failed
+   is not one anybody can act on. A warning is information the reader may act on
+   later, and a count is enough to decide with. This answers "does summarising
+   apply to `stele/` rules too" by mechanism rather than by special case — a
+   `stele/` rule a repository has lowered to `warning` while it works through
+   two hundred findings is rolled up too, and an `aip/` rule raised to `error`
+   prints in full, which is exactly what raising it asked for. The alternative,
+   "roll up the `aip` namespace", is a second rule about rules, and the second
+   one drifts from the first. It also gets the `stele/` case wrong in both
+   directions at once.
+2. **There is a threshold, and it is five.** The number is not tuned and nothing
+   rests on its value; what matters is that below it the detail is cheaper than
+   the round trip to fetch it. Five findings are ten lines, because each carries
+   its fix.
+3. **The detail is one command, and the roll-up line names it.** A summary
+   pointing at a flag the reader has to go and look up is a summary they do not
+   follow. `--rule ID` narrows the run and prints everything it finds;
+   `--all-findings` does it for every rule. A `--rule` naming a rule nothing
+   carries is refused, and one the manifest switches `off` says so rather than
+   printing an empty report that reads as a clean one.
+4. **`severity` and `ignore` are untouched.** Rolling up happens when the report
+   is rendered. It changes no count, no exit status and no configuration, and
+   the run's own summary line still counts every warning including the rolled-up
+   ones — so nothing is hidden, only indented differently.
+
+**Which rules shipped, and the criterion that is not in section 3.** Five,
+across three AIPs: AIP-135, AIP-142, and AIP-158's three fields. What kept the
+others out was not only volume.
+
+*A summary line that reads the same on every run of every repository teaches
+nothing.* "142 of 142 methods carry no `google.api.http`" is not a finding about
+142 methods; it is one bit of information about the repository — it has not
+adopted the annotation — and printing it every run turns it into furniture. The
+four broadest checks in §3 are all of that shape, and §7 gives the second reason
+they cannot ship anyway: the rule cannot tell an unannotated file from a
+descriptor set assembled without the import. The rules that shipped are the ones
+whose count *falls as the work is done*, which is what makes the line worth
+reading a second time.
+
+The two rules written, measured at 0 and not shipped, are the other half of the
+standard: a rule id is permanent, and 0 findings is not evidence for one.
+
+**Is this a breaking change?** Yes, and the changelog records it as one. No
+build fails that did not fail before, but `RELEASING.md` is written around the
+bytes this tool writes, and every lint run's output changes. Under `0.x` that
+bumps the minor. The alternative reading — that a warning cannot be breaking
+because the exit status is unchanged — was rejected for the reason the policy
+already gives about new built-in rules: the consumer's diff is the same size
+either way, and "when in doubt, go up".
+
+**What is still true from section 6.** `severity: warning` still does not
+protect new code. The 112th `_at` field, written tomorrow, is warned about
+exactly as the 111 existing ones are, and the reader cannot tell them apart. A
+baseline is the mechanism that separates the two, it does not exist, and the
+roll-up makes it *more* pressing rather than less: it makes a large standing
+count comfortable to live with. That is the strongest argument against what
+shipped here, and it is recorded rather than answered.
