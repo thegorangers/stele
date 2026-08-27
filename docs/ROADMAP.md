@@ -572,9 +572,9 @@ are different answers.
   one that can never be renamed. They are the obvious first batch to add if a
   consumer wants them.
 
-### The AIP direction: the inventory, before any of the rules
+### The AIP direction: the inventory, then the first five rules
 
-The next direction is AIP breadth, and the first slice of it deliberately adds no
+The next direction is AIP breadth. The first slice of it deliberately added no
 rule. AIP is an external corpus of 118 documents that is edited upstream, and a
 hand-written list of "the AIPs we implement" is the failure this repository has
 already had four times — an enumeration typed by a person that drifts from what
@@ -599,18 +599,53 @@ What the measurement found, in full in [AIP.md](AIP.md):
   111 times across 19 of 35. The affordable ones are the shapes: 8 findings for
   delete, 8 and 15 for pagination, 0 for create, update and the batch methods.
 
-Two decisions follow from those numbers and are defended in the document:
-AIP rules are `aip/<number>_<name>`, not `aip/<number>`, because one AIP implies
-several checks and an id can never be renamed; and they are an opt-in profile
-rather than built-ins, because adding a rule that reddens every repository on
-upgrade is a breaking change taken on the user's behalf for guidance they never
-asked for. The second decision makes the **baseline** a blocker rather than a
-nice-to-have, which moves it ahead of the broad rules below.
+Two decisions followed from those numbers. AIP rules are `aip/<number>_<name>`,
+not `aip/<number>`, because one AIP implies several checks and an id can never
+be renamed — that one stands. The second, that they be an opt-in profile rather
+than built-ins, was **overruled by the owner** and did not ship; AIP.md §10
+records both the decision and why the reasoning behind it did not survive. The
+short version is that the objection to a profile is this roadmap's own objection
+to rules that default to off: it ships dead.
+
+#### What shipped: five rules, on by default, at warning, rolled up
+
+Five rules across three AIPs — AIP-135, AIP-142, and AIP-158's three fields —
+each **re-measured with the rule itself**, which is the standard this document
+sets and which the estimates above did not meet. Two of the estimates were
+wrong, in opposite directions: AIP-158's `page_size` was estimated at 8 and
+measures 14; AIP-135 was estimated at 8 and measures 7.
+
+| rule | findings | files |
+| --- | --- | --- |
+| `aip/135_delete_returns_empty` | 7 | 4/59 |
+| `aip/142_timestamp_field_time_suffix` | 111 | 19/59 |
+| `aip/158_list_request_page_size` | 14 | 8/59 |
+| `aip/158_list_request_page_token` | 15 | 8/59 |
+| `aip/158_list_response_next_page_token` | 15 | 8/59 |
+
+111 warnings printed one to a line is a wall a reader learns to scroll past,
+which is the same failure as a profile nobody enables. So a rule reporting more
+than five **warnings** prints one line — count, files, and the command that
+expands it — and errors are never rolled up. What decides is severity and
+volume, not the namespace, so a `stele/` rule lowered to `warning` is rolled up
+on the same terms.
+
+Two further rules were written, measured at 0 findings and not shipped. A rule
+id is permanent and 0 findings is not evidence for one. The four broadest
+candidates in the table above did not ship either, and volume is not the whole
+reason: a rule that cannot tell an unannotated file from a descriptor set
+assembled without the import would report the same count on every run of every
+repository, and a line that never moves teaches nothing.
+
+**The baseline is now more pressing, not less.** A roll-up makes a large
+standing count comfortable to live with, and nothing here separates the 111
+existing `_at` fields from the 112th written tomorrow.
 
 ### Not in this slice, and said plainly rather than implied
 
-- **The breadth of an AIP profile.** Eight rules is eight rules. The inventory
-  that has to exist first is now in `internal/aip`; see above.
+- **The breadth of AIP coverage.** Thirteen rules is thirteen rules, over 3 of
+  the 29 general AIPs a descriptor can decide. The inventory that says which is
+  which is in `internal/aip`; see above.
 - **Breaking-change detection.** Nothing compares this revision against a
   previous one.
 - **A baseline.** `severity: warning` buys time to fix what is there. It does not

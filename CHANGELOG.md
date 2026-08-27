@@ -38,6 +38,70 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Refused input
+
+- **Five lint rules are added, they run in every repository, and every lint
+  run's output changes.** This is a breaking change under
+  [RELEASING.md](RELEASING.md) and it bumps the minor, even though **no build
+  that passed will now fail**: the rules are warnings, the exit status is
+  unchanged, and the policy is written around the bytes this tool writes rather
+  than around its exit status alone. A consumer reviewing a lint log will see
+  lines they did not ask for, and the recovery — set the severity, or ignore
+  the paths — is the same one a new built-in rule has always had.
+
+  The rules implement the [API Improvement Proposals](https://google.aip.dev)
+  and live in a new `aip/` namespace, which is reserved alongside `stele/`: a
+  rule plugin from outside this repository can no longer serve a rule id
+  beginning `aip/`. A finding of a rule the manifest says nothing about now
+  costs an **error** in `stele/` and a **warning** in `aip/`.
+
+  | id | what it requires | measured fleet findings |
+  | --- | --- | --- |
+  | `aip/135_delete_returns_empty` | a method named `DeleteX` returns `google.protobuf.Empty`, the soft-deleted `X`, or an `Operation` | 7, in 4 of 59 files |
+  | `aip/142_timestamp_field_time_suffix` | a `google.protobuf.Timestamp` field is named `*_time`, or `*_times` when repeated | 111, in 19 files |
+  | `aip/158_list_request_page_size` | the request of a `ListX` method carries an `int32 page_size` | 14, in 8 files |
+  | `aip/158_list_request_page_token` | the request of a `ListX` method carries a `string page_token` | 15, in 8 files |
+  | `aip/158_list_response_next_page_token` | the response of a `ListX` method carries a `string next_page_token` | 15, in 8 files |
+
+  Each count was measured with the rule itself over a fleet of 59 hand-written
+  proto files, not estimated. Two rules were written, measured at zero findings
+  and **not** shipped, because a rule id is permanent and zero findings is not
+  evidence for one. Why these five and not the broader checks the design
+  document lists is in [docs/AIP.md](docs/AIP.md) §10.
+
+- **A rule id may now begin with a digit after the namespace.** `aip/158_…`
+  needs it. Nothing that was accepted before is refused.
+
+### Added
+
+- **A rule reporting more than five warnings prints one line instead of one
+  line per finding.** The line carries the count, how many files it spans, and
+  the command that prints the detail:
+
+  ```
+  stele: aip/142_timestamp_field_time_suffix: 111 warnings in 19 files; see `stele lint --rule aip/142_timestamp_field_time_suffix`
+  ```
+
+  **Errors are never rolled up.** What decides is severity and volume, not the
+  namespace: a `stele/` rule lowered to `warning` is rolled up too, and an
+  `aip/` rule raised to `error` prints in full. No count, exit status or
+  configuration changes — the run's summary line still counts every warning,
+  including the rolled-up ones.
+
+- **`stele lint --rule ID`** narrows a run to one rule and prints every finding
+  it makes. It is the command a rolled-up line names. Repeatable. A rule id
+  nothing carries is refused rather than silently checking nothing, and a rule
+  the manifest switches `off` says so rather than printing an empty report that
+  reads as a clean one.
+
+- **`stele lint --all-findings`** prints every finding of every rule.
+
+### Reports and messages
+
+- **`stele lint --rules` says what a finding of each rule costs** — "fails the
+  build" or "warns". The rules no longer all cost the same thing, and the id
+  does not say which is which.
+
 ### Internal
 
 - **The AIP corpus is inventoried mechanically, and every AIP has a recorded
@@ -48,7 +112,7 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   hermetic test fails when upstream carries an AIP nothing has classified, or
   when the ledger classifies one upstream no longer carries; a networked CI job
   fails when the snapshot is not what upstream says. Nothing about linting
-  changes for a user of this release: no rule was added and none was altered.
+  changes in that slice: no rule was added and none was altered by it.
   The reasoning, the decidability split (29 of 73 general AIPs decidable in
   whole or part, 32 not) and the fleet measurement are in
   [docs/AIP.md](docs/AIP.md).
