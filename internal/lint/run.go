@@ -134,8 +134,12 @@ func (r *Report) Write(w io.Writer) {
 		}
 		fmt.Fprintln(w, f.String())
 	}
-	rolled := r.rollUp()
+	live, held := r.rollUp()
 	for _, f := range r.Findings {
+		rolled := live
+		if f.Baselined {
+			rolled = held
+		}
 		if rolled[f.Rule] > 0 {
 			continue
 		}
@@ -144,9 +148,46 @@ func (r *Report) Write(w io.Writer) {
 		}
 		fmt.Fprintln(w, f.String())
 	}
-	for _, id := range sortedKeys(rolled) {
-		fmt.Fprintln(w, r.rollUpLine(id))
+	for _, id := range sortedKeys(live) {
+		fmt.Fprintln(w, r.rollUpLine(id, false))
 	}
+	for _, id := range sortedKeys(held) {
+		fmt.Fprintln(w, r.rollUpLine(id, true))
+	}
+	for _, line := range r.staleLines() {
+		fmt.Fprintln(w, line)
+	}
+}
+
+// staleLines reports the baseline entries nothing found.
+//
+// They are never a failure — a repository that reddened its build by fixing a
+// finding learns not to fix findings — and they are never silent either, or
+// the file only ever grows and a record of debt becomes a standing permission.
+// The volume rule is the roll-up's, for the same reason: a few are worth
+// naming so the reader can see which lines to delete, and forty are a count
+// and a command.
+func (r *Report) staleLines() []string {
+	if len(r.Stale) == 0 {
+		return nil
+	}
+	if len(r.Stale) > SummaryThreshold {
+		return []string{fmt.Sprintf("stele: %s: %s that nothing found this run; "+
+			"drop them with `stele lint --update-baseline`. Findings that are fixed are the point",
+			BaselineName, entries(len(r.Stale)))}
+	}
+	out := make([]string, 0, len(r.Stale))
+	for _, e := range r.Stale {
+		disk := e.Path
+		if p, ok := r.disk[e.Path]; ok {
+			disk = p
+		}
+		shown := e
+		shown.Path = disk
+		out = append(out, fmt.Sprintf("stele: %s: nothing found %s any more; "+
+			"drop it with `stele lint --update-baseline`", BaselineName, shown))
+	}
+	return out
 }
 
 // SummaryThreshold is how many warnings one rule may report before the report
@@ -176,25 +217,40 @@ const SummaryThreshold = 5
 //     is enough to decide with.
 //   - There are more of them than SummaryThreshold, and the reader did not ask
 //     for the rule by name.
-func (r *Report) rollUp() map[string]int {
+//
+// A rule's baselined findings are rolled up separately from the ones that
+// still cost something, and on looser terms: they cannot fail the build, so a
+// baselined *error* is rolled up where a live one never is. Counting the two
+// together would be the failure this whole mechanism exists to prevent — one
+// new finding hidden inside a count of forty old ones.
+func (r *Report) rollUp() (live, held map[string]int) {
 	detail := make(map[string]bool, len(r.Detail))
 	for _, id := range r.Detail {
 		detail[id] = true
 	}
-	counts := make(map[string]int)
+	live, held = make(map[string]int), make(map[string]int)
 	errored := make(map[string]bool)
 	for _, f := range r.Findings {
-		counts[f.Rule]++
+		if f.Baselined {
+			held[f.Rule]++
+			continue
+		}
+		live[f.Rule]++
 		if f.Severity != SeverityWarning {
 			errored[f.Rule] = true
 		}
 	}
-	for id, n := range counts {
+	for id, n := range live {
 		if errored[id] || detail[id] || n <= SummaryThreshold {
-			delete(counts, id)
+			delete(live, id)
 		}
 	}
-	return counts
+	for id, n := range held {
+		if detail[id] || n <= SummaryThreshold {
+			delete(held, id)
+		}
+	}
+	return live, held
 }
 
 // rollUpLine is what one rolled-up rule prints instead of its findings.
@@ -205,17 +261,24 @@ func (r *Report) rollUp() map[string]int {
 // differently from a hundred across thirty; and the exact command that prints
 // them, so that the detail is a paste away rather than a flag somebody has to
 // go and look up.
-func (r *Report) rollUpLine(id string) string {
+func (r *Report) rollUpLine(id string, baselined bool) string {
 	n := 0
 	files := make(map[string]bool)
 	for _, f := range r.Findings {
-		if f.Rule == id {
+		if f.Rule == id && f.Baselined == baselined {
 			n++
 			files[f.Path] = true
 		}
 	}
+	unit := "warning"
+	if baselined {
+		// Not "warning": a baselined error is not a warning, it is a build
+		// failure this repository is deliberately holding open, and calling it
+		// one would lose the only thing that distinguishes them.
+		unit = "baselined finding"
+	}
 	return fmt.Sprintf("stele: %s: %s in %s; see `stele lint --rule %s`",
-		id, plural(n, "warning"), plural(len(files), "file"), id)
+		id, plural(n, unit), plural(len(files), "file"), id)
 }
 
 func sortedKeys(m map[string]int) []string {
@@ -234,6 +297,17 @@ func (r *Report) Summary() string {
 	s := fmt.Sprintf("stele: lint checked %s with %s: %s, %s",
 		plural(r.Files, "file"), plural(r.Rules, "rule"),
 		plural(r.Errors, "error"), plural(r.Warnings, "warning"))
+	// What the baseline is holding goes on the line that survives a truncated
+	// log. A green run that is green because a file says so is a different
+	// fact from a green run that is green because the contracts are clean,
+	// and a summary that did not tell them apart would be the roll-up's
+	// failure again: a comfortable line with an unread count behind it.
+	if r.Baselined > 0 {
+		s += fmt.Sprintf(", %s held by %s", plural(r.Baselined, "finding"), BaselineName)
+	}
+	if n := len(r.Stale); n > 0 {
+		s += fmt.Sprintf(", %s of it stale", entries(n))
+	}
 	if n := len(r.Failures); n > 0 {
 		s += fmt.Sprintf(", and %s did not run", plural(n, "rule check"))
 	}
@@ -244,6 +318,15 @@ func (r *Report) Summary() string {
 		s += fmt.Sprintf(", %s not pinned", plural(n, "rule plugin"))
 	}
 	return s + "\n"
+}
+
+// entries is plural's exception: "entrys" is not a word, and the one place
+// this format needs an irregular plural does not justify an inflection engine.
+func entries(n int) string {
+	if n == 1 {
+		return "1 entry"
+	}
+	return fmt.Sprintf("%d entries", n)
 }
 
 func plural(n int, unit string) string {

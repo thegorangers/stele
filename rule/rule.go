@@ -163,6 +163,14 @@ type Finding struct {
 	// survives reformatting and reordering, and stops being the same name
 	// exactly when the declaration stops being the same declaration.
 	Subject string
+	// Baselined says this finding was already recorded as known, so it costs
+	// nothing. The engine stamps it; severity still says what it *would*
+	// cost, and both are printed, because a baselined error and a baselined
+	// warning are different debts.
+	//
+	// A baselined finding is still reported. A suppression nobody can see is
+	// not debt, it is a decision nobody remembers making.
+	Baselined bool
 	// Message states what is wrong.
 	Message string
 	// Fix states what to do about it.
@@ -182,7 +190,14 @@ func (f Finding) String() string {
 	if f.Pos.Line > 0 {
 		fmt.Fprintf(&b, ":%d:%d", f.Pos.Line, f.Pos.Col)
 	}
-	fmt.Fprintf(&b, ": %s: %s: %s", f.Severity, f.Rule, f.Message)
+	sev := f.Severity.String()
+	if f.Baselined {
+		// The severity stays, because it is what this finding will cost the
+		// day it leaves the baseline, and a reader deciding what to fix first
+		// needs it.
+		sev += " (baselined)"
+	}
+	fmt.Fprintf(&b, ": %s: %s: %s", sev, f.Rule, f.Message)
 	if f.Fix != "" {
 		b.WriteString("\n    ")
 		b.WriteString(f.Fix)

@@ -104,6 +104,24 @@ type Config struct {
 	// Rules is what is said about individual rules, by ID. A rule not named
 	// here runs at DefaultSeverity for its namespace over every path.
 	Rules map[string]RuleConfig
+	// Baseline is what this repository has already accepted, read from
+	// stele.baseline. Nil means every finding costs what its severity says.
+	//
+	// It is not part of the manifest and it is not per-rule configurable. A
+	// per-rule switch would be a second severity axis, and severity already
+	// decides which rules are worth holding: a rule a repository intends to
+	// fix is held at error and baselined, a rule it has not decided about is
+	// a warning, and a rule it will never apply is off or ignored.
+	//
+	// It is also not `ignore`, and the difference is the one that keeps both
+	// worth having. `ignore` is prospective and unbounded — this rule does
+	// not apply to these paths, including the file somebody adds tomorrow —
+	// and it is written by hand in a manifest, where it is reviewed as
+	// intent. A baseline is retrospective and exhaustive: these exact
+	// declarations violate this rule today, nothing else does, and the file
+	// is meant to shrink. An exemption you never intend to revisit belongs in
+	// the manifest; debt you intend to pay belongs here.
+	Baseline *Baseline
 	// Only, when non-empty, narrows the run to the rules it names. It is not
 	// configuration a manifest can hold: it is what `stele lint --rule` asks
 	// for at a terminal, to read one rule's findings after the report rolled
@@ -170,6 +188,10 @@ func ignores(entries []string, path string) bool {
 type Engine struct {
 	rules []Rule
 	cfg   Config
+	// known is how many findings of each baseline identity are accepted. It
+	// is resolved once, in New, because that is where a baseline naming a
+	// rule nobody loads has to be refused.
+	known map[string]int
 }
 
 // New binds rules to a configuration.
@@ -222,9 +244,13 @@ func New(rules []Rule, cfg Config) (*Engine, error) {
 		return nil, fmt.Errorf("lint: asked for %s, which is not a rule this tool has; "+
 			"run `stele lint --rules` for the list", strings.Join(missing, ", "))
 	}
+	known, err := cfg.Baseline.known(byID)
+	if err != nil {
+		return nil, err
+	}
 	sorted := append([]Rule(nil), rules...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID() < sorted[j].ID() })
-	return &Engine{rules: sorted, cfg: cfg}, nil
+	return &Engine{rules: sorted, cfg: cfg, known: known}, nil
 }
 
 // Result is everything one run of the engine found.
@@ -234,9 +260,26 @@ type Result struct {
 	// which is what makes a lint report diffable.
 	Findings []Finding
 	// Errors and Warnings count the findings by what they cost, so that a
-	// summary does not have to re-derive it.
+	// summary does not have to re-derive it. A baselined finding is in
+	// neither: it costs nothing, which is what baselining it meant.
 	Errors   int
 	Warnings int
+	// Baselined counts the findings the baseline held. It is separate rather
+	// than folded into the two above because it is the number that says how
+	// much of a green run was earned and how much was bought, and a summary
+	// that did not print it would be the roll-up's failure again: a
+	// comfortable line with an unread count behind it.
+	Baselined int
+	// Stale are the baseline entries nothing found this run, in the file's
+	// order.
+	//
+	// They are reported and they do not fail the run. Keeping them silently
+	// is how a baseline rots from a record of debt into a standing
+	// permission; failing on them is how fixing a finding reddens the build
+	// of the person who fixed it, and a repository learns quickly not to fix
+	// things. Reporting them puts the cost where it belongs — one line and
+	// one command — and `--update-baseline` is what drops them.
+	Stale []BaselineEntry
 	// Files is how many files were checked. A run that checked nothing looks
 	// exactly like a clean run without it.
 	Files int
@@ -274,6 +317,12 @@ func (f Failure) String() string {
 func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 	res := Result{Files: len(files)}
 	applied := make(map[string]bool)
+	// A copy, because Check must be able to run twice on one engine and give
+	// the same answer both times.
+	remaining := make(map[string]int, len(e.known))
+	for k, n := range e.known {
+		remaining[k] = n
+	}
 	for _, fd := range files {
 		path := string(fd.Path())
 		if ignores(e.cfg.Ignore, path) {
@@ -304,11 +353,20 @@ func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 				fi.Path = path
 				fi.Subject = subjectOf(f, fi.Pos)
 				fi.Severity = sev
-				switch fi.Severity {
-				case SeverityWarning:
-					res.Warnings++
-				default:
+				if fi.Severity != SeverityWarning {
 					fi.Severity = SeverityError
+				}
+				// The baseline is consulted after severity is resolved and
+				// not before: what a finding would have cost is part of what
+				// is reported about it, and a finding held by the baseline
+				// has to keep saying which of the two it is.
+				if k := entryFor(fi).key(); remaining[k] > 0 {
+					remaining[k]--
+					fi.Baselined = true
+					res.Baselined++
+				} else if fi.Severity == SeverityWarning {
+					res.Warnings++
+				} else {
 					res.Errors++
 				}
 				res.Findings = append(res.Findings, fi)
@@ -316,6 +374,17 @@ func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 		}
 	}
 	res.Rules = len(applied)
+	// What the baseline accepted and nothing produced. Reported in the
+	// file's order, so the reader can find the lines to delete.
+	if e.cfg.Baseline != nil {
+		for _, entry := range e.cfg.Baseline.Findings {
+			if n := remaining[entry.key()]; n > 0 {
+				stale := entry
+				stale.Count = n
+				res.Stale = append(res.Stale, stale)
+			}
+		}
+	}
 	sort.SliceStable(res.Findings, func(i, j int) bool {
 		a, b := res.Findings[i], res.Findings[j]
 		switch {

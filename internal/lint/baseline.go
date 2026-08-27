@@ -272,6 +272,9 @@ func BaselineFrom(res Result) *Baseline {
 // exemption it does not have, and a build that reddens for a reason nothing in
 // the repository explains.
 func (b *Baseline) known(byID map[string]bool) (map[string]int, error) {
+	if b == nil {
+		return nil, nil
+	}
 	out := make(map[string]int, len(b.Findings))
 	var unknown []string
 	for _, e := range b.Findings {
