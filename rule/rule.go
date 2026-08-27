@@ -140,6 +140,29 @@ type Finding struct {
 	// supplied for exactly that case: a decision that leaves the other
 	// position unreachable is not a decision, it is a limitation.
 	Pos Position
+	// Subject is the full name of the declaration Pos points at —
+	// `example.v1.Order.created_at` — or the empty string for a finding about
+	// the file as a whole.
+	//
+	// The engine stamps it, derived from Pos, and a rule cannot set it. Two
+	// reasons, and the second is the binding one:
+	//
+	//   - A rule that could name its own subject could name somebody else's,
+	//     which is the reason Rule and Path are stamped too.
+	//   - A rule in another process could not name one at all. WireFinding
+	//     carries a line, a column, a message and a fix, deliberately and for
+	//     good reasons; an identity derived from anything else would be an
+	//     identity that worked for built-in rules and not for hosted ones,
+	//     and the whole point of one interface is that it does not matter
+	//     which side of a process boundary a rule is on.
+	//
+	// It exists because a position is not an identity. Inserting a line above
+	// a finding moves every finding below it, so a record of what a
+	// repository already knows about — a baseline — keyed on a line number
+	// goes stale on an edit that changed nothing it is about. A full name
+	// survives reformatting and reordering, and stops being the same name
+	// exactly when the declaration stops being the same declaration.
+	Subject string
 	// Message states what is wrong.
 	Message string
 	// Fix states what to do about it.

@@ -302,6 +302,7 @@ func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 			for _, fi := range found {
 				fi.Rule = r.ID()
 				fi.Path = path
+				fi.Subject = subjectOf(f, fi.Pos)
 				fi.Severity = sev
 				switch fi.Severity {
 				case SeverityWarning:
