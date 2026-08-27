@@ -68,7 +68,7 @@ aips:
   # AIP-127 (general): HTTP and gRPC Transcoding
   - id: 127
     state: candidate
-    reason: "decidable: every method carries google.api.http. Measured against the fleet it fires on all 142 methods in 35/35 files, which is a gRPC-only fleet answering a question about REST transcoding, so it is a profile rule and never a default"
+    reason: "decidable only once the file imports google/api/annotations.proto, and indistinguishable from an unannotated descriptor set when it does not. It fires on every method of every file that has not adopted the annotation, so its roll-up line would read the same on every run of every such repository -- a number that never moves teaches nothing and ages into furniture. Not shipped for that reason rather than for its volume"
   # AIP-128 (general): Declarative-friendly interfaces
   - id: 128
     state: undecidable
@@ -88,7 +88,11 @@ aips:
   # AIP-132 (general): Standard methods: List
   - id: 132
     state: candidate
-    reason: "decidable: a method named ListX takes ListXRequest and returns ListXResponse with the fields AIP-158 requires. Measured through the pagination shape below"
+    rules:
+      - aip/158_list_request_page_size
+      - aip/158_list_request_page_token
+      - aip/158_list_response_next_page_token
+    reason: "the pagination half is implemented by the AIP-158 rules. What is left -- a ListX method takes ListXRequest and returns ListXResponse -- is the naming objection the roadmap records against rpc_response_named_for_method, and is not implemented"
   # AIP-133 (general): Standard methods: Create
   - id: 133
     state: candidate
@@ -99,8 +103,10 @@ aips:
     reason: "decidable: a method named UpdateX takes UpdateXRequest, carries an update_mask and returns X"
   # AIP-135 (general): Standard methods: Delete
   - id: 135
-    state: candidate
-    reason: "decidable: a method named DeleteX returns google.protobuf.Empty or the soft-deleted resource. Measured, 8 findings across 5/35 files"
+    state: implemented
+    rules:
+      - aip/135_delete_returns_empty
+    reason: "re-measured with the rule itself: 7 findings across 4 of 59 hand-written fleet files. The rule accepts google.protobuf.Empty, the resource itself (soft delete) and google.longrunning.Operation"
   # AIP-136 (general): Custom methods
   - id: 136
     state: undecidable
@@ -115,8 +121,10 @@ aips:
     reason: "decidable: a quantity is named _count rather than num_. 0 findings on the fleet"
   # AIP-142 (general): Time and duration
   - id: 142
-    state: candidate
-    reason: "decidable: a timestamp is google.protobuf.Timestamp and its field name ends in _time. Measured, 111 findings across 19/35 files, all of them the _at suffix, so it is a profile rule and never a default"
+    state: implemented
+    rules:
+      - aip/142_timestamp_field_time_suffix
+    reason: "re-measured with the rule itself: 111 findings across 19 of 59 hand-written fleet files, every one of them the _at suffix. It is a default after all, at warning and rolled up into one line: a rule this broad is what the roll-up was built for, and the alternative -- a profile nobody enables -- ships dead. The other half of the AIP, that a duration is google.protobuf.Duration, is not implemented"
   # AIP-143 (general): Standardized codes
   - id: 143
     state: candidate
@@ -140,7 +148,7 @@ aips:
   # AIP-148 (general): Standard fields
   - id: 148
     state: candidate
-    reason: "decidable with caveats: a field carrying a standard name has the standard type (create_time is a Timestamp, uid is a string). It says nothing about a field that should have existed"
+    reason: "decidable with caveats: a field carrying a standard name has the standard type (create_time is a Timestamp, uid is a string). It says nothing about a field that should have existed. Written, measured with the rule itself at 0 findings over 59 hand-written fleet files, and not shipped: a rule id is permanent, and the standard the built-ins were held to is evidence before an id rather than after it"
   # AIP-149 (general): Unset field values
   - id: 149
     state: undecidable
@@ -175,8 +183,12 @@ aips:
     reason: "whether a response should be partial is intent"
   # AIP-158 (general): Pagination
   - id: 158
-    state: candidate
-    reason: "decidable: a List request carries page_size and page_token, a List response next_page_token. Measured, 8 requests without page_size and 15 responses without next_page_token, across 8/35 files"
+    state: implemented
+    rules:
+      - aip/158_list_request_page_size
+      - aip/158_list_request_page_token
+      - aip/158_list_response_next_page_token
+    reason: "re-measured with the rules themselves over 59 hand-written fleet files: 14 requests without an int32 page_size, 15 without a string page_token, 15 responses without a string next_page_token, across 8 files. The design document's throwaway parser said 8 page_size findings; the rules say 14, which is why the re-measurement is the standard. Server-streaming List methods are excluded: streaming is what pagination exists to avoid"
   # AIP-159 (general): Reading across collections
   - id: 159
     state: undecidable
@@ -188,7 +200,7 @@ aips:
   # AIP-161 (general): Field masks
   - id: 161
     state: candidate
-    reason: "decidable narrowly: a field named update_mask or read_mask is a google.protobuf.FieldMask"
+    reason: "decidable narrowly: a field named update_mask or read_mask is a google.protobuf.FieldMask. Written, measured with the rule itself at 0 findings over 59 hand-written fleet files, and not shipped for the same reason as AIP-148"
   # AIP-162 (general): Resource Revisions
   - id: 162
     state: undecidable
