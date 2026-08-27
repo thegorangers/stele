@@ -29,6 +29,8 @@ const (
 	LockName     = "stele.lock"
 )
 
+// BaselineName is declared in baseline.go, beside the format it names.
+
 // Options configures one lint run.
 type Options struct {
 	// Dir is the module root: the directory holding stele.yaml. Empty means
@@ -49,6 +51,18 @@ type Options struct {
 	// Only, when non-empty, narrows the run to the rules it names and prints
 	// every finding they make. It is what `stele lint --rule` passes.
 	Only []string
+	// UpdateBaseline rewrites stele.baseline from what this run finds, and
+	// makes the run itself pass.
+	//
+	// It is a flag rather than a default because a baseline written by an
+	// ordinary run would turn every red build green by running it twice, and
+	// because the file is meant to be read in a review: something a person
+	// asked for, once, is something a reviewer can see was asked for.
+	//
+	// The rewrite is total. It drops the entries nothing found, which is the
+	// only way the file shrinks, and it records what is there now — so a run
+	// narrowed to one rule is refused by the caller before it reaches here.
+	UpdateBaseline bool
 	// CacheRoot is where fetched repositories and installed plugins are kept.
 	// Required when Fetch is nil and the manifest declares dependencies, and
 	// when it declares a rule plugin this tool has to install or download.
@@ -92,6 +106,9 @@ type Report struct {
 	// printed above the findings for that reason — a reader who meets them
 	// afterwards has already read the findings as the whole answer.
 	Notes []string
+	// Updated says this run rewrote the baseline. A run that did costs
+	// nothing whatever it found: what it found is now the baseline.
+	Updated bool
 	// Detail names the rules whose findings are printed one to a line
 	// however many there are. It is what `stele lint --rule` sets. Empty
 	// means the threshold below decides.
@@ -111,7 +128,12 @@ type Report struct {
 // reached a finding has said nothing about this repository, and a run that
 // passed on its silence would be reporting an absence of evidence as evidence
 // of absence.
-func (r *Report) Failed() bool { return r.Errors > 0 || len(r.Failures) > 0 }
+func (r *Report) Failed() bool {
+	if r.Updated {
+		return len(r.Failures) > 0
+	}
+	return r.Errors > 0 || len(r.Failures) > 0
+}
 
 // Write renders every finding, in order, one to a line with its fix indented
 // beneath.
@@ -376,6 +398,22 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	// network round trip would be reporting it later than it is known.
 	ecfg := ConfigFrom(cfg.Lint)
 	ecfg.Only = opts.Only
+	baselinePath := filepath.Join(dir, BaselineName)
+	// A run taking a baseline is not judged against the one on disk: what it
+	// records is what is there, and reading the old file first would carry
+	// its stale entries into the new one.
+	if !opts.UpdateBaseline {
+		base, err := LoadBaseline(baselinePath)
+		switch {
+		case err == nil:
+			ecfg.Baseline = base
+		case !errors.Is(err, os.ErrNotExist):
+			// A baseline that cannot be read is not a baseline that holds
+			// nothing. Carrying on without it would redden a build for a
+			// reason the output would blame on the contracts.
+			return nil, err
+		}
+	}
 	engine, err := New(rules, ecfg)
 	if err != nil {
 		return nil, err
@@ -416,6 +454,12 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		files = append(files, f)
 	}
 	rep := &Report{Result: engine.Check(files), disk: disk, Notes: unpinnedNotes(unpinned), Detail: opts.Only}
+	if opts.UpdateBaseline {
+		if err := SaveBaseline(baselinePath, BaselineFrom(rep.Result)); err != nil {
+			return nil, err
+		}
+		rep.Updated = true
+	}
 	// A run that checked nothing is not a clean run. The two ways to reach
 	// here are an ignore list that grew until it covered everything and a
 	// module path that no longer holds any protos, and both are silent: the

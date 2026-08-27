@@ -569,3 +569,142 @@ message Order {
 		t.Errorf("the failure does not name what was asked for: %v", err)
 	}
 }
+
+// writeTree writes a set of files under a fresh directory and returns it.
+func writeTree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// TestLintBaselineHoldsWhatIsThereAndFailsOnWhatIsNew is the mechanism
+// end to end, at the command, which is where a repository meets it.
+func TestLintBaselineHoldsWhatIsThereAndFailsOnWhatIsNew(t *testing.T) {
+	const manifest = "version: 1\nmodules:\n  - path: api\n"
+	const before = `syntax = "proto3";
+package example.v1;
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  PLACED = 1;
+  PAID = 2;
+}
+`
+	dir := writeTree(t, map[string]string{
+		"stele.yaml":                 manifest,
+		"api/example/v1/order.proto": before,
+	})
+	lintIn := func(args ...string) (string, string, error) {
+		t.Helper()
+		var out, errOut strings.Builder
+		err := run(context.Background(), append([]string{"lint", "--dir", dir}, args...), &out, &errOut)
+		return out.String(), errOut.String(), err
+	}
+	baselinePath := filepath.Join(dir, "stele.baseline")
+
+	// Without a baseline the run fails, which is what it should do.
+	if _, _, err := lintIn(); err == nil {
+		t.Fatal("two unprefixed enum values must fail a run with no baseline")
+	}
+	// And no baseline was written. A tool that wrote one on an ordinary run
+	// would turn every red build green by running it again.
+	if _, err := os.Stat(baselinePath); !os.IsNotExist(err) {
+		t.Fatal("an ordinary run wrote a baseline")
+	}
+
+	out, _, err := lintIn("--update-baseline")
+	if err != nil {
+		t.Fatalf("taking a baseline must not fail: %v\n%s", err, out)
+	}
+	body, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatalf("--update-baseline wrote no baseline: %v", err)
+	}
+	for _, want := range []string{"example/v1/order.proto", "example.v1.PLACED", "stele/enum_value_prefix"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("the baseline does not name %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(string(body), "line:") {
+		t.Errorf("the baseline records a line number, which is the identity it exists to avoid:\n%s", body)
+	}
+
+	// The same repository now passes.
+	if out, _, err := lintIn(); err != nil {
+		t.Fatalf("a baselined finding failed the run: %v\n%s", err, out)
+	}
+
+	// An unrelated edit above the findings must not disturb it.
+	moved := strings.Replace(before, "enum OrderStatus {",
+		"message Receipt {\n  string id = 1;\n}\n\nenum OrderStatus {", 1)
+	rewrite(t, dir, "api/example/v1/order.proto", moved)
+	out, errOut, err := lintIn()
+	if err != nil {
+		t.Fatalf("moving the findings down the file reddened the build: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "--update-baseline") {
+		t.Errorf("an unrelated edit made the baseline look stale:\n%s", out)
+	}
+	if !strings.Contains(errOut, "held by stele.baseline") {
+		t.Errorf("the summary does not say what the baseline is holding:\n%s", errOut)
+	}
+
+	// One more unprefixed value is a new finding, and it fails.
+	grown := strings.Replace(moved, "  PAID = 2;", "  PAID = 2;\n  REFUNDED = 3;", 1)
+	rewrite(t, dir, "api/example/v1/order.proto", grown)
+	out, _, err = lintIn()
+	if err == nil {
+		t.Fatal("a new violation of a baselined rule must fail the run")
+	}
+	if !strings.Contains(out, "REFUNDED") {
+		t.Errorf("the failing run does not name the new finding:\n%s", out)
+	}
+
+	// And fixing one is reported, not punished.
+	fixed := strings.Replace(grown, "  REFUNDED = 3;", "  ORDER_STATUS_REFUNDED = 3;", 1)
+	fixed = strings.Replace(fixed, "  PLACED = 1;", "  ORDER_STATUS_PLACED = 1;", 1)
+	rewrite(t, dir, "api/example/v1/order.proto", fixed)
+	out, _, err = lintIn()
+	if err != nil {
+		t.Fatalf("fixing a baselined finding failed the run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "--update-baseline") {
+		t.Errorf("a stale entry was kept silently:\n%s", out)
+	}
+}
+
+// TestLintUpdateBaselineRefusesANarrowedRun holds the writer to the same rule
+// the reader is held to: a baseline derived from a run that applied one rule
+// would silently drop every other rule's entries, and the file it replaced is
+// the only record of them.
+func TestLintUpdateBaselineRefusesANarrowedRun(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"stele.yaml":                 "version: 1\nmodules:\n  - path: api\n",
+		"api/example/v1/order.proto": "syntax = \"proto3\";\npackage example.v1;\n",
+	})
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"lint", "--dir", dir,
+		"--update-baseline", "--rule", "stele/package_version_suffix"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a baseline taken from a narrowed run was written")
+	}
+	if !strings.Contains(err.Error(), "--rule") {
+		t.Errorf("the refusal does not name the flag: %v", err)
+	}
+}
+
+func rewrite(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

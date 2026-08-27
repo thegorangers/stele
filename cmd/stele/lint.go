@@ -39,6 +39,10 @@ Flags:
                       rather than a count. It is what the summary line of a
                       rolled-up rule tells you to run. Repeatable.
   --all-findings      print every finding of every rule, rolling nothing up
+  --update-baseline   rewrite stele.baseline from what this run finds, and pass.
+                      Everything found now stops failing the build; anything
+                      found later does not. It is never written by an ordinary
+                      run, and it cannot be combined with --rule.
   --rules             print the rules a run here would apply, with their ids,
                       and exit. A rule id is what goes in stele.yaml, so this
                       is the list to write one from. It loads the rule plugins
@@ -67,8 +71,41 @@ Adopting it over contracts that were never linted:
       ignore:
         - api/third_party
 
-  A severity of warning does not protect new code from the same mistake. It
-  buys the time to fix what is there, and it says so in a file people read.
+  A severity of warning does not protect new code from the same mistake: the
+  112th field named the wrong thing is reported exactly as the 111 already
+  there are, and nothing in the output tells them apart. That is what the
+  baseline is for.
+
+The baseline:
+
+  stele lint --update-baseline writes stele.baseline, a generated file that is
+  committed and read in review beside stele.lock. It holds what this repository
+  already has, so a run can fail on what it does not:
+
+    stele lint --update-baseline    # once, when adopting a rule
+    git add stele.baseline          # reviewed like the lock
+
+  An entry names a file, a rule and the declaration -- api/example/v1/order.proto,
+  stele/enum_value_prefix, example.v1.PLACED -- and deliberately not a line.
+  Inserting a line above a finding moves every finding below it, and a baseline
+  that goes stale on an unrelated edit is one people regenerate without reading,
+  which launders new findings into it.
+
+  A baselined finding is still printed, marked as baselined and with the
+  severity it would otherwise have cost, and the summary line says how many the
+  file is holding. Invisible debt is forgotten debt.
+
+  An entry that nothing finds any more -- because somebody fixed it -- is
+  reported and never fails the run. Fixing a finding must not redden the build
+  of the person who fixed it. Run --update-baseline again to drop it; the file
+  is meant to shrink.
+
+  It is not the same thing as ignore, and both are worth having. ignore is
+  prospective and unbounded: this rule does not apply to these paths, including
+  the file added tomorrow, written by hand where it is reviewed as intent. A
+  baseline is retrospective and exhaustive: these exact declarations violate
+  this rule today and nothing else does. An exemption nobody intends to revisit
+  belongs in stele.yaml; debt somebody intends to pay belongs in the baseline.
 
 Rules from outside this repository:
 
@@ -104,13 +141,14 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	fs.Usage = func() {}
 
 	var (
-		dir      = fs.String("dir", ".", "directory holding stele.yaml")
-		cacheDir = fs.String("cache-dir", "", "where fetched repositories are kept")
-		update   = fs.Bool("update", false, "re-resolve every ref and rewrite stele.lock")
-		rules    = fs.Bool("rules", false, "print the rules this build carries and exit")
-		only     multiFlag
-		all      = fs.Bool("all-findings", false, "print every finding rather than rolling warnings up")
-		help     = fs.Bool("help", false, "show this help")
+		dir        = fs.String("dir", ".", "directory holding stele.yaml")
+		cacheDir   = fs.String("cache-dir", "", "where fetched repositories are kept")
+		update     = fs.Bool("update", false, "re-resolve every ref and rewrite stele.lock")
+		rules      = fs.Bool("rules", false, "print the rules this build carries and exit")
+		only       multiFlag
+		all        = fs.Bool("all-findings", false, "print every finding rather than rolling warnings up")
+		updateBase = fs.Bool("update-baseline", false, "rewrite stele.baseline from what this run finds")
+		help       = fs.Bool("help", false, "show this help")
 	)
 	fs.Var(&only, "rule", "check only this rule and print every finding it makes; repeatable")
 	if err := fs.Parse(args); err != nil {
@@ -127,6 +165,14 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if rest := fs.Args(); len(rest) > 0 {
 		return fmt.Errorf("unexpected argument %q; stele lint takes flags only\n\n%s", rest[0], lintUsage)
 	}
+	// A baseline derived from a narrowed run would hold one rule's findings
+	// and silently drop every other rule's, and the file it overwrote is the
+	// only record of what those were.
+	if *updateBase && len(only) > 0 {
+		return fmt.Errorf("--update-baseline cannot be combined with --rule: a baseline is derived from a "+
+			"whole run, and one taken from a run narrowed to %s would drop every other rule's entries",
+			strings.Join(only, ", "))
+	}
 	root, err := cachedir.Root(*cacheDir)
 	if err != nil {
 		return err
@@ -135,11 +181,12 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return writeRules(ctx, stdout, *dir, root)
 	}
 	rep, err := lint.Run(ctx, lint.Options{
-		Dir:       *dir,
-		Update:    *update,
-		Only:      only,
-		CacheRoot: root,
-		Warn:      stderr,
+		Dir:            *dir,
+		Update:         *update,
+		UpdateBaseline: *updateBase,
+		Only:           only,
+		CacheRoot:      root,
+		Warn:           stderr,
 	})
 	if err != nil {
 		return err
@@ -158,12 +205,28 @@ func runLint(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	// the findings somewhere does not swallow the count.
 	rep.Write(stdout)
 	fmt.Fprint(stderr, rep.Summary())
+	if rep.Updated {
+		// What was written, and what it now means, on the stream the summary
+		// is on. A file this size appearing in a diff with no explanation is
+		// a file a reviewer approves without reading.
+		fmt.Fprintf(stderr, "stele: wrote %s: %d finding(s) this repository already had. "+
+			"They no longer fail the run; anything else this rule set finds will. Read it in the "+
+			"review — every line is a decision to fix something later\n",
+			lint.BaselineName, len(rep.Findings))
+	}
 	// The two ways a run fails are different failures with different fixes,
 	// and they are reported apart. A rule that could not run has said nothing
 	// about this repository: no severity applies to it, because severity says
 	// what a finding costs and there was no finding. Counting it as a finding
 	// would send the reader looking for one that does not exist.
 	switch {
+	// A run that has just written the baseline cannot fail on the findings it
+	// wrote into it: they are, by the time this line is reached, exactly what
+	// the repository has said it already had. A rule that did not run is a
+	// different matter and still fails, because nothing it checks was
+	// checked and nothing about it went into the file.
+	case rep.Updated && len(rep.Failures) == 0:
+		return nil
 	case rep.Errors > 0 && len(rep.Failures) > 0:
 		return fmt.Errorf("lint: %d finding(s) at severity error, and %d rule check(s) did not run; "+
 			"fix the findings, or say what they cost this repository under lint.rules in %s — and see the "+
