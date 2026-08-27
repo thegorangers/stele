@@ -36,7 +36,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely — the categories above replace its fixed set for the reason given.
 Versions follow the policy in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [v0.3.0] — 2026-08-28
+
+### Generated output
+
+- Nothing. Everything below is the lint half of the tool: five new rules, a
+  roll-up of their output, a baseline file, and a manifest parser that stops
+  refusing an `aip/` rule id. None of them is read by `generate` or `export`.
+
+  That is measured rather than claimed:
+
+  - The parity corpus is byte-identical, and the release is gated on it —
+    `generate` and `export` both, through the same composite action CI runs on
+    every change.
+  - A repository from the fleet this tool was built for was generated twice,
+    once with `v0.2.0` and once with this release, from the same manifest and
+    the same lock: the generated tree and `stele.lock` were byte-identical, file
+    for file.
+
+  Lint output does change, and says so under *Refused input* below. What does
+  not change is the exit status: the five rules ship at `warning`, so a
+  repository that linted green stays green. Measured over the fleet's fourteen
+  repositories — thirteen services and an acceptance suite — every one of them
+  reports `0 errors` under this release, exactly as under `v0.2.0`, and the
+  warning counts are the new lines they will read.
 
 ### Refused input
 
