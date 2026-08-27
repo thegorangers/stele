@@ -61,3 +61,23 @@ jobs:
 
       - name: Measure parity
         uses: ./.github/actions/parity
+
+  # The AIP inventory is derived from an external corpus, so the question
+  # "has upstream moved" needs the network and the question "have we said
+  # what we think about every AIP" does not. Only the first is here; the
+  # second is an ordinary test in build-and-test and runs on every change.
+  aip-corpus:
+    name: the AIP inventory matches upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      - name: Compare the committed snapshot with upstream
+        run: go run ./internal/aip/aipsync -check

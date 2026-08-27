@@ -572,9 +572,45 @@ are different answers.
   one that can never be renamed. They are the obvious first batch to add if a
   consumer wants them.
 
+### The AIP direction: the inventory, before any of the rules
+
+The next direction is AIP breadth, and the first slice of it deliberately adds no
+rule. AIP is an external corpus of 118 documents that is edited upstream, and a
+hand-written list of "the AIPs we implement" is the failure this repository has
+already had four times — an enumeration typed by a person that drifts from what
+it enumerates and reads as complete while it drifts. So the list is derived:
+`internal/aip/index.tsv` is written from a clone of upstream, `ledger.yaml`
+records a decision per AIP, and a hermetic test fails when the two disagree in
+either direction.
+
+What the measurement found, in full in [AIP.md](AIP.md):
+
+- **118 AIPs**, 101 approved. 45 are vendor sets (Firebase, Workspace, gcloud,
+  credentials, client-library generators); **73 are general**.
+- Of the 73, **29 are statically decidable** from a `FileDescriptorProto` in
+  whole or in part, **32 are not** — AIP-121 and AIP-122 are the honest examples:
+  whether a message set is a resource model, and whether a string is a resource
+  name, are not in a descriptor. AIP-180 is decidable but not from one file,
+  which is breaking-change detection and stays separate work.
+- Against the same 35-file fleet the eight built-ins were measured on, the four
+  broadest candidates — `field_behavior` on every field, a comment on every
+  declaration, `google.api.http` on every method, `google.api.resource` on every
+  message — **fire on every file**, and the `_at`/`_time` split of AIP-142 fires
+  111 times across 19 of 35. The affordable ones are the shapes: 8 findings for
+  delete, 8 and 15 for pagination, 0 for create, update and the batch methods.
+
+Two decisions follow from those numbers and are defended in the document:
+AIP rules are `aip/<number>_<name>`, not `aip/<number>`, because one AIP implies
+several checks and an id can never be renamed; and they are an opt-in profile
+rather than built-ins, because adding a rule that reddens every repository on
+upgrade is a breaking change taken on the user's behalf for guidance they never
+asked for. The second decision makes the **baseline** a blocker rather than a
+nice-to-have, which moves it ahead of the broad rules below.
+
 ### Not in this slice, and said plainly rather than implied
 
-- **The breadth of an AIP profile.** Eight rules is eight rules.
+- **The breadth of an AIP profile.** Eight rules is eight rules. The inventory
+  that has to exist first is now in `internal/aip`; see above.
 - **Breaking-change detection.** Nothing compares this revision against a
   previous one.
 - **A baseline.** `severity: warning` buys time to fix what is there. It does not

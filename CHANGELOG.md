@@ -36,6 +36,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely — the categories above replace its fixed set for the reason given.
 Versions follow the policy in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+### Internal
+
+- **The AIP corpus is inventoried mechanically, and every AIP has a recorded
+  decision.** `internal/aip` holds a derived snapshot of
+  `github.com/aip-dev/google.aip.dev` (118 AIPs at commit `23e176e733`), written
+  by `go run ./internal/aip/aipsync` and never by hand, and a ledger saying of
+  each AIP whether it is implemented, a candidate, declined or undecidable. A
+  hermetic test fails when upstream carries an AIP nothing has classified, or
+  when the ledger classifies one upstream no longer carries; a networked CI job
+  fails when the snapshot is not what upstream says. Nothing about linting
+  changes for a user of this release: no rule was added and none was altered.
+  The reasoning, the decidability split (29 of 73 general AIPs decidable in
+  whole or part, 32 not) and the fleet measurement are in
+  [docs/AIP.md](docs/AIP.md).
+
 ## [v0.2.0] — 2026-08-26
 
 ### Generated output

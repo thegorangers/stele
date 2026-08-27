@@ -1,0 +1,122 @@
+# Derived by internal/aip/aipsync. Do not edit by hand.
+# source	https://github.com/aip-dev/google.aip.dev
+# commit	23e176e7333ea3bc6b085f9950a5da03d2bbfc72
+id	scope	state	category	proto	title
+1	general	approved	meta	no	AIP Purpose and Guidelines
+2	general	approved	meta	no	AIP Numbering
+3	general	approved	meta	no	AIP Versioning
+8	general	approved	meta	no	AIP Style and Guidance
+9	general	approved	meta	no	Glossary
+100	general	approved	process	no	API Design Review FAQ
+111	general	approved	api-concepts	no	Planes
+121	general	approved	resource-design	no	Resource-oriented design
+122	general	approved	resource-design	yes	Resource names
+123	general	approved	resource-design	yes	Resource types
+124	general	approved	resource-design	yes	Resource association
+126	general	approved	resource-design	yes	Enumerations
+127	general	approved	protobuf	yes	HTTP and gRPC Transcoding
+128	general	approved	resource-design	yes	Declarative-friendly interfaces
+129	general	approved	resource-design	yes	Server-Modified Values and Defaults
+130	general	approved	operations	no	Methods
+131	general	approved	operations	yes	Standard methods: Get
+132	general	approved	operations	yes	Standard methods: List
+133	general	approved	operations	yes	Standard methods: Create
+134	general	approved	operations	yes	Standard methods: Update
+135	general	approved	operations	yes	Standard methods: Delete
+136	general	approved	operations	yes	Custom methods
+140	general	approved	fields	yes	Field names
+141	general	approved	fields	yes	Quantities
+142	general	approved	fields	yes	Time and duration
+143	general	approved	fields	yes	Standardized codes
+144	general	approved	fields	yes	Repeated fields
+145	general	approved	fields	yes	Ranges
+146	general	approved	fields	no	Generic fields
+147	general	approved	fields	yes	Sensitive fields
+148	general	approved	fields	no	Standard fields
+149	general	approved	fields	yes	Unset field values
+151	general	approved	operations	yes	Long-running operations
+152	general	approved	design-patterns	yes	Jobs
+153	general	approved	design-patterns	yes	Import and export
+154	general	approved	design-patterns	yes	Resource freshness validation
+155	general	approved	design-patterns	yes	Request identification
+156	general	approved	resource-design	yes	Singleton resources
+157	general	approved	design-patterns	yes	Partial responses
+158	general	approved	design-patterns	yes	Pagination
+159	general	approved	design-patterns	no	Reading across collections
+160	general	approved	design-patterns	no	Filtering
+161	general	approved	design-patterns	yes	Field masks
+162	general	draft	design-patterns	yes	Resource Revisions
+163	general	approved	design-patterns	yes	Change validation
+164	general	approved	design-patterns	yes	Soft delete
+165	general	approved	design-patterns	yes	Criteria-based delete
+180	general	approved	compatibility	yes	Backwards compatibility
+181	general	approved	compatibility	no	Stability levels
+182	general	reviewing	compatibility	no	External software dependencies
+184	general	approved	compatibility	no	API version identifiers
+185	general	approved	compatibility	yes	API Versioning
+190	general	approved	polish	yes	Naming conventions
+191	general	approved	polish	yes	File and directory structure
+192	general	approved	polish	yes	Documentation
+193	general	approved	polish	yes	Errors
+194	general	approved	polish	no	Automatic retry configuration
+200	general	approved	meta	yes	Precedent
+202	general	approved	fields	no	Fields
+203	general	approved	fields	yes	Field behavior documentation
+205	general	approved	process	yes	Beta-blocking changes
+210	general	approved	design-patterns	no	Unicode
+211	general	approved	design-patterns	no	Authorization checks
+213	general	approved	protobuf	no	Common components
+214	general	approved	design-patterns	yes	Resource expiration
+215	general	approved	protobuf	no	API-specific protos
+216	general	approved	fields	yes	States
+217	general	approved	design-patterns	yes	Unreachable resources
+231	general	approved	operations	yes	Batch methods: Get
+233	general	approved	operations	yes	Batch methods: Create
+234	general	approved	operations	yes	Batch methods: Update
+235	general	approved	operations	yes	Batch methods: Delete
+236	general	approved	resource-design	yes	Policy preview
+2510	cloud	approved	gcp	yes	Project identifiers
+2602	cloud	approved	sdk	no	Parameter-dependent arguments
+2603	cloud	approved	sdk	yes	List command arguments
+2604	cloud	approved	sdk	yes	Numeric arguments
+2712	apps	approved		no	API completeness
+2713	apps	approved		no	One team owns each type
+2715	apps	reviewing		no	Documenting authorization changes
+2716	apps	approved		no	Standard terms in names
+2717	apps	reviewing		no	Patterns for generic fields
+2718	apps	draft		no	References to objects in other APIs
+3001	aog	approved		no	Actions on Google AIP Process
+3010	aog	approved		no	Actions on Google Vertical Integration Webhook Format
+3020	aog	approved		no	BII Schema Principles
+3021	aog	approved		no	Type protos in Actions on Google APIs
+3022	aog	approved		no	Built-in intent arguments and fulfillment APIs
+3201	firebase	draft		no	Projects and Apps
+3260	firebase	draft		no	Firebase CLI
+3270	firebase	draft		no	JavaScript APIs
+3271	firebase	draft		no	Android APIs
+3272	firebase	draft		no	iOS APIs
+3273	firebase	draft		no	C++ APIs
+3274	firebase	draft		no	.NET APIs
+3275	firebase	draft		no	Python APIs
+3276	firebase	draft		no	Go APIs
+4110	auth	approved	auth	no	Application Default Credentials
+4111	auth	approved		no	Self-signed JWT
+4112	auth	approved		no	Service Account Keys
+4113	auth	approved		no	gcloud CLI Integration
+4114	auth	approved		no	Device Certificate Authentication via Mutual TLS
+4115	auth	approved		no	Default Credentials For Google Cloud Virtual Environments
+4116	auth	draft		no	Identity Tokens
+4117	auth	approved		no	External Account Credentials (Workload Identity Federation)
+4118	auth	draft		no	Mutual Authentication Using Workload Credentials
+4119	auth	draft		no	mTLS Token Binding
+4210	client-libraries	approved		no	Client library generators
+4221	client-libraries	approved		no	Client-side retry
+4222	client-libraries	approved		yes	Routing headers
+4223	client-libraries	approved		no	Client-side payload validation
+4231	client-libraries	approved		yes	Parsing resource names
+4232	client-libraries	approved		yes	Method signatures
+4233	client-libraries	approved		no	Automatic pagination
+4234	client-libraries	approved		yes	Common service client mixins
+4235	client-libraries	approved		no	Automatically populate fields in the request message
+4236	client-libraries	approved		yes	Version-aware clients
+4290	client-libraries	approved		no	Docker interface

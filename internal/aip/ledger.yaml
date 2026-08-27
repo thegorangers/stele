@@ -1,0 +1,496 @@
+# The ledger: what has been decided about each AIP.
+#
+# This file is hand-written judgement and is the only hand-written half of the
+# inventory. The list of AIPs it must cover is not written here: it is
+# index.tsv, derived from upstream by internal/aip/aipsync, and a test fails
+# when the two disagree in either direction. An AIP upstream carries and this
+# file does not classify is a failing test, not a gap somebody has to notice.
+#
+# States: implemented (names the rules), candidate (decidable from a
+# descriptor, no rule yet), declined (deliberately no rule — either the AIP
+# states no requirement about a file, or a decidable check was measured and
+# rejected), undecidable (the AIP does state a requirement about protos and no
+# descriptor can decide it). `untriaged` means read and not decided, and it
+# fails exactly as a missing entry does.
+version: 1
+aips:
+  # AIP-1 (general): AIP Purpose and Guidelines
+  - id: 1
+    state: declined
+    reason: "the AIP program's own process; there is nothing in a descriptor to check"
+  # AIP-2 (general): AIP Numbering
+  - id: 2
+    state: declined
+    reason: "the AIP program's own numbering; there is nothing in a descriptor to check"
+  # AIP-3 (general): AIP Versioning
+  - id: 3
+    state: declined
+    reason: "the AIP program's own versioning; there is nothing in a descriptor to check"
+  # AIP-8 (general): AIP Style and Guidance
+  - id: 8
+    state: declined
+    reason: "style guidance for writing AIPs, not for writing protos"
+  # AIP-9 (general): Glossary
+  - id: 9
+    state: declined
+    reason: "a glossary; it states no requirement"
+  # AIP-100 (general): API Design Review FAQ
+  - id: 100
+    state: declined
+    reason: "design-review process guidance; it states no requirement about a file"
+  # AIP-111 (general): Planes
+  - id: 111
+    state: declined
+    reason: "a concept (control and data planes); it states no requirement about a file"
+  # AIP-121 (general): Resource-oriented design
+  - id: 121
+    state: undecidable
+    reason: "whether a set of messages is a resource model is the judgement no descriptor answers; the tool can see messages and methods, not what they represent"
+  # AIP-122 (general): Resource names
+  - id: 122
+    state: undecidable
+    reason: "a resource name is a string, and nothing in a descriptor distinguishes one from any other string; the fleet's 316 identifier fields would be neither confirmed nor refuted"
+  # AIP-123 (general): Resource types
+  - id: 123
+    state: candidate
+    reason: "decidable once google.api.resource is present: the annotation exists and its type follows service/Type. Measured against the fleet it fires on 35/35 files, because no file declares the annotation at all"
+  # AIP-124 (general): Resource association
+  - id: 124
+    state: undecidable
+    reason: "which field references which resource is exactly what the descriptor does not say"
+  # AIP-126 (general): Enumerations
+  - id: 126
+    state: implemented
+    rules:
+      - stele/enum_zero_value_unspecified
+      - stele/enum_value_prefix
+      - stele/enum_value_upper_snake_case
+  # AIP-127 (general): HTTP and gRPC Transcoding
+  - id: 127
+    state: candidate
+    reason: "decidable: every method carries google.api.http. Measured against the fleet it fires on all 142 methods in 35/35 files, which is a gRPC-only fleet answering a question about REST transcoding, so it is a profile rule and never a default"
+  # AIP-128 (general): Declarative-friendly interfaces
+  - id: 128
+    state: undecidable
+    reason: "whether an interface is declarative-friendly is a property of the system behind it"
+  # AIP-129 (general): Server-Modified Values and Defaults
+  - id: 129
+    state: undecidable
+    reason: "which values a server modifies is behaviour, not shape"
+  # AIP-130 (general): Methods
+  - id: 130
+    state: undecidable
+    reason: "prose about what a method should be; the decidable fragments live in AIP-131 to AIP-136"
+  # AIP-131 (general): Standard methods: Get
+  - id: 131
+    state: candidate
+    reason: "decidable: a method named GetX takes GetXRequest and returns X. Measured, 25 findings across 12/35 files, and the same objection the roadmap records against rpc_response_named_for_method applies to most of them"
+  # AIP-132 (general): Standard methods: List
+  - id: 132
+    state: candidate
+    reason: "decidable: a method named ListX takes ListXRequest and returns ListXResponse with the fields AIP-158 requires. Measured through the pagination shape below"
+  # AIP-133 (general): Standard methods: Create
+  - id: 133
+    state: candidate
+    reason: "decidable: a method named CreateX takes CreateXRequest and returns X. 0 findings on the fleet's request names"
+  # AIP-134 (general): Standard methods: Update
+  - id: 134
+    state: candidate
+    reason: "decidable: a method named UpdateX takes UpdateXRequest, carries an update_mask and returns X"
+  # AIP-135 (general): Standard methods: Delete
+  - id: 135
+    state: candidate
+    reason: "decidable: a method named DeleteX returns google.protobuf.Empty or the soft-deleted resource. Measured, 8 findings across 5/35 files"
+  # AIP-136 (general): Custom methods
+  - id: 136
+    state: undecidable
+    reason: "whether a method should have been standard rather than custom is intent; the fleet has 77 non-standard methods and a descriptor cannot say which are wrong"
+  # AIP-140 (general): Field names
+  - id: 140
+    state: declined
+    reason: "the decidable half is field names in lower_snake_case, measured at 0 findings across 35 files and rejected in the roadmap with the rest of the casing rules; prepositions and reserved words are stylistic"
+  # AIP-141 (general): Quantities
+  - id: 141
+    state: candidate
+    reason: "decidable: a quantity is named _count rather than num_. 0 findings on the fleet"
+  # AIP-142 (general): Time and duration
+  - id: 142
+    state: candidate
+    reason: "decidable: a timestamp is google.protobuf.Timestamp and its field name ends in _time. Measured, 111 findings across 19/35 files, all of them the _at suffix, so it is a profile rule and never a default"
+  # AIP-143 (general): Standardized codes
+  - id: 143
+    state: candidate
+    reason: "decidable narrowly: a field named language_code, region_code or currency_code is a string"
+  # AIP-144 (general): Repeated fields
+  - id: 144
+    state: candidate
+    reason: "decidable: a repeated field has a plural name and is not a repeated map"
+  # AIP-145 (general): Ranges
+  - id: 145
+    state: undecidable
+    reason: "whether two fields form a range is intent"
+  # AIP-146 (general): Generic fields
+  - id: 146
+    state: candidate
+    reason: "decidable: google.protobuf.Any and Struct appear where a concrete type was available"
+  # AIP-147 (general): Sensitive fields
+  - id: 147
+    state: undecidable
+    reason: "whether a field is sensitive is knowledge about the data, not about its type"
+  # AIP-148 (general): Standard fields
+  - id: 148
+    state: candidate
+    reason: "decidable with caveats: a field carrying a standard name has the standard type (create_time is a Timestamp, uid is a string). It says nothing about a field that should have existed"
+  # AIP-149 (general): Unset field values
+  - id: 149
+    state: undecidable
+    reason: "what an unset value should mean is behaviour"
+  # AIP-151 (general): Long-running operations
+  - id: 151
+    state: candidate
+    reason: "decidable: a method returning google.longrunning.Operation carries operation_info naming both types. 0 findings on the fleet, which has no long-running operations"
+  # AIP-152 (general): Jobs
+  - id: 152
+    state: undecidable
+    reason: "whether a design should have been a job is intent"
+  # AIP-153 (general): Import and export
+  - id: 153
+    state: undecidable
+    reason: "whether a design should have import and export is intent"
+  # AIP-154 (general): Resource freshness validation
+  - id: 154
+    state: candidate
+    reason: "decidable narrowly: a field named etag is a string"
+  # AIP-155 (general): Request identification
+  - id: 155
+    state: candidate
+    reason: "decidable narrowly: a field named request_id is a string"
+  # AIP-156 (general): Singleton resources
+  - id: 156
+    state: undecidable
+    reason: "whether a resource is a singleton is intent"
+  # AIP-157 (general): Partial responses
+  - id: 157
+    state: undecidable
+    reason: "whether a response should be partial is intent"
+  # AIP-158 (general): Pagination
+  - id: 158
+    state: candidate
+    reason: "decidable: a List request carries page_size and page_token, a List response next_page_token. Measured, 8 requests without page_size and 15 responses without next_page_token, across 8/35 files"
+  # AIP-159 (general): Reading across collections
+  - id: 159
+    state: undecidable
+    reason: "whether a collection should be readable across parents is intent"
+  # AIP-160 (general): Filtering
+  - id: 160
+    state: undecidable
+    reason: "filter semantics are behaviour behind a string field"
+  # AIP-161 (general): Field masks
+  - id: 161
+    state: candidate
+    reason: "decidable narrowly: a field named update_mask or read_mask is a google.protobuf.FieldMask"
+  # AIP-162 (general): Resource Revisions
+  - id: 162
+    state: undecidable
+    reason: "whether a resource has revisions is intent"
+  # AIP-163 (general): Change validation
+  - id: 163
+    state: candidate
+    reason: "decidable narrowly: a field named validate_only is a bool"
+  # AIP-164 (general): Soft delete
+  - id: 164
+    state: undecidable
+    reason: "whether a delete should be soft is intent"
+  # AIP-165 (general): Criteria-based delete
+  - id: 165
+    state: undecidable
+    reason: "whether a delete should be criteria-based is intent"
+  # AIP-180 (general): Backwards compatibility
+  - id: 180
+    state: undecidable
+    reason: "backwards compatibility compares two revisions, and a rule is handed one file with no previous revision to compare it against; this is breaking-change detection, which the roadmap keeps as separate work"
+  # AIP-181 (general): Stability levels
+  - id: 181
+    state: undecidable
+    reason: "a stability level is a claim about a release process, not about a file"
+  # AIP-182 (general): External software dependencies
+  - id: 182
+    state: declined
+    reason: "guidance about depending on external software; it states no requirement about a file"
+  # AIP-184 (general): API version identifiers
+  - id: 184
+    state: implemented
+    rules:
+      - stele/package_version_suffix
+  # AIP-185 (general): API Versioning
+  - id: 185
+    state: undecidable
+    reason: "how to version an API is process; the one decidable fragment, that a package ends in a version, is already a rule"
+  # AIP-190 (general): Naming conventions
+  - id: 190
+    state: declined
+    reason: "casing conventions, measured at 0 findings across 35 files and rejected in the roadmap: they protect nothing the tool can name, and every id shipped can never be renamed"
+  # AIP-191 (general): File and directory structure
+  - id: 191
+    state: implemented
+    rules:
+      - stele/syntax_declared
+      - stele/package_declared
+      - stele/package_lower_snake_case
+      - stele/directory_matches_package
+  # AIP-192 (general): Documentation
+  - id: 192
+    state: candidate
+    reason: "decidable: every top-level declaration has a leading comment. Measured, 372 undocumented declarations across 28/35 files, so it is a profile rule and never a default"
+  # AIP-193 (general): Errors
+  - id: 193
+    state: undecidable
+    reason: "whether an error is the right error is behaviour; google.rpc.Status does not appear in a descriptor at all"
+  # AIP-194 (general): Automatic retry configuration
+  - id: 194
+    state: undecidable
+    reason: "retry configuration lives in a service config, not in a descriptor"
+  # AIP-200 (general): Precedent
+  - id: 200
+    state: declined
+    reason: "guidance about how the AIP program handles precedent"
+  # AIP-202 (general): Fields
+  - id: 202
+    state: undecidable
+    reason: "prose about fields; its decidable fragments are AIP-140 to AIP-149"
+  # AIP-203 (general): Field behavior documentation
+  - id: 203
+    state: candidate
+    reason: "decidable: every field carries google.api.field_behavior. Measured, 1225 of 1237 fields across 25/35 files, so it is a profile rule and never a default"
+  # AIP-205 (general): Beta-blocking changes
+  - id: 205
+    state: declined
+    reason: "release-process guidance about what may block beta"
+  # AIP-210 (general): Unicode
+  - id: 210
+    state: undecidable
+    reason: "whether text is handled as Unicode is behaviour"
+  # AIP-211 (general): Authorization checks
+  - id: 211
+    state: undecidable
+    reason: "whether authorization is checked is behaviour"
+  # AIP-213 (general): Common components
+  - id: 213
+    state: undecidable
+    reason: "whether a hand-rolled message should have been a common component requires knowing what it means"
+  # AIP-214 (general): Resource expiration
+  - id: 214
+    state: undecidable
+    reason: "whether a resource expires is intent"
+  # AIP-215 (general): API-specific protos
+  - id: 215
+    state: undecidable
+    reason: "whether a proto belongs to this API is a judgement about ownership"
+  # AIP-216 (general): States
+  - id: 216
+    state: candidate
+    reason: "decidable with caveats: a field named state is an enum, and the enum is named for the resource. It cannot say that a resource should have had one"
+  # AIP-217 (general): Unreachable resources
+  - id: 217
+    state: undecidable
+    reason: "whether a collection can be partially unreachable is behaviour"
+  # AIP-231 (general): Batch methods: Get
+  - id: 231
+    state: candidate
+    reason: "decidable: BatchGetX takes BatchGetXRequest and returns BatchGetXResponse. 0 findings on the fleet, which has no batch methods"
+  # AIP-233 (general): Batch methods: Create
+  - id: 233
+    state: candidate
+    reason: "decidable: BatchCreateX takes BatchCreateXRequest and returns BatchCreateXResponse. 0 findings on the fleet"
+  # AIP-234 (general): Batch methods: Update
+  - id: 234
+    state: candidate
+    reason: "decidable: BatchUpdateX takes BatchUpdateXRequest and returns BatchUpdateXResponse. 0 findings on the fleet"
+  # AIP-235 (general): Batch methods: Delete
+  - id: 235
+    state: candidate
+    reason: "decidable: BatchDeleteX takes BatchDeleteXRequest and returns BatchDeleteXResponse. 0 findings on the fleet"
+  # AIP-236 (general): Policy preview
+  - id: 236
+    state: undecidable
+    reason: "whether a method should preview a policy is intent"
+  # AIP-2510 (cloud): Project identifiers
+  - id: 2510
+    state: declined
+    reason: "vendor-specific: Google Cloud and gcloud surface guidance"
+  # AIP-2602 (cloud): Parameter-dependent arguments
+  - id: 2602
+    state: declined
+    reason: "vendor-specific: Google Cloud and gcloud surface guidance"
+  # AIP-2603 (cloud): List command arguments
+  - id: 2603
+    state: declined
+    reason: "vendor-specific: Google Cloud and gcloud surface guidance"
+  # AIP-2604 (cloud): Numeric arguments
+  - id: 2604
+    state: declined
+    reason: "vendor-specific: Google Cloud and gcloud surface guidance"
+  # AIP-2712 (apps): API completeness
+  - id: 2712
+    state: declined
+    reason: "vendor-specific: Google Workspace API guidance, not general API design"
+  # AIP-2713 (apps): One team owns each type
+  - id: 2713
+    state: declined
+    reason: "vendor-specific: Google Workspace API guidance, not general API design"
+  # AIP-2715 (apps): Documenting authorization changes
+  - id: 2715
+    state: declined
+    reason: "vendor-specific: Google Workspace API guidance, not general API design"
+  # AIP-2716 (apps): Standard terms in names
+  - id: 2716
+    state: declined
+    reason: "vendor-specific: Google Workspace API guidance, not general API design"
+  # AIP-2717 (apps): Patterns for generic fields
+  - id: 2717
+    state: declined
+    reason: "vendor-specific: Google Workspace API guidance, not general API design"
+  # AIP-2718 (apps): References to objects in other APIs
+  - id: 2718
+    state: declined
+    reason: "vendor-specific: Google Workspace API guidance, not general API design"
+  # AIP-3001 (aog): Actions on Google AIP Process
+  - id: 3001
+    state: declined
+    reason: "vendor-specific: Actions on Google integration guidance, not general API design"
+  # AIP-3010 (aog): Actions on Google Vertical Integration Webhook Format
+  - id: 3010
+    state: declined
+    reason: "vendor-specific: Actions on Google integration guidance, not general API design"
+  # AIP-3020 (aog): BII Schema Principles
+  - id: 3020
+    state: declined
+    reason: "vendor-specific: Actions on Google integration guidance, not general API design"
+  # AIP-3021 (aog): Type protos in Actions on Google APIs
+  - id: 3021
+    state: declined
+    reason: "vendor-specific: Actions on Google integration guidance, not general API design"
+  # AIP-3022 (aog): Built-in intent arguments and fulfillment APIs
+  - id: 3022
+    state: declined
+    reason: "vendor-specific: Actions on Google integration guidance, not general API design"
+  # AIP-3201 (firebase): Projects and Apps
+  - id: 3201
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-3260 (firebase): Firebase CLI
+  - id: 3260
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-3270 (firebase): JavaScript APIs
+  - id: 3270
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-3271 (firebase): Android APIs
+  - id: 3271
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-3272 (firebase): iOS APIs
+  - id: 3272
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-3273 (firebase): C++ APIs
+  - id: 3273
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-3274 (firebase): .NET APIs
+  - id: 3274
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-3275 (firebase): Python APIs
+  - id: 3275
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-3276 (firebase): Go APIs
+  - id: 3276
+    state: declined
+    reason: "vendor-specific: Firebase platform guidance"
+  # AIP-4110 (auth): Application Default Credentials
+  - id: 4110
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4111 (auth): Self-signed JWT
+  - id: 4111
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4112 (auth): Service Account Keys
+  - id: 4112
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4113 (auth): gcloud CLI Integration
+  - id: 4113
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4114 (auth): Device Certificate Authentication via Mutual TLS
+  - id: 4114
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4115 (auth): Default Credentials For Google Cloud Virtual Environments
+  - id: 4115
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4116 (auth): Identity Tokens
+  - id: 4116
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4117 (auth): External Account Credentials (Workload Identity Federation)
+  - id: 4117
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4118 (auth): Mutual Authentication Using Workload Credentials
+  - id: 4118
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4119 (auth): mTLS Token Binding
+  - id: 4119
+    state: declined
+    reason: "credentials and transport; nothing a file descriptor carries"
+  # AIP-4210 (client-libraries): Client library generators
+  - id: 4210
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4221 (client-libraries): Client-side retry
+  - id: 4221
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4222 (client-libraries): Routing headers
+  - id: 4222
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4223 (client-libraries): Client-side payload validation
+  - id: 4223
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4231 (client-libraries): Parsing resource names
+  - id: 4231
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4232 (client-libraries): Method signatures
+  - id: 4232
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4233 (client-libraries): Automatic pagination
+  - id: 4233
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4234 (client-libraries): Common service client mixins
+  - id: 4234
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4235 (client-libraries): Automatically populate fields in the request message
+  - id: 4235
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4236 (client-libraries): Version-aware clients
+  - id: 4236
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
+  # AIP-4290 (client-libraries): Docker interface
+  - id: 4290
+    state: declined
+    reason: "guidance for generated client libraries, not for the contract a descriptor holds"
