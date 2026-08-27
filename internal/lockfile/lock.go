@@ -20,7 +20,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+
+	"github.com/thegorangers/stele/internal/atomicfile"
 	"slices"
 	"sort"
 	"strings"
@@ -329,47 +330,5 @@ func Save(path string, lock *Lock) error {
 	if err := enc.Close(); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	return writeAtomically(path, buf.Bytes())
-}
-
-// writeAtomically replaces path with content in one step, or leaves it alone.
-//
-// A plain write opens the existing lock for truncation first, so a process
-// killed mid-write, or a disk that fills, destroys the record of what the last
-// build consumed and leaves half a file in its place. The dangerous half is not
-// the one that fails to parse: YAML truncated on an entry boundary loads
-// cleanly as a lock pinning fewer dependencies than the build that wrote it
-// used. The file is written beside its destination and renamed, so a reader —
-// or a git status — sees the old lock or the new one and never a prefix.
-func writeAtomically(path string, content []byte) error {
-	dir := filepath.Dir(path)
-	// The temporary file is a sibling so the rename stays on one filesystem,
-	// which is what makes it atomic. The dot keeps it out of the way of
-	// anything listing the directory in the moment it exists.
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
-	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	tmp := f.Name()
-	// Removing it covers every exit: an error before the rename, and the
-	// successful path where the rename has already taken the name away.
-	defer os.Remove(tmp)
-
-	if _, err := f.Write(content); err != nil {
-		f.Close()
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	// A lock is committed and read by people, so it is 0644 like every other
-	// file in the tree; CreateTemp makes it 0600.
-	if err := f.Chmod(0o644); err != nil {
-		f.Close()
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
-	return nil
+	return atomicfile.Write(path, buf.Bytes())
 }
