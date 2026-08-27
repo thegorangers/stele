@@ -136,9 +136,12 @@ func TestRuleIDsAreNamespaced(t *testing.T) {
 		if err := lint.CheckID(r.ID()); err != nil {
 			t.Errorf("%v", err)
 		}
-		if ns, _, _ := strings.Cut(r.ID(), "/"); ns != lint.NamespaceBuiltin {
-			t.Errorf("%s: a built-in rule must live in the %q namespace, not %q",
-				r.ID(), lint.NamespaceBuiltin, ns)
+		// Both namespaces are this tool's, and which one a rule is in is
+		// what decides its default severity — so a rule in neither would be
+		// a rule shipped at a severity nobody chose.
+		if ns, _, _ := strings.Cut(r.ID(), "/"); ns != lint.NamespaceBuiltin && ns != lint.NamespaceAIP {
+			t.Errorf("%s: a rule that ships here must live in the %q or %q namespace, not %q",
+				r.ID(), lint.NamespaceBuiltin, lint.NamespaceAIP, ns)
 		}
 		if r.Description() == "" {
 			t.Errorf("%s: no description; it is how somebody decides whether to switch the rule off", r.ID())

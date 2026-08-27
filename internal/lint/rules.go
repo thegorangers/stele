@@ -37,13 +37,19 @@ import (
 //     the one naming convention in the set with a runtime consequence, and it
 //     is the one half of the fleet's only real deviation.
 //
+// The set has a second half, in aip.go, and it is deliberately not chosen the
+// same way. Those rules implement guidance a repository may never have been
+// written against, they warn rather than fail, and their output is rolled up
+// rather than printed line by line. Why that asymmetry is a defensible one is
+// argued where they are defined and in docs/AIP.md.
+//
 // What is deliberately absent is listed in the roadmap: message, field and
 // service casing (mechanical, but zero findings on the measured fleet and
 // nothing they protect that the tool can name), and everything that needs
 // intent — whether a method should be streaming, whether a field should be
 // optional, whether a response type is well chosen.
 func Builtin() []Rule {
-	return []Rule{
+	stele := []Rule{
 		syntaxDeclared{},
 		packageDeclared{},
 		packageLowerSnakeCase{},
@@ -53,6 +59,7 @@ func Builtin() []Rule {
 		enumValuePrefix{},
 		enumValueUpperSnakeCase{},
 	}
+	return append(stele, AIP()...)
 }
 
 // builtinID spells a built-in rule's ID, so that the reserved namespace is

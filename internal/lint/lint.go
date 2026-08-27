@@ -74,6 +74,8 @@ const (
 
 	// NamespaceBuiltin is the rule namespace reserved for this tool.
 	NamespaceBuiltin = rule.NamespaceBuiltin
+	// NamespaceAIP is the rule namespace reserved for the AIP rules.
+	NamespaceAIP = rule.NamespaceAIP
 )
 
 // ParseSeverity reads the spelling configuration uses.
@@ -102,6 +104,35 @@ type Config struct {
 	// Rules is what is said about individual rules, by ID. A rule not named
 	// here runs at SeverityError over every path.
 	Rules map[string]RuleConfig
+}
+
+// DefaultSeverity is what a finding of a rule the manifest says nothing about
+// costs.
+//
+// It is derived from the namespace rather than stated by the rule, because a
+// rule does not decide its own severity: the published interface says so, and
+// an out-of-tree rule that could ship itself at error would be deciding
+// something about somebody else's repository. What the namespace says is not
+// the rule author's opinion; it is this tool's, about a group of rules it
+// ships, and it is one line rather than a table that can drift from the rules
+// it describes.
+//
+// Two answers, and the asymmetry is argued in docs/AIP.md §6:
+//
+//   - The stele rules fail. Each was measured against a real fleet before it
+//     shipped, and each cost that fleet nearly nothing, so a finding is
+//     evidence of a mistake rather than of a different tradition.
+//
+//   - The aip rules warn. They are guidance, they were measured against the
+//     same fleet in the hundreds, and a rule that reddens every repository on
+//     upgrade is a rule that gets switched off — along with whatever is next
+//     to it. A repository that has fixed its contracts raises them to error in
+//     stele.yaml, which is the ordinary knob and not a special one.
+func DefaultSeverity(id string) Severity {
+	if rule.Namespace(id) == NamespaceAIP {
+		return SeverityWarning
+	}
+	return SeverityError
 }
 
 // ignores reports whether path is covered by one of the entries.
@@ -227,6 +258,10 @@ func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 			if configured && (rc.Severity == SeverityOff || ignores(rc.Ignore, path)) {
 				continue
 			}
+			sev := rc.Severity
+			if !configured {
+				sev = DefaultSeverity(r.ID())
+			}
 			applied[r.ID()] = true
 			found, err := r.Check(f)
 			if err != nil {
@@ -236,7 +271,7 @@ func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 			for _, fi := range found {
 				fi.Rule = r.ID()
 				fi.Path = path
-				fi.Severity = rc.Severity
+				fi.Severity = sev
 				switch fi.Severity {
 				case SeverityWarning:
 					res.Warnings++
