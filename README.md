@@ -506,10 +506,12 @@ a CI job is that this file is reviewed with the contracts it is about, and the
 CI job is invisible from the repository the rules describe. What is a deliberate
 exemption and what is unfinished work stays legible.
 
-Two honest limits. A `warning` buys time to fix what is there; it does **not**
-protect new code from the same mistake, and nothing here yet does — a baseline,
-which fails only on findings that were not already present, is the named next
-step. And ignore entries are import paths or prefixes of them, matched by whole
+A `warning` buys time to fix what is there. It does **not** protect new code
+from the same mistake: the 112th field named the wrong thing is reported
+exactly as the 111 already there are, and nothing in the output tells them
+apart. That is what the baseline below is for.
+
+One honest limit remains. Ignore entries are import paths or prefixes of them, matched by whole
 path components, never globs: `api/legacy/v1/old.proto` names one file and
 `api/legacy` names everything under it. A glob-looking entry is refused rather
 than matched literally, which would be an exemption the author believes they
@@ -517,6 +519,58 @@ have written and does not have.
 
 Adding a built-in rule can turn a green build red, so under the policy in
 [RELEASING.md](RELEASING.md) it is a breaking change and the changelog says so.
+
+#### The baseline
+
+`stele lint --update-baseline` writes `stele.baseline`: a generated file,
+committed and read in review beside `stele.lock`, holding what this repository
+already has so that a run can fail on what it does not.
+
+```yaml
+version: 1
+findings:
+  - rule: stele/enum_value_prefix
+    path: example/v1/order.proto
+    subject: example.v1.ACCEPTED
+```
+
+An entry names a file, a rule and **the declaration** — never a line. Inserting
+a line above a finding moves every finding below it, so a baseline keyed on
+position goes stale on an edit that changed nothing it is about, and one people
+regenerate without reading launders new findings into itself on every
+regeneration. A full name survives reformatting and reordering, and stops being
+the same name exactly when the declaration stops being the same declaration.
+
+It is never written by an ordinary run, and it is not mandatory: a repository
+without one behaves exactly as before.
+
+- A baselined finding is **still printed**, marked `(baselined)` and keeping the
+  severity it would otherwise have cost, and the summary line says how many the
+  file is holding. Invisible debt is forgotten debt.
+- An entry nothing finds any more — because somebody fixed it — is **reported
+  and never fails the run**. Fixing a finding must not redden the build of the
+  person who fixed it. Re-derive to drop it; the file is meant to shrink.
+- A rule id in it is the same permanent public identifier `lint.rules` uses, and
+  one no loaded rule carries stops the run naming it.
+
+**It is not `ignore`, and both are worth having.** `ignore` is prospective and
+unbounded: this rule does not apply to these paths, including the file added
+tomorrow. It is written by hand in `stele.yaml`, where it is reviewed as intent.
+A baseline is retrospective and exhaustive: these exact declarations violate
+this rule today and nothing else does. An exemption nobody intends to revisit
+belongs in the manifest; debt somebody intends to pay belongs in the baseline.
+
+What that buys, on the repository in the fleet that made the argument. It
+holds 40 `stele/enum_value_prefix` findings at `severity: warning`, because
+renaming public enum values would break four consumers at once. With a baseline
+the rule goes back to `error` today —
+
+```
+stele: lint checked 2 files with 13 rules: 0 errors, 0 warnings, 54 findings held by stele.baseline
+```
+
+— and the 41st unprefixed value fails the run, by name, on the line it was
+written.
 
 ## Trust
 
@@ -541,7 +595,8 @@ Three sentences, because this is the part it is worth being blunt about.
 
 ## Editor support
 
-`stele.yaml` and `stele.lock` have JSON Schemas in [`schema/`](schema/). Point
+`stele.yaml`, `stele.lock` and `stele.baseline` have JSON Schemas in
+[`schema/`](schema/). Point
 your editor at one and you get completion, hovers and inline errors before you
 run anything.
 
@@ -554,7 +609,8 @@ top of the file:
 version: 1
 ```
 
-and, in `stele.lock`, the same line with `stele.lock.schema.json`. A checkout can
+and, in `stele.lock` and `stele.baseline`, the same line with
+`stele.lock.schema.json` and `stele.baseline.schema.json`. A checkout can
 point at the local copy instead, which needs no network:
 
 ```yaml
@@ -567,7 +623,8 @@ Code, in `settings.json`:
 ```json
 "yaml.schemas": {
   "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.schema.json": "stele.yaml",
-  "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.lock.schema.json": "stele.lock"
+  "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.lock.schema.json": "stele.lock",
+  "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.baseline.schema.json": "stele.baseline"
 }
 ```
 

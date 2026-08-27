@@ -32,8 +32,11 @@ did not ask to change.
   rejected: a severity that means two things depending on when you adopted the
   tool is worse than a version number that means what it says.
 - A command, flag or manifest field is removed or given a different meaning.
-- The lock file format changes such that an older stele cannot read a lock a
-  newer one wrote, or the reverse.
+- The lock or baseline file format changes such that an older stele cannot read
+  a file a newer one wrote, or the reverse. Each carries its own version number
+  for that reason: the three files this tool reads evolve independently, and
+  one number shared between them would force a change in any of them through
+  all three.
 
 **MINOR** — a consumer can upgrade, change nothing, and see the same bytes.
 

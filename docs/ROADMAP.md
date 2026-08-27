@@ -639,7 +639,8 @@ repository, and a line that never moves teaches nothing.
 
 **The baseline is now more pressing, not less.** A roll-up makes a large
 standing count comfortable to live with, and nothing here separates the 111
-existing `_at` fields from the 112th written tomorrow.
+existing `_at` fields from the 112th written tomorrow. It landed next; see
+below.
 
 ### Not in this slice, and said plainly rather than implied
 
@@ -648,14 +649,85 @@ existing `_at` fields from the 112th written tomorrow.
   which is in `internal/aip`; see above.
 - **Breaking-change detection.** Nothing compares this revision against a
   previous one.
-- **A baseline.** `severity: warning` buys time to fix what is there. It does not
-  protect new code from the same mistake, and that gap is real: a baseline —
-  failing only on findings that were not already present — is the next thing this
-  milestone needs, and it is a second file format with its own drift questions.
+- ~~**A baseline.**~~ Landed; see below.
 - **Suppression at the source.** Deliberate, not an oversight. A `// stele:ignore`
   comment lives in the producer's file and travels to every consumer that vendors
   it, carrying one repository's decision into repositories that never made it.
   The manifest is where an exemption is auditable by the people it binds.
+
+#### What shipped: the baseline
+
+`stele lint --update-baseline` writes `stele.baseline`, a generated file
+committed and read in review beside `stele.lock`. The findings it names cost
+nothing; every other finding costs what its severity says.
+
+**The identity is the hard part, and the obvious answer is wrong.** (file,
+rule, line) goes stale on an edit above it, so the file is regenerated
+reflexively — and a file regenerated without being read launders the new
+findings in with the old on every regeneration, which is worse than not having
+one. An entry is (import path, rule, **subject**, count), where the subject is
+the full name of the declaration the finding is about. It survives
+reformatting, reordering and insertion, and stops being the same name exactly
+when the declaration stops being the same declaration.
+
+The engine derives the subject from the position rather than the rule stating
+it, and that is not a convenience. `rule.WireFinding` — what crosses the plugin
+boundary — carries a line, a column, a message and a fix, deliberately. An
+identity a hosted rule could not produce would work for built-in rules only,
+and this repository's whole claim about the rule interface is that it does not
+matter which side of a process boundary a rule is on.
+
+**A stale entry is reported and never fatal.** Keeping it silently is how a
+record of debt rots into a standing permission; failing on it reddens the build
+of whoever fixed the finding, and a repository learns quickly not to fix
+things. `--update-baseline` drops it, which is the only way the file shrinks.
+
+**A baselined finding is still printed**, marked and keeping the severity it
+would otherwise have cost, and the summary line names the count the file is
+holding — because the roll-up's own failure mode is a comfortable line with an
+unread number behind it, and a baseline that hid its contents would be that
+failure with a file attached.
+
+**It is not `ignore`.** `ignore` is prospective and unbounded and hand-written
+in the manifest, where it is reviewed as intent. A baseline is retrospective,
+exhaustive and generated. An exemption nobody intends to revisit belongs in
+`stele.yaml`; debt somebody intends to pay belongs in the baseline.
+
+It is **per repository and not per rule**. A per-rule switch would be a second
+severity axis, and severity is already the axis that decides which rules are
+worth holding: a rule a repository intends to fix is held at `error` and
+baselined, a rule it has not decided about is a `warning`, and a rule it will
+never apply is `off` or ignored.
+
+Measured on the repository in the fleet that made the argument, which held 40
+`stele/enum_value_prefix` findings at `severity: warning` because renaming public enum values would break four
+consumers at once: with a baseline the rule went back to `error`, the run
+passed at `0 errors, 0 warnings, 54 findings held by stele.baseline`, twenty
+lines inserted above every finding changed nothing, one new unprefixed value
+failed the run by name, and fixing one of the forty printed a stale line and
+still passed.
+
+### Arguments against this, recorded
+
+**A baseline can be regenerated.** Nothing stops somebody running
+`--update-baseline` to make a red build green, which is `allow_failure: true`
+with more steps. What is different is that it lands in a diff: the file is
+generated, committed and reviewed, one line per finding, and a commit adding
+forty lines to it is a commit that says what it is doing. That is the same
+protection the lock has and it is not a stronger one. A `--check` mode that
+failed when the baseline is not what the run would write was considered and not
+built: it would fail on exactly the case above — a fixed finding — which is the
+thing this design refuses to punish.
+
+**A subject is not a perfect identity.** Two findings of one rule about one
+declaration are separated by a count and not individually, so fixing one of two
+and introducing another the same day is invisible. That case is rare enough to
+be worth the file staying readable; the alternative, an ordinal, moves for the
+same reason a line number does.
+
+**A rule that reworded its message keeps matching.** Deliberate. An entry that
+stopped matching because somebody improved a sentence would be a new build
+failure with no cause, and prose is not a contract this tool keeps.
 
 ### An argument against part of this, recorded
 

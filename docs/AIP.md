@@ -342,7 +342,7 @@ the contracts rather than in `allow_failure: true` on a CI job.
   exist, and the roadmap already names it as the next thing this milestone
   needs. **Every profile rule that fires broadly is worth less than it looks
   until the baseline lands**, and that is an argument for landing the baseline
-  before the broad rules, not after.
+  before the broad rules, not after. *(It has since landed; §11.)*
 - *It does not group.* Turning on twenty AIP rules today means twenty lines.
   The namespace makes the group derivable, and configuration should be able to
   name it; that is a small change to `internal/config` and it is not in this
@@ -395,8 +395,8 @@ Three costs, in increasing order of unpleasantness.
 - ~~**Reserving the `aip` namespace in `rule`.**~~ Landed, before the first rule.
 - **Profile selection in the manifest.** `lint.profiles` is sketched above and
   not designed; it is a change to a schema that is already released.
-- **The baseline.** Named again here because section 6 makes it a blocker for
-  the broad rules rather than a nice-to-have.
+- ~~**The baseline.**~~ Landed, before the broad rules and for the reason §6
+  gives. See §11.
 - **Breaking-change detection.** AIP-180 is classified `undecidable` for a rule
   handed one file, which is a statement about the rule interface, not about the
   AIP.
@@ -521,4 +521,48 @@ exactly as the 111 existing ones are, and the reader cannot tell them apart. A
 baseline is the mechanism that separates the two, it does not exist, and the
 roll-up makes it *more* pressing rather than less: it makes a large standing
 count comfortable to live with. That is the strongest argument against what
-shipped here, and it is recorded rather than answered.
+shipped here, and it is recorded rather than answered. *§11 answers it.*
+
+## 11. The baseline, and what it does to sections 6 and 10
+
+The objection recorded twice above is now met. `stele lint --update-baseline`
+writes `stele.baseline`, a generated file committed and read in review beside
+`stele.lock`; the findings it names cost nothing, and every other finding costs
+what its severity says. The 112th `_at` field fails a run the 111 do not.
+
+**Why the identity is a declaration and not a position.** (file, rule, line) is
+the obvious answer, and it is the one that fails: inserting a line above a
+finding moves every finding below it, so the file goes stale on an edit that
+changed nothing it is about, people regenerate it without reading it, and a
+regeneration nobody reads carries the new findings in with the old. An entry is
+(import path, rule, subject, count), and the subject is the full name of the
+declaration — `example.v1.Order.created_at`. It survives reformatting and
+reordering and stops being the same name exactly when the declaration stops
+being the same declaration.
+
+**The engine derives it, and that is a constraint from §7's neighbourhood
+rather than a convenience.** `rule.WireFinding` carries a line, a column, a
+message and a fix, and nothing else, for the reasons `rule/wire.go` gives. An
+identity that required a rule to name its own subject would work for the rules
+that ship here and not for the ones that do not, and one interface that means
+two things depending on which side of a process boundary a rule sits on is not
+one interface.
+
+**What this changes about §6.** Nothing about the asymmetry: `aip/` rules still
+default to `warning` and `stele/` rules still default to `error`, and the
+measurement that justified it is unchanged. What changes is the sentence that
+followed it. "Every profile rule that fires broadly is worth less than it looks
+until the baseline lands" was true and is no longer: a repository that wants
+AIP-142 enforced can raise it to `error`, baseline the 111, and be protected
+from the 112th on the same afternoon. The argument for landing the baseline
+*before* the broad rules stands as it was written, and it is why this came
+next.
+
+**What it does not change.** A baseline is not evidence for a rule. The
+standard §10 sets — a rule id is permanent, and 0 findings is not evidence for
+one — is about whether a rule should exist, and a mechanism for living with a
+rule's findings says nothing about that. The four broadest candidates in §3
+still have not shipped, and the reason is still the one given there: a rule
+that cannot tell an unannotated file from a descriptor set assembled without
+the import reports the same count on every run of every repository, and a
+baseline would hold that count as comfortably as it holds a real one.

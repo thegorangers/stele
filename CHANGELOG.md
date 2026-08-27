@@ -72,6 +72,17 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 - **A rule id may now begin with a digit after the namespace.** `aip/158_…`
   needs it. Nothing that was accepted before is refused.
 
+### Fixed
+
+- **`lint.rules` in `stele.yaml` accepts an `aip/` rule id.** It did not. The
+  manifest parser carried its own copy of the rule-id spelling and the copy did
+  not move when the published rule was widened to let a name lead with a digit,
+  so every `aip/` id was refused with "must start with a lower-case letter" —
+  which meant the five rules shipping at `warning` above could not be raised to
+  `error`, ignored on a path, or switched off. The published schema had drifted
+  the same way, so an editor reddened the line too. Both now defer to
+  `rule.CheckID`. Nothing that was accepted before is refused.
+
 ### Added
 
 - **A rule reporting more than five warnings prints one line instead of one
@@ -96,6 +107,73 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 - **`stele lint --all-findings`** prints every finding of every rule.
 
+- **A baseline: `stele.baseline`, and `stele lint --update-baseline`.** This is
+  what `severity: warning` does not give. A repository with 111 fields named
+  `_at` gets the same line about the 112th, written tomorrow, and the roll-up
+  above made that comfortable rather than better. A baseline holds what is
+  already there so that a run fails on what is not.
+
+  ```
+  stele lint --update-baseline    # once, when adopting a rule
+  git add stele.baseline          # generated, committed, read in review
+  ```
+
+  It is **not written by an ordinary run** and it is not mandatory. Nothing
+  changes for a repository that has no `stele.baseline`: the same findings, the
+  same summary line, the same exit status, byte for byte.
+
+  - **An entry is a file, a rule and a declaration — not a line.**
+    `example/v1/order.proto`, `stele/enum_value_prefix`, `example.v1.PLACED`.
+    Inserting a line above a finding moves every finding below it, so a
+    baseline keyed on position goes stale on an edit that changed nothing it is
+    about; one people regenerate reflexively launders new findings in on every
+    regeneration. A count is carried for the case a subject cannot separate —
+    two findings of one rule about the file as a whole.
+  - **A baselined finding is still printed**, marked `(baselined)` and keeping
+    the severity it would otherwise have cost, and the summary line says how
+    many the file is holding. A suppression nobody can see is not debt, it is a
+    decision nobody remembers making.
+  - **An entry nothing finds any more is reported and never fails the run.**
+    Fixing a finding must not redden the build of whoever fixed it. Re-derive
+    to drop it; the file is meant to shrink.
+  - **It is not `ignore`, and both are worth having.** `ignore` is prospective
+    and unbounded — this rule does not apply to these paths, including the file
+    added tomorrow — written by hand where it is reviewed as intent. A baseline
+    is retrospective and exhaustive: these exact declarations violate this rule
+    today and nothing else does. An exemption nobody intends to revisit belongs
+    in `stele.yaml`; debt somebody intends to pay belongs in the baseline.
+  - A baseline naming a rule no loaded rule carries stops the run naming it, as
+    `lint.rules` already does. A baseline that cannot be parsed stops the run
+    rather than being ignored.
+
+  Measured on the repository in the fleet that made the argument. It holds
+  40 `stele/enum_value_prefix` findings at `severity: warning` because renaming
+  public enum values would break four consumers at once. With a baseline the
+  rule goes back to `error` today — `0 errors, 0 warnings, 54 findings held by
+  stele.baseline` — and the 41st unprefixed value fails the run, by name, on
+  the line it was written.
+
+  A JSON Schema for the file is published as
+  [`schema/stele.baseline.schema.json`](schema/stele.baseline.schema.json) and
+  held to the parser by the same corpus the manifest and the lock are.
+
+  **Versioning.** On its own this would be a patch under
+  [RELEASING.md](RELEASING.md): a new flag with the previous behaviour as the
+  default, a new file that no existing repository has, and byte-identical
+  output for every input that already worked — which is `MINOR` on the full
+  scale and therefore `PATCH` while the major version is 0. It ships in a minor
+  release because the AIP rules above already bump one. It is recorded this way
+  rather than folded into them because the two are different promises: the
+  rules change what every repository's lint says, and the baseline changes
+  nothing until somebody asks for it.
+
+  One caveat that is not covered by "the contract is the bytes stele writes":
+  `rule.Finding`, in the published package an out-of-tree rule imports, gains
+  two fields. Both are stamped by the engine and neither is a rule's to set, so
+  a rule reading findings is unaffected — but a rule constructing one with an
+  *unkeyed* struct literal will no longer compile. Keyed literals, which is
+  what the documentation and every example use, are unaffected.
+
 ### Reports and messages
 
 - **`stele lint --rules` says what a finding of each rule costs** — "fails the
@@ -103,6 +181,10 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   does not say which is which.
 
 ### Internal
+
+- **The atomic write the lock file uses moved to `internal/atomicfile`,** now
+  that the baseline needs it too. No behaviour changed; a second copy of it
+  would have been a second place to get it subtly wrong.
 
 - **The AIP corpus is inventoried mechanically, and every AIP has a recorded
   decision.** `internal/aip` holds a derived snapshot of
