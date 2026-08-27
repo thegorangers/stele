@@ -1,0 +1,11 @@
+version: 1
+findings:
+  - rule: aip/142_timestamp_field_time_suffix
+    path: example/v1/order.proto
+    subject: example.v1.Order.created_at
+  - rule: stele/enum_value_prefix
+    path: example/v1/order.proto
+    subject: example.v1.PLACED
+  - rule: stele/syntax_declared
+    path: example/v1/legacy.proto
+    count: 2

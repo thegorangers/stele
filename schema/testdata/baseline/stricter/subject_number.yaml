@@ -1,0 +1,8 @@
+# stricter: yaml.v3 coerces any scalar into a string, so an unquoted numeric
+# subject is parsed as the string it was written as. The schema keeps the
+# documented rule that a subject is a full name, which is a string.
+version: 1
+findings:
+  - rule: stele/enum_value_prefix
+    path: example/v1/a.proto
+    subject: 12345

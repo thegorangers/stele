@@ -1,0 +1,4 @@
+# invalid: an entry that names no file would hold the same finding everywhere.
+version: 1
+findings:
+  - rule: stele/syntax_declared

@@ -1,0 +1,7 @@
+# invalid: a rule id is namespace/name. A bare name could be claimed by two
+# rules from two authors, and the entry would hold whichever ran.
+version: 1
+findings:
+  - rule: enum_value_prefix
+    path: example/v1/a.proto
+    subject: example.v1.PLACED

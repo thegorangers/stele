@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/thegorangers/stele/main/schema/stele.baseline.schema.json",
+  "title": "stele.baseline",
+  "description": "What a repository already knows about, so that `stele lint` can fail on what it does not.\n\n`severity: warning` buys time to fix what is there; it does not protect new code. A repository with 111 fields named the wrong thing gets the same line about the 112th, written tomorrow, and nothing in the output separates them. This file separates them: the findings it names cost nothing, and any other finding costs what its severity says.\n\nIt is written by `stele lint --update-baseline` and never by an ordinary run, and it is committed and read in review beside stele.lock. The rewrite is total, which is how the file shrinks: entries nothing finds any more are dropped, and are reported — never failed on — until somebody re-derives it.\n\nAs with the manifest and the lock, a test in this repository runs one corpus of examples through both this schema and the real parser and fails on any disagreement.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version"
+  ],
+  "properties": {
+    "version": {
+      "description": "Version of the baseline format. It is its own number, as the lock's is: the three files evolve independently, and one number shared between them would force a change in any of them through all three.",
+      "type": "integer",
+      "const": 1
+    },
+    "findings": {
+      "description": "The accepted findings, sorted by path, then rule, then subject, so that re-deriving a baseline that changed nothing produces an empty diff.\n\nThe parser also checks: no two entries may name the same (path, rule, subject). That triple is what identifies an entry, and two of them would be two answers to one lookup, each carrying a different count of the same thing.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "title": "accepted finding",
+      "description": "One finding this repository already had.\n\nThere is deliberately no line number, no message and no fix. A line is not an identity: inserting a line above a finding moves every finding below it, so a baseline keyed on position goes stale on an edit that changed nothing it is about — and one people regenerate reflexively launders new findings in on every regeneration. A message is prose a rule may reword in a patch release, and an entry that stopped matching because somebody improved a sentence would be a new build failure with no cause.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "path"
+      ],
+      "properties": {
+        "rule": {
+          "description": "The rule that reported it, as `namespace/name`. It is the same permanent public identifier that goes in lint.rules, and an entry naming a rule no loaded rule carries stops the run naming it — for the same reason lint.rules does: the repository believes it has an exemption it does not have, and that is the only moment anybody would find out.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*/[a-z0-9][a-z0-9_]*$",
+          "examples": [
+            "stele/enum_value_prefix",
+            "aip/142_timestamp_field_time_suffix"
+          ]
+        },
+        "path": {
+          "description": "The import path of the file, as the rules and the ignore list see it, and not the path on disk. Two repositories in one closure can supply one disk layout under different import paths, and the import path is the name the finding was reported under.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "example/v1/order.proto"
+          ]
+        },
+        "subject": {
+          "description": "The full name of the declaration the finding is about — the thing that survives reformatting, reordering and an insertion above it, and stops being the same name exactly when the declaration stops being the same declaration.\n\nAbsent for a finding about the file as a whole, which has no declaration to name. Inventing one — the package, say — would let two different findings share an identity, and the second would be suppressed because the first was already known.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "example.v1.Order.created_at",
+            "example.v1.PLACED"
+          ]
+        },
+        "count": {
+          "description": "How many findings of this rule were made about this subject. Absent means one, which is what it almost always is; writing it on every line of a file people read would be noise in every line. The parser does not distinguish an explicitly written zero from an absent count and reads both as one; the schema refuses the zero, because writing it is not something anybody means.\n\nIt is here because a subject is not always unique to a finding: a finding about the file as a whole has none, so two of them from one rule would otherwise be one entry silently covering both, and the second appearing tomorrow is exactly what this file exists to detect.",
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

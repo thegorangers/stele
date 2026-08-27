@@ -1,0 +1,8 @@
+# invalid: severity is not part of this format. Severity is what a finding
+# costs when it is not held, and it lives in stele.yaml where a person wrote
+# it; a second copy here could only disagree with it.
+version: 1
+findings:
+  - rule: stele/syntax_declared
+    path: example/v1/a.proto
+    severity: warning

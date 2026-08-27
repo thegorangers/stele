@@ -1,0 +1,5 @@
+# invalid: an entry that names no rule holds nothing.
+version: 1
+findings:
+  - path: example/v1/a.proto
+    subject: example.v1.A

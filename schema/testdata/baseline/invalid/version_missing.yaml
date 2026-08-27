@@ -1,0 +1,5 @@
+# invalid: no version. A file whose format is unstated is one whose meaning
+# is guessed at, and the guess would be a suppression nobody wrote.
+findings:
+  - rule: stele/syntax_declared
+    path: example/v1/a.proto

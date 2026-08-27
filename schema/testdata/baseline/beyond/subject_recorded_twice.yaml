@@ -1,0 +1,13 @@
+# beyond: one identity — the same file, rule and subject — recorded twice with
+# two different counts. The items differ, so uniqueItems cannot see it; the
+# parser refuses the ambiguity, because a lookup by (path, rule, subject)
+# cannot be answered with two counts of the same thing.
+version: 1
+findings:
+  - rule: stele/enum_value_prefix
+    path: example/v1/a.proto
+    subject: example.v1.PLACED
+  - rule: stele/enum_value_prefix
+    path: example/v1/a.proto
+    subject: example.v1.PLACED
+    count: 3

@@ -1,0 +1,5 @@
+# A repository that has fixed everything it once held. The file stays, saying
+# so, rather than being deleted: its absence and its emptiness are different
+# facts, and only one of them is a decision somebody made.
+version: 1
+findings: []

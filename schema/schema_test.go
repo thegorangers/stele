@@ -12,6 +12,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/thegorangers/stele/internal/config"
+	"github.com/thegorangers/stele/internal/lint"
 	"github.com/thegorangers/stele/internal/lockfile"
 	"github.com/thegorangers/stele/internal/source"
 	"github.com/thegorangers/stele/schema"
@@ -69,6 +70,15 @@ func formats() []format {
 			schema:   schema.LockJSON,
 			parse: func(path string) error {
 				_, err := lockfile.Load(path)
+				return err
+			},
+		},
+		{
+			name:     "baseline",
+			filename: "stele.baseline",
+			schema:   schema.BaselineJSON,
+			parse: func(path string) error {
+				_, err := lint.LoadBaseline(path)
 				return err
 			},
 		},
