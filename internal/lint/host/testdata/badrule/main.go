@@ -30,8 +30,11 @@ func main() {
 	}
 
 	id := "bad/" + mode
-	if mode == "reserved_namespace" {
+	switch mode {
+	case "reserved_namespace":
 		id = "stele/no_todo"
+	case "reserved_aip_namespace":
+		id = "aip/158_list_request_page_size"
 	}
 	hello := rule.Hello{Protocol: rule.Protocol, Rules: []rule.Descriptor{{
 		ID: id, Description: "fails on purpose, in the manner named by MODE",

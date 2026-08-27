@@ -263,6 +263,34 @@ type Rule interface {
 // was never switched on.
 const NamespaceBuiltin = "stele"
 
+// NamespaceAIP is the origin part of a rule ID reserved for the rules that
+// implement the API Improvement Proposals, https://google.aip.dev.
+//
+// It is a second namespace rather than more names under the first because the
+// group has to be derivable from the ID and not from a second list somebody
+// maintains: "the AIP rules" is exactly the rules whose ID begins `aip/`, and
+// a list beside them would be one more enumeration to drift. The name after
+// the namespace carries the AIP number first — `aip/158_list_request_page_size`
+// — so that IDs sort into AIP order and the number, which is the one part of
+// this guidance nobody here owns, is in the ID a reader searches for.
+//
+// The reservation lands with the first rule in the namespace and not after it,
+// for the reason NamespaceBuiltin gives: it is free today and a rename
+// tomorrow, and a rule ID rename silently stops matching the ignore list that
+// named it.
+const NamespaceAIP = "aip"
+
+// Reserved reports whether ns is a rule namespace this tool keeps for itself.
+//
+// A rule from outside declares its own namespace. The reservation is not
+// tidiness: a rule ID is a public contract that appears in somebody's manifest
+// and ignore list, and a third-party rule free to claim a reserved one could
+// take over the configuration of a rule that ships here, or be displaced by a
+// rule of the same ID in a later release.
+func Reserved(ns string) bool {
+	return ns == NamespaceBuiltin || ns == NamespaceAIP
+}
+
 // Namespace is the origin part of id, or the empty string when id has none.
 func Namespace(id string) string {
 	ns, _, ok := strings.Cut(id, "/")
@@ -286,8 +314,34 @@ func CheckID(id string) error {
 	if err := lowerSnake(ns); err != nil {
 		return fmt.Errorf("%q: the namespace %q %s", id, ns, err)
 	}
-	if err := lowerSnake(name); err != nil {
+	if err := ruleName(name); err != nil {
 		return fmt.Errorf("%q: the name %q %s", id, name, err)
+	}
+	return nil
+}
+
+// ruleName is the shape of the name half of a rule ID: lower_snake_case, and
+// allowed to start with a digit.
+//
+// The digit is for the AIP rules and it is a deliberate widening rather than
+// an exception carved for one namespace. `aip/158_list_request_page_size`
+// leads with the number because that is what a reader searches for and what
+// sorts the IDs into the order of the guidance, and a namespace-specific
+// spelling rule would mean an ID meant something different depending on who
+// wrote it. The namespace half stays strict: a namespace that led with a digit
+// would read as a number rather than as an origin.
+func ruleName(s string) error {
+	if s == "" {
+		return fmt.Errorf("is empty")
+	}
+	if !(s[0] >= 'a' && s[0] <= 'z' || s[0] >= '0' && s[0] <= '9') {
+		return fmt.Errorf("must start with a lower-case letter or a digit")
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			return fmt.Errorf("must be lower_snake_case")
+		}
 	}
 	return nil
 }

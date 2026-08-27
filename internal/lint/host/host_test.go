@@ -180,6 +180,7 @@ func TestFailureModesAreNamed(t *testing.T) {
 		want   []string
 	}{
 		{mode: "reserved_namespace", atLoad: true, want: []string{`"bad"`, "stele/no_todo", "reserved"}},
+		{mode: "reserved_aip_namespace", atLoad: true, want: []string{`"bad"`, "aip/158_list_request_page_size", "reserved"}},
 		{mode: "silent", atLoad: true, want: []string{`"bad"`, "announc"}},
 		{mode: "chatty", atLoad: true, want: []string{`"bad"`, "stdout"}},
 		{mode: "crash", want: []string{"bad/crash", `"bad"`, todoPath, "died"}},

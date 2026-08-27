@@ -162,16 +162,17 @@ func check(pl Plugin, d rule.Descriptor, owner map[string]string) error {
 	if err := rule.CheckID(d.ID); err != nil {
 		return fmt.Errorf("lint plugin %q: %w", pl.Name, err)
 	}
-	if rule.Namespace(d.ID) == rule.NamespaceBuiltin {
+	if ns := rule.Namespace(d.ID); rule.Reserved(ns) {
 		// The namespace is reserved, and refusing it is not tidiness. A rule
 		// ID is a public contract that appears in somebody's manifest and
-		// ignore list; a third-party rule that could claim `stele/...` could
-		// take over a built-in's configuration, or be silently replaced by a
-		// built-in of the same name in a later release.
+		// ignore list; a third-party rule that could claim `stele/...` or
+		// `aip/...` could take over the configuration of a rule that ships
+		// here, or be silently replaced by one of the same name in a later
+		// release.
 		return fmt.Errorf("lint plugin %q claims the rule ID %q, and the %q namespace is reserved "+
 			"for the rules that ship with this tool; a rule from outside declares its own namespace, "+
 			"such as %s/%s — ask its author to rename it",
-			pl.Name, d.ID, rule.NamespaceBuiltin, pl.Name, strings.TrimPrefix(d.ID, rule.NamespaceBuiltin+"/"))
+			pl.Name, d.ID, ns, pl.Name, strings.TrimPrefix(d.ID, ns+"/"))
 	}
 	if first, dup := owner[d.ID]; dup {
 		// Whichever ran, the other's configuration would silently describe
