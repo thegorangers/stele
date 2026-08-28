@@ -2,63 +2,124 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `stele breaking` compares the working revision against the correct previous revision and reports wire and source breakages in the modules this repository owns.
+**Goal:** `stele breaking` compares the working revision against the correct previous revision and **reports** wire and source breakages in the modules this repository owns. It always exits zero.
 
-**Architecture:** A new `internal/gitrepo` reads the repository the tool is run in — the existing `internal/source` deletes `.git` from every cache entry and cannot answer questions about history. `internal/breaking` decides which revision is the previous one, skips the run when the owned trees and the lock are unchanged, materialises the previous revision into a temporary directory, resolves it with `pin.Resolve(Dir: thatDir)` so it is compiled with *its own* lock, and diffs two `linker.Files` by full name.
+**Architecture:** A new `internal/gitrepo` reads the repository the tool is run in — `internal/source` deletes `.git` from every cache entry and cannot answer a question about history. `internal/breaking` chooses the previous revision, skips the run when the owned trees and the lock are unchanged, materialises the previous revision into a temporary directory, resolves it with `pin.Resolve(Dir: thatDir)` so it is compiled with *its own* lock, and diffs two `linker.Files` by full name.
 
-**Tech Stack:** Go 1.26, `bufbuild/protocompile`, `google.golang.org/protobuf/reflect/protoreflect`, the repository's existing `internal/{config,pin,resolve,compile,lint}`.
+**Tech Stack:** Go 1.26, `bufbuild/protocompile`, `google.golang.org/protobuf/reflect/protoreflect`, and the repository's existing `internal/{config,pin,resolve,compile,lint}` and `rule`.
 
-**Spec:** `docs/design/2026-08-28-breaking-change-detection.md` (third revision). Read it before Task 1; this plan argues from it and does not restate its reasoning.
+**Spec:** `docs/design/2026-08-28-breaking-change-detection.md` (third revision). Read it before Task 1.
 
-**Out of scope, covered by later plans:** plan B is the valve (`allow`, `moves`, `--audit`, `--prune`, manifest keys and JSON schema); plan C is rollout evidence (shadow period, open-merge-request measurement). Until plan B lands there is no way to permit a breaking change, so this command must not be wired into any repository's `make lint` or CI.
+## Why this plan ships a command that cannot fail a build
+
+Plan A has **no valve**: `allow`, `moves`, `--audit` and `--prune` are plan B, and the spec deliberately removed configurable severity. A command that exits non-zero with no way to permit a legitimate breaking change leaves a repository one option — deleting the CI job — which is the invisible off switch the spec spends a section rejecting. A warning in a plan document does not travel with the binary.
+
+So `stele breaking` **always exits zero in plan A** and says so in its own output. This is not a temporary fudge: the spec's evidence section calls for a two-week report-only shadow period (plan C), which a fatal command cannot provide. Plan B introduces the valve and the non-zero exit together, in one release, which under `RELEASING.md` is one announced change of a command's exit status rather than two.
+
+**Version.** A new command is MINOR under `RELEASING.md`, but the major version is 0, where "what would be MAJOR above bumps MINOR, and everything else bumps PATCH" — so this lands as **v0.3.1, a patch**. Stated here so nobody rounds up and spends a minor.
 
 ## Global Constraints
 
-- **Go 1.26.** The module is `github.com/thegorangers/stele`.
-- **No organisation identifiers anywhere**, including tests and fixtures. `internal/hygiene` walks the whole repository and fails on them; example names use `example.` packages. Run `go test ./internal/hygiene/` before every commit.
-- **Rule ids are a permanent public contract** under `RELEASING.md`, namespaced `break/`. An id chosen in this plan cannot be renamed later without a breaking release.
-- **Silence is forbidden.** Every way of failing to compare is an error naming itself. A run that compared nothing is never reported as clean.
-- **Findings do not enter `stele.baseline`.** Nothing in this plan touches `internal/lint/baseline.go`.
-- **British spelling in prose and comments**, matching the repository.
-- **Commit messages state what changed and why**; no `Co-Authored-By` trailers, no mention of any assistant.
+- **Go 1.26.** Module `github.com/thegorangers/stele`.
+- **No organisation identifiers anywhere**, tests and fixtures included; `internal/hygiene` walks the whole repository. Example names use `example.` packages. Run `go test -count=1 ./internal/hygiene/` before every commit.
+- **Rule ids are a permanent public contract** under `RELEASING.md`. Task 1 reserves the namespace before any id ships, because reserving afterwards is a silent rename of somebody else's id.
+- **Silence is forbidden.** Every failure to compare is an error naming itself. A run that compared nothing is never reported as clean.
+- **Never elide a test body.** A Go test function whose body is a comment compiles and passes, so an elided body is a green test masquerading as a specification. Every test in this plan is written out.
+- **Every red step must be observed.** Where a step says to run a test and see it fail, the named failure is the one to expect; a test that passes before the implementation exists is a defect in the test.
+- **Reuse, do not re-spell.** `internal/lint.LockName` and `ManifestName` exist; `config.Load` is the parser (there is no `config.Parse`); `lint.Position` is exported. Grep before introducing a name.
+- **British spelling** in prose and comments. No `Co-Authored-By` trailers; no mention of any assistant.
 
 ---
 
-### Task 1: `internal/gitrepo` — reading the repository the tool runs in
+### Task 1: reserve the `break/` namespace
+
+**Files:**
+- Modify: `rule/rule.go` — beside `NamespaceBuiltin` and `NamespaceAIP`
+- Modify: `rule/namespace_test.go`
+
+This is first and alone because `rule/namespace_test.go` states the reason in the repository's own words: "A namespace is free until somebody publishes a rule in it, and reserving one afterwards is a rename of somebody else's rule ID — which under RELEASING.md does not fail loudly, it silently stops matching the ignore list that named it. So the reservation is made before the first rule in the namespace ships, not after."
+
+**Interfaces:**
+- Produces: `const NamespaceBreaking = "break"`, and `Reserved("break") == true`.
+
+- [ ] **Step 1: Write the failing test** — extend `TestReservedNamespaces` in `rule/namespace_test.go`:
+
+```go
+	if rule.NamespaceBreaking != "break" {
+		t.Errorf("the breaking namespace is %q, and it is a published contract", rule.NamespaceBreaking)
+	}
+```
+
+and add `rule.NamespaceBreaking` to the loop over reserved namespaces already in that test.
+
+- [ ] **Step 2: Run it and see it fail**
+
+```
+go test ./rule/ -run TestReservedNamespaces
+```
+
+Expected: build failure, `undefined: rule.NamespaceBreaking`.
+
+- [ ] **Step 3: Implement**
+
+```go
+// NamespaceBreaking is the origin part of a rule ID reserved for the rules
+// that compare this revision against a previous one. It is reserved here,
+// before the first such rule ships, for the reason NamespaceBuiltin gives.
+const NamespaceBreaking = "break"
+```
+
+and add it to `Reserved`.
+
+- [ ] **Step 4: Run the whole rule suite and see it pass** — `go test ./rule/`.
+- [ ] **Step 5: Commit**
+
+```bash
+git add rule/
+git commit -m "feat(rule): reserve the break namespace
+
+Before the first rule in it ships, not after: reserving a namespace
+afterwards renames somebody else's rule ID, and that rename does not
+fail loudly — it stops matching the ignore list that named it."
+```
+
+---
+
+### Task 2: `internal/gitrepo` — reading the repository the tool runs in
 
 **Files:**
 - Create: `internal/gitrepo/gitrepo.go`
+- Create: `internal/gitrepo/testgit_test.go` — helpers
 - Create: `internal/gitrepo/gitrepo_test.go`
 
 **Interfaces:**
-- Consumes: nothing.
 - Produces:
-  - `type Repo struct{ dir string }`
-  - `func Open(dir string) (*Repo, error)`
-  - `func (r *Repo) Head() (string, error)` — SHA of HEAD
+  - `type Repo struct{ dir string }`, `func Open(dir string) (*Repo, error)`
+  - `func (r *Repo) Head() (string, error)`
+  - `func (r *Repo) ResolveRef(ref string) (string, error)`
   - `func (r *Repo) Parents(sha string) ([]string, error)`
   - `func (r *Repo) MergeBase(a, b string) (string, error)`
   - `func (r *Repo) IsAncestor(a, b string) (bool, error)`
   - `func (r *Repo) IsShallow() (bool, error)`
-  - `func (r *Repo) TreeSHA(sha, path string) (string, bool, error)` — false when the path does not exist in that revision
-  - `func (r *Repo) BlobSHA(sha, path string) (string, bool, error)`
-  - `func (r *Repo) Materialise(sha, dir string) error` — extract the revision's tree into `dir`
+  - `func (r *Repo) ObjectSHA(rev, path string) (string, bool, error)` — the tree **or** blob at path, and whether it exists. One method, because the caller compares module roots (trees) and the lock (a blob) in the same loop and must not care which is which.
+  - `func (r *Repo) Materialise(rev, dir string) error`
   - `var ErrNotFound = errors.New("gitrepo: revision not found")`
 
-- [ ] **Step 1: Write the failing test**
-
-The test builds real repositories in `t.TempDir()`, because the whole point of this package is behaviour against real git.
+- [ ] **Step 1: Write the helpers** in `testgit_test.go`, written out because every later task uses them:
 
 ```go
 package gitrepo
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// run is a test helper: git, in dir, or fail the test.
+// run is git, in dir, or a failed test. The config environment is pinned so a
+// developer's global git configuration cannot change what these tests mean.
 func run(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -66,7 +127,7 @@ func run(t *testing.T, dir string, args ...string) string {
 	cmd.Env = append(cmd.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
-	)
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -74,19 +135,48 @@ func run(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func TestParentsAndMergeBase(t *testing.T) {
+func write(t *testing.T, dir, name, body string) {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func commit(t *testing.T, dir, name, body, msg string) string {
+	t.Helper()
+	write(t, dir, name, body)
+	run(t, dir, "add", ".")
+	run(t, dir, "commit", "-qm", msg)
+	return run(t, dir, "rev-parse", "HEAD")
+}
+
+func repo(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	run(t, dir, "init", "-q", "-b", "main")
-	write(t, dir, "a.txt", "one")
-	run(t, dir, "add", ".")
-	run(t, dir, "commit", "-qm", "first")
-	first := run(t, dir, "rev-parse", "HEAD")
+	return dir
+}
+```
 
+- [ ] **Step 2: Write the failing tests** in `gitrepo_test.go`:
+
+```go
+package gitrepo
+
+import (
+	"path/filepath"
+	"testing"
+)
+
+func TestParentsAndMergeBase(t *testing.T) {
+	dir := repo(t)
+	first := commit(t, dir, "a.txt", "one", "first")
 	run(t, dir, "checkout", "-q", "-b", "topic")
-	write(t, dir, "b.txt", "two")
-	run(t, dir, "add", ".")
-	run(t, dir, "commit", "-qm", "topic work")
-	topic := run(t, dir, "rev-parse", "HEAD")
+	topic := commit(t, dir, "b.txt", "two", "topic work")
 
 	r, err := Open(dir)
 	if err != nil {
@@ -97,7 +187,7 @@ func TestParentsAndMergeBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(parents) != 1 || parents[0] != first {
-		t.Fatalf("Parents(topic) = %v, want [%s]", parents, first)
+		t.Fatalf("Parents = %v, want [%s]", parents, first)
 	}
 	base, err := r.MergeBase(topic, "main")
 	if err != nil {
@@ -108,120 +198,275 @@ func TestParentsAndMergeBase(t *testing.T) {
 	}
 }
 
-func TestParentsOfFirstCommitIsEmpty(t *testing.T) {
-	dir := t.TempDir()
-	run(t, dir, "init", "-q", "-b", "main")
-	write(t, dir, "a.txt", "one")
-	run(t, dir, "add", ".")
-	run(t, dir, "commit", "-qm", "first")
+// A root commit has no parents, and that is a value rather than an error: a
+// repository's first commit has nothing before it to compare against.
+func TestParentsOfRootCommitIsEmpty(t *testing.T) {
+	dir := repo(t)
+	head := commit(t, dir, "a.txt", "one", "first")
 	r, _ := Open(dir)
-	parents, err := r.Parents(run(t, dir, "rev-parse", "HEAD"))
+	parents, err := r.Parents(head)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(parents) != 0 {
-		t.Fatalf("Parents(root) = %v, want none", parents)
+		t.Fatalf("Parents = %v, want none", parents)
 	}
 }
 
-func TestTreeSHAReportsAbsence(t *testing.T) {
-	dir := t.TempDir()
-	run(t, dir, "init", "-q", "-b", "main")
-	write(t, dir, filepath.Join("api", "x.proto"), "syntax = \"proto3\";")
-	run(t, dir, "add", ".")
-	run(t, dir, "commit", "-qm", "first")
-	head := run(t, dir, "rev-parse", "HEAD")
-
+// Absence is a value too. A module root a revision did not have is an
+// ordinary state, and reporting it as a failure would leave the caller unable
+// to tell it from a broken repository.
+func TestObjectSHAReportsAbsence(t *testing.T) {
+	dir := repo(t)
+	head := commit(t, dir, filepath.Join("api", "x.proto"), "syntax = \"proto3\";", "first")
 	r, _ := Open(dir)
-	if _, ok, err := r.TreeSHA(head, "api"); err != nil || !ok {
-		t.Fatalf("TreeSHA(api) ok=%v err=%v, want ok", ok, err)
+
+	tree, ok, err := r.ObjectSHA(head, "api")
+	if err != nil || !ok || tree == "" {
+		t.Fatalf("ObjectSHA(api) = %q, %v, %v; want a tree", tree, ok, err)
 	}
-	if _, ok, err := r.TreeSHA(head, "nope"); err != nil || ok {
-		t.Fatalf("TreeSHA(nope) ok=%v err=%v, want absent and no error", ok, err)
+	blob, ok, err := r.ObjectSHA(head, "api/x.proto")
+	if err != nil || !ok || blob == "" {
+		t.Fatalf("ObjectSHA(api/x.proto) = %q, %v, %v; want a blob", blob, ok, err)
+	}
+	if _, ok, err := r.ObjectSHA(head, "nope"); err != nil || ok {
+		t.Fatalf("ObjectSHA(nope) ok=%v err=%v; want absent and no error", ok, err)
+	}
+}
+
+// Materialise must not move HEAD or write into the user's .git.
+func TestMaterialiseLeavesTheRepositoryAlone(t *testing.T) {
+	dir := repo(t)
+	first := commit(t, dir, "a.txt", "one", "first")
+	commit(t, dir, "a.txt", "two", "second")
+	headBefore := run(t, dir, "rev-parse", "HEAD")
+
+	out := t.TempDir()
+	r, _ := Open(dir)
+	if err := r.Materialise(first, out); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(out, "a.txt"))
+	if err != nil || string(body) != "one" {
+		t.Fatalf("materialised a.txt = %q, %v; want the first revision", body, err)
+	}
+	if got := run(t, dir, "rev-parse", "HEAD"); got != headBefore {
+		t.Fatalf("HEAD moved to %s", got)
+	}
+	if run(t, dir, "status", "--porcelain") != "" {
+		t.Fatal("the working tree is dirty after Materialise")
+	}
+}
+
+func TestIsShallow(t *testing.T) {
+	origin := repo(t)
+	for _, body := range []string{"one", "two", "three"} {
+		commit(t, origin, "a.txt", body, body)
+	}
+	parent := t.TempDir()
+	shallow := filepath.Join(parent, "clone")
+	run(t, parent, "clone", "-q", "--depth", "1", "file://"+origin, shallow)
+
+	full, _ := Open(origin)
+	if got, err := full.IsShallow(); err != nil || got {
+		t.Fatalf("IsShallow(full) = %v, %v; want false", got, err)
+	}
+	sh, _ := Open(shallow)
+	if got, err := sh.IsShallow(); err != nil || !got {
+		t.Fatalf("IsShallow(shallow) = %v, %v; want true", got, err)
 	}
 }
 ```
 
-Add `write` and the `strings` import; `write` creates parent directories and writes the file.
+Add `"os"` to the imports for the `Materialise` test.
 
-- [ ] **Step 2: Run the tests and watch them fail**
+- [ ] **Step 3: Run and see them fail** — `go test ./internal/gitrepo/`; expected `undefined: Open`.
 
-```
-go test ./internal/gitrepo/ -run 'TestParents|TestTreeSHA' -v
-```
-
-Expected: build failure — `undefined: Open`. That is the red step; do not skip it, and do not write the implementation first.
-
-- [ ] **Step 3: Implement**
-
-Every method shells out to `git` with `cmd.Dir = r.dir`. Three rules the implementation must follow, because they are what the tests above are really about:
+- [ ] **Step 4: Implement.** This code is verified: it was written and run against real repositories before it entered this plan.
 
 ```go
-// Parents returns the parents of sha, in git's order. The first parent of a
-// merge is the branch the merge was made on, which is the whole reason this
-// method exists. A root commit has none, and that is not an error: a
-// repository's first commit has nothing before it to compare against.
+package gitrepo
+
+import (
+	"archive/tar"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+var ErrNotFound = errors.New("gitrepo: revision not found")
+
+type Repo struct{ dir string }
+
+func Open(dir string) (*Repo, error) {
+	if dir == "" {
+		dir = "."
+	}
+	r := &Repo{dir: dir}
+	if _, err := r.git("rev-parse", "--git-dir"); err != nil {
+		return nil, fmt.Errorf("gitrepo: %s is not a git repository: %w", dir, err)
+	}
+	return r, nil
+}
+
+// git runs one git command and returns its standard output. Standard error is
+// carried into the error, because git says why on stderr and an error that
+// dropped it would leave every caller guessing.
+func (r *Repo) git(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.dir
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (r *Repo) Head() (string, error) { return r.git("rev-parse", "HEAD") }
+
+func (r *Repo) ResolveRef(ref string) (string, error) {
+	out, err := r.git("rev-parse", "--verify", ref+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", ErrNotFound, ref)
+	}
+	return out, nil
+}
+
 func (r *Repo) Parents(sha string) ([]string, error) {
 	out, err := r.git("rev-list", "--parents", "-n", "1", sha)
 	if err != nil {
 		return nil, err
 	}
-	fields := strings.Fields(out)
-	if len(fields) == 0 {
-		return nil, fmt.Errorf("gitrepo: %w: %s", ErrNotFound, sha)
+	f := strings.Fields(out)
+	if len(f) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, sha)
 	}
-	return fields[1:], nil
+	return f[1:], nil
 }
 
-// TreeSHA reports the tree object at path in sha, and whether it exists.
-// Absence is a value, not an error: a module root that a revision did not
-// have is an ordinary state, and reporting it as a failure would make the
-// caller unable to tell it from a broken repository.
-func (r *Repo) TreeSHA(sha, path string) (string, bool, error) {
-	out, err := r.git("rev-parse", sha+":"+path)
+func (r *Repo) MergeBase(a, b string) (string, error) { return r.git("merge-base", a, b) }
+
+// IsAncestor reports whether a is an ancestor of b. git says so with an exit
+// status, where 1 means "no" and anything else means the question could not be
+// answered — a distinction a caller must not lose.
+func (r *Repo) IsAncestor(a, b string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", a, b)
+	cmd.Dir = r.dir
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
+func (r *Repo) IsShallow() (bool, error) {
+	out, err := r.git("rev-parse", "--is-shallow-repository")
 	if err != nil {
-		if strings.Contains(err.Error(), "does not exist") ||
-			strings.Contains(err.Error(), "exists on disk, but not in") {
+		return false, err
+	}
+	return out == "true", nil
+}
+
+// ObjectSHA reports the object at path in rev, and whether it is there.
+// cat-file -e is the test rather than matching rev-parse's message, because
+// git's messages are English prose and are not a contract.
+func (r *Repo) ObjectSHA(rev, path string) (string, bool, error) {
+	spec := rev + ":" + path
+	cmd := exec.Command("git", "cat-file", "-e", spec)
+	cmd.Dir = r.dir
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			return "", false, nil
 		}
 		return "", false, err
 	}
-	return out, true, nil
+	sha, err := r.git("rev-parse", spec)
+	if err != nil {
+		return "", false, err
+	}
+	return sha, true, nil
+}
+
+// Materialise extracts rev's tree into dir. It uses git archive rather than
+// checkout, which would move the user's HEAD, or worktree add, which would
+// write into their .git. The archive is read with archive/tar rather than
+// piped to the tar binary, which the released cross-platform builds cannot
+// assume is present.
+func (r *Repo) Materialise(rev, dir string) error {
+	cmd := exec.Command("git", "archive", "--format=tar", rev)
+	cmd.Dir = r.dir
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := untar(out, dir); err != nil {
+		_ = cmd.Wait()
+		return err
+	}
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("git archive %s: %s", rev, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+func untar(rc io.Reader, dir string) error {
+	tr := tar.NewReader(rc)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		// A path from an archive is untrusted input even when git wrote it:
+		// a name escaping the destination would write outside the temporary
+		// directory this is extracted into.
+		target := filepath.Join(dir, filepath.Clean("/"+h.Name))
+		switch h.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(h.Mode)&0o777)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return err
+			}
+			if err := f.Close(); err != nil {
+				return err
+			}
+		}
+	}
 }
 ```
 
-`Materialise` uses `git archive <sha> | tar -x -C dir` — not `checkout`, which would move the user's HEAD, and not `worktree add`, which writes into the user's `.git`.
-
-- [ ] **Step 4: Run the tests and watch them pass**
-
-```
-go test ./internal/gitrepo/ -v
-```
-
-- [ ] **Step 5: Add the shallow-clone test, and make it pass**
-
-```go
-func TestIsShallow(t *testing.T) {
-	origin := t.TempDir()
-	run(t, origin, "init", "-q", "-b", "main")
-	for i := range 3 {
-		write(t, origin, "a.txt", fmt.Sprintf("%d", i))
-		run(t, origin, "add", ".")
-		run(t, origin, "commit", "-qm", fmt.Sprintf("c%d", i))
-	}
-	shallow := filepath.Join(t.TempDir(), "clone")
-	run(t, t.TempDir(), "clone", "-q", "--depth", "1", "file://"+origin, shallow)
-
-	r, _ := Open(shallow)
-	got, err := r.IsShallow()
-	if err != nil || !got {
-		t.Fatalf("IsShallow = %v, err = %v, want true", got, err)
-	}
-}
-```
-
-`IsShallow` is `git rev-parse --is-shallow-repository`. It is consulted *before* any merge-base failure is classified, per the spec: a shallow clone otherwise reports as unrelated histories and sends a person to fix the wrong thing.
-
+- [ ] **Step 5: Run and see them pass** — `go test ./internal/gitrepo/ -v`.
 - [ ] **Step 6: Commit**
 
 ```bash
@@ -229,69 +474,265 @@ git add internal/gitrepo/
 git commit -m "feat(gitrepo): read the repository the tool is run in
 
 internal/source deletes .git from every cache entry, so nothing in the
-tool could answer a question about history. Materialise extracts a tree
-with git archive rather than checking out or adding a worktree, because
-this package must never move the user's HEAD or write into their .git."
+tool could answer a question about history.
+
+Materialise extracts with git archive and archive/tar: checkout would
+move the user's HEAD, worktree add would write into their .git, and
+piping to the tar binary would assume a program the released builds
+cannot count on."
 ```
 
 ---
 
-### Task 2: choosing the previous revision
+### Task 3: acquiring the base branch
+
+**Files:**
+- Create: `internal/gitrepo/base.go`
+- Create: `internal/gitrepo/base_test.go`
+
+The spec gives this its own section and earlier plans dropped it entirely. It is the ordinary CI case: a GitLab merge-request pipeline fetches only the merge-request ref, so the base branch is **absent at any depth**, and `GIT_DEPTH: 0` does not cure it.
+
+**Interfaces:**
+- Produces:
+  - `func (r *Repo) Remote() (string, error)` — the single remote, or an error naming the ambiguity
+  - `func (r *Repo) BaseRef(branch string) (string, error)` — resolves `branch` to a **remote-tracking** commit, fetching it into `refs/stele/` when it is missing
+  - `var ErrNoRemote, ErrAmbiguousRemote error`
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+package gitrepo
+
+import (
+	"errors"
+	"path/filepath"
+	"testing"
+)
+
+// A stale local branch would silently place the comparison in the past, so
+// the base is resolved as a remote-tracking ref, not as a local branch.
+func TestBaseRefPrefersTheRemoteOverAStaleLocalBranch(t *testing.T) {
+	origin := repo(t)
+	commit(t, origin, "a.txt", "one", "first")
+	parent := t.TempDir()
+	clone := filepath.Join(parent, "clone")
+	run(t, parent, "clone", "-q", "file://"+origin, clone)
+
+	// The origin moves; the clone's local main does not.
+	moved := commit(t, origin, "a.txt", "two", "second")
+	run(t, clone, "fetch", "-q", "origin")
+
+	r, _ := Open(clone)
+	got, err := r.BaseRef("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != moved {
+		t.Fatalf("BaseRef = %s, want the remote's %s, not the stale local branch", got, moved)
+	}
+}
+
+// The merge-request case: the base branch is not in the clone at all. It is
+// fetched, into refs/stele, without disturbing the user's refs.
+func TestBaseRefFetchesAnAbsentBaseWithoutDisturbingTheRepository(t *testing.T) {
+	origin := repo(t)
+	first := commit(t, origin, "a.txt", "one", "first")
+	run(t, origin, "checkout", "-q", "-b", "topic")
+	commit(t, origin, "b.txt", "two", "topic")
+
+	parent := t.TempDir()
+	clone := filepath.Join(parent, "clone")
+	// Clone only the topic branch, as a merge-request pipeline does.
+	run(t, parent, "clone", "-q", "--single-branch", "--branch", "topic", "file://"+origin, clone)
+	if _, err := run2(clone, "rev-parse", "--verify", "origin/main"); err == nil {
+		t.Fatal("the fixture is wrong: origin/main is present, so nothing is being tested")
+	}
+
+	r, _ := Open(clone)
+	got, err := r.BaseRef("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != first {
+		t.Fatalf("BaseRef = %s, want %s", got, first)
+	}
+	if _, err := run2(clone, "rev-parse", "--verify", "FETCH_HEAD"); err == nil {
+		t.Error("FETCH_HEAD was written; the fetch must not disturb the user's refs")
+	}
+	if _, err := run2(clone, "rev-parse", "--verify", "refs/stele/base"); err != nil {
+		t.Error("the fetched base was not stored under refs/stele/")
+	}
+}
+
+func TestRemoteAmbiguityIsNamed(t *testing.T) {
+	dir := repo(t)
+	commit(t, dir, "a.txt", "one", "first")
+	run(t, dir, "remote", "add", "origin", "file:///nonexistent-a")
+	run(t, dir, "remote", "add", "upstream", "file:///nonexistent-b")
+
+	r, _ := Open(dir)
+	_, err := r.Remote()
+	if !errors.Is(err, ErrAmbiguousRemote) {
+		t.Fatalf("Remote error = %v, want ErrAmbiguousRemote", err)
+	}
+	if !strings.Contains(err.Error(), "origin") || !strings.Contains(err.Error(), "upstream") {
+		t.Errorf("the error must name the remotes it cannot choose between: %v", err)
+	}
+}
+
+func TestNoRemoteIsNamed(t *testing.T) {
+	dir := repo(t)
+	commit(t, dir, "a.txt", "one", "first")
+	r, _ := Open(dir)
+	if _, err := r.Remote(); !errors.Is(err, ErrNoRemote) {
+		t.Fatalf("Remote error = %v, want ErrNoRemote", err)
+	}
+}
+```
+
+`run2` is a helper beside `run` in `testgit_test.go` that returns `(string, error)` instead of failing the test — needed because these tests assert that a command *fails*:
+
+```go
+func run2(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+```
+
+Add `"strings"` to `base_test.go`'s imports.
+
+- [ ] **Step 2: Run and see them fail** — expected `undefined: BaseRef`.
+
+- [ ] **Step 3: Implement.** `Remote` reads `git remote`; zero remotes is `ErrNoRemote`, one is that one, more than one is `ErrAmbiguousRemote` naming them all. `BaseRef` tries `refs/remotes/<remote>/<branch>` first, then `refs/stele/base`, and otherwise fetches:
+
+```go
+// The fetch writes one ref of our own and nothing else. The user's
+// remote-tracking refs and FETCH_HEAD are theirs, and this tool otherwise
+// writes only generated code and the lock.
+_, err = r.git("fetch", "--quiet", "--no-write-fetch-head",
+	remote, "+refs/heads/"+branch+":refs/stele/base")
+```
+
+- [ ] **Step 4: Run and see them pass.**
+- [ ] **Step 5: Commit** — `feat(gitrepo): acquire the base branch, fetching it when it is absent`.
+
+---
+
+### Task 4: choosing the previous revision
 
 **Files:**
 - Create: `internal/breaking/previous.go`
+- Create: `internal/breaking/testgit_test.go` — the same helpers; copy them, do not import a `_test` package
 - Create: `internal/breaking/previous_test.go`
 
+This is the task two design revisions got wrong, and the ordering of its three questions is its whole content.
+
 **Interfaces:**
-- Consumes: `gitrepo.Repo` from Task 1.
-- Produces:
-  - `type Previous struct { SHA string; Working string; Reason string }`
-  - `func Choose(r *gitrepo.Repo, base string) (Previous, bool, error)` — the bool is false when there is legitimately nothing to compare
-  - `var ErrShallow, ErrBaseAbsent, ErrUnrelated error`
+- Consumes: `gitrepo` from Tasks 2 and 3.
+- Produces: `type Previous struct{ SHA, Working, Reason string }`, `func Choose(r *gitrepo.Repo, base string) (Previous, bool, error)`.
 
-This is the task every earlier revision of the design got wrong; the tests are the specification.
-
-- [ ] **Step 1: Write the failing tests, one per case in the spec**
+- [ ] **Step 1: Write the failing tests.** These are verified: they were run against real repositories, and the ordering defect below was reintroduced deliberately to confirm they catch it.
 
 ```go
-// On a topic branch the previous revision is the merge-base — never the base
-// tip, because comparing against the tip makes a neighbour's merged change
-// fail an unrelated branch.
-func TestTopicBranchUsesMergeBase(t *testing.T) { /* build main, branch, advance main, assert Choose == fork point */ }
+package breaking
 
-// On the base branch the previous revision is the first parent: what the
-// branch looked like before the merge that landed. Merge-base here would be
-// HEAD itself, which compares nothing and can only ever emit a false signal.
-func TestBaseBranchUsesFirstParent(t *testing.T) { /* merge a topic into main, assert Choose == main-before-merge */ }
+import (
+	"testing"
 
-// A CI checkout that fabricates a merge of the topic into the base tip must
-// not be compared against the base tip. The test is structural: the parent
-// that is an ancestor of the base identifies the base side.
-func TestFabricatedMergeUsesTopicParent(t *testing.T) { /* build refs/pull-style merge commit */ }
+	"github.com/thegorangers/stele/internal/gitrepo"
+)
 
-// ...and it must still work when the base moved after the checkout, which is
-// why the test is ancestry and not equality with the tip.
-func TestFabricatedMergeSurvivesBaseMoving(t *testing.T) { /* advance main after building the merge; assert unchanged */ }
+func TestBaseBranchUsesFirstParent(t *testing.T) {
+	dir := repo(t)
+	commit(t, dir, "a.txt", "one", "first")
+	run(t, dir, "checkout", "-q", "-b", "topic")
+	commit(t, dir, "b.txt", "two", "topic work")
+	run(t, dir, "checkout", "-q", "main")
+	commit(t, dir, "c.txt", "three", "main moves")
+	mainBefore := run(t, dir, "rev-parse", "HEAD")
+	run(t, dir, "merge", "-q", "--no-ff", "-m", "merge topic", "topic")
 
-// Both parents already on the base: a re-merge. There is nothing outside the
-// base to compare, and that is reported as nothing to do, not as clean.
-func TestBothParentsOnBaseIsNothingToCompare(t *testing.T) { /* assert ok == false */ }
+	r, _ := gitrepo.Open(dir)
+	got, ok, err := Choose(r, "main")
+	if err != nil || !ok {
+		t.Fatalf("Choose: ok=%v err=%v", ok, err)
+	}
+	if got.SHA != mainBefore {
+		t.Fatalf("previous = %s, want the first parent %s (reason %q)", got.SHA, mainBefore, got.Reason)
+	}
+}
 
-// A repository's first commit has no previous revision.
-func TestFirstCommitIsNothingToCompare(t *testing.T) { /* assert ok == false */ }
+func TestTopicBranchUsesMergeBaseNotTip(t *testing.T) {
+	dir := repo(t)
+	fork := commit(t, dir, "a.txt", "one", "first")
+	run(t, dir, "checkout", "-q", "-b", "topic")
+	topicHead := commit(t, dir, "b.txt", "two", "topic work")
+	run(t, dir, "checkout", "-q", "main")
+	commit(t, dir, "neighbour.txt", "x", "a neighbour lands")
+	run(t, dir, "checkout", "-q", "topic")
 
-// A shallow clone is named as shallow, never as unrelated histories.
-func TestShallowIsNamedAsShallow(t *testing.T) { /* depth-1 clone, assert errors.Is(err, ErrShallow) */ }
+	r, _ := gitrepo.Open(dir)
+	got, ok, _ := Choose(r, "main")
+	if !ok || got.SHA != fork {
+		t.Fatalf("previous = %s, want the fork point %s", got.SHA, fork)
+	}
+	if got.Working != topicHead {
+		t.Fatalf("working = %s, want %s", got.Working, topicHead)
+	}
+}
+
+func TestFabricatedMergeUsesTopicParentAndSurvivesBaseMoving(t *testing.T) {
+	dir := repo(t)
+	fork := commit(t, dir, "a.txt", "one", "first")
+	run(t, dir, "checkout", "-q", "-b", "topic")
+	topicHead := commit(t, dir, "b.txt", "two", "topic work")
+	run(t, dir, "checkout", "-q", "main")
+	commit(t, dir, "n.txt", "x", "neighbour")
+	run(t, dir, "checkout", "-q", "--detach")
+	run(t, dir, "merge", "-q", "--no-ff", "-m", "pr merge", "topic")
+	run(t, dir, "update-ref", "refs/heads/main", run(t, dir, "commit-tree", "-p", "refs/heads/main",
+		"-m", "base moved", run(t, dir, "rev-parse", "refs/heads/main^{tree}")))
+
+	r, _ := gitrepo.Open(dir)
+	got, ok, err := Choose(r, "main")
+	if err != nil || !ok {
+		t.Fatalf("Choose: ok=%v err=%v", ok, err)
+	}
+	if got.Working != topicHead {
+		t.Fatalf("working = %s, want the topic parent %s", got.Working, topicHead)
+	}
+	if got.SHA != fork {
+		t.Fatalf("previous = %s, want the fork point %s", got.SHA, fork)
+	}
+}
+
+func TestFirstCommitHasNothingToCompare(t *testing.T) {
+	dir := repo(t)
+	commit(t, dir, "a.txt", "one", "first")
+	r, _ := gitrepo.Open(dir)
+	if _, ok, err := Choose(r, "main"); ok || err != nil {
+		t.Fatalf("ok=%v err=%v, want nothing to compare", ok, err)
+	}
+}
 ```
 
-Write these bodies out in full using the `run`/`write` helpers from Task 1 — move them into `internal/breaking/testgit_test.go` rather than importing them across packages.
+- [ ] **Step 2: Run and see them fail** — `go test ./internal/breaking/`; expected `undefined: Choose`.
 
-- [ ] **Step 2: Run and watch them fail** — `go test ./internal/breaking/ -v`.
-
-- [ ] **Step 3: Implement `Choose`**
+- [ ] **Step 3: Implement.** This code is verified — written, compiled and run against the tests above before entering this plan.
 
 ```go
-func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
+// Choose returns the revision this one is compared against.
+//
+// The order of the three questions is the whole of this function, and getting
+// it wrong is not theoretical: asking "is this a merge with one parent on the
+// base" before "is HEAD on the base" sends every ordinary merge on the base
+// branch into the nothing-to-compare exit, because on the base branch every
+// parent of HEAD is an ancestor of the base. That is the degenerate
+// base-branch comparison this design exists to avoid, reached by a different
+// route. So: on the base branch first, fabricated merge second.
+func Choose(r *Repo, base string) (Previous, bool, error) {
 	head, err := r.Head()
 	if err != nil {
 		return Previous{}, false, err
@@ -301,40 +742,15 @@ func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
 		return Previous{}, false, err
 	}
 	if len(parents) == 0 {
-		return Previous{}, false, nil // a repository's first commit
+		return Previous{}, false, nil
 	}
-
 	baseSHA, err := r.ResolveRef(base)
 	if err != nil {
-		return Previous{}, false, classify(r, base, err)
+		return Previous{}, false, err
 	}
 
-	// A fabricated merge, as a pull-request checkout produces, or a human's
-	// merge of the base into a topic branch: both have one parent on the
-	// base. The working revision is the other one. This is ancestry and not
-	// equality with the tip, because the tip moves between checkout and run.
-	if len(parents) == 2 {
-		onBase := make([]bool, 2)
-		for i, p := range parents {
-			if onBase[i], err = r.IsAncestor(p, baseSHA); err != nil {
-				return Previous{}, false, err
-			}
-		}
-		switch {
-		case onBase[0] && onBase[1]:
-			return Previous{}, false, nil // a re-merge; nothing outside the base
-		case onBase[0] != onBase[1]:
-			working := parents[0]
-			if onBase[0] {
-				working = parents[1]
-			}
-			prev, err := r.MergeBase(working, baseSHA)
-			return Previous{SHA: prev, Working: working,
-				Reason: "merge-base with " + base + ", from the topic side of a merge commit"}, true, err
-		}
-	}
-
-	// On the base branch itself, the previous revision is the first parent.
+	// Is HEAD itself on the base branch? Then the previous revision is what
+	// the branch looked like before this commit: its first parent.
 	onBase, err := r.IsAncestor(head, baseSHA)
 	if err != nil {
 		return Previous{}, false, err
@@ -344,34 +760,42 @@ func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
 			Reason: "the first parent, because HEAD is on " + base}, true, nil
 	}
 
-	prev, err := r.MergeBase(head, baseSHA)
-	if err != nil {
-		return Previous{}, false, classify(r, base, err)
+	// HEAD is off the base. A two-parent HEAD with exactly one parent on the
+	// base is a merge of the base into a topic branch, which is also the
+	// shape a pull-request checkout fabricates. Ancestry, not equality with
+	// the tip: the tip moves between checkout and run.
+	working := head
+	if len(parents) == 2 {
+		var on [2]bool
+		for i, p := range parents {
+			if on[i], err = r.IsAncestor(p, baseSHA); err != nil {
+				return Previous{}, false, err
+			}
+		}
+		if on[0] != on[1] {
+			working = parents[0]
+			if on[0] {
+				working = parents[1]
+			}
+		}
 	}
-	return Previous{SHA: prev, Working: head, Reason: "merge-base with " + base}, true, nil
+	prev, err := r.MergeBase(working, baseSHA)
+	if err != nil {
+		return Previous{}, false, err
+	}
+	reason := "merge-base with " + base
+	if working != head {
+		reason += ", from the topic side of a merge commit"
+	}
+	return Previous{SHA: prev, Working: working, Reason: reason}, true, nil
 }
 ```
 
-`classify` consults `IsShallow` **first**, then distinguishes an absent ref from unrelated histories, and returns an error naming the cause and its fix. The message for an absent base names the refspec, not the depth: a merge-request pipeline fetches only its own ref, so the base is absent at any depth and `GIT_DEPTH: 0` does not cure it.
+`Choose` calls `r.BaseRef(base)` from Task 3 rather than `ResolveRef`, so a stale local branch cannot be picked up.
 
-- [ ] **Step 4: Run and watch them pass.**
+- [ ] **Step 4: Run and see them pass.**
 
-- [ ] **Step 5: Record the known gap in a comment, where it will be read**
-
-```go
-// Two exposures are known and documented rather than designed away.
-//
-// A human's merge of the base into a topic branch has the shape this
-// function reads as a fabricated merge, so the merge commit itself is not
-// compared, and a conflict resolution that dropped a field is not seen until
-// the branch lands on the base. The base-branch run catches it then.
-//
-// A direct multi-commit push to the base branch bypasses the first-parent
-// rule: only the last commit of the push is compared. The fleet this was
-// measured on is configured so every change lands as a merge commit (14 of
-// 14 on 2026-08-28), but branch protection permits a direct push for
-// maintainers and one repository has taken 97 linear commits that way.
-```
+- [ ] **Step 5: Prove the ordering test is not decoration.** Temporarily move the two-parent block *above* the `IsAncestor(head, baseSHA)` block and re-run. Expected: `TestBaseBranchUsesFirstParent` fails with `ok=false`, because on the base branch every parent of HEAD is an ancestor of the base, so the re-merge exit swallows every ordinary merge. Restore the order afterwards. **Do not skip this step**: it is the only evidence that the test catches the defect the task exists to prevent, and that defect has been written twice already.
 
 - [ ] **Step 6: Commit**
 
@@ -379,64 +803,116 @@ func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
 git add internal/breaking/
 git commit -m "feat(breaking): choose the previous revision
 
-Merge-base on a topic branch, the first parent on the base branch. The
-first two design revisions used merge-base for both, which on the base
-branch is HEAD itself: nothing compared, and the only signal the job
-could emit was a false one.
-
-The fabricated-merge test is ancestry, not equality with the base tip,
-because the tip moves between checkout and run."
+Three questions in an order that is the whole of this function: nothing
+to compare, then HEAD on the base branch, then a merge with one parent
+on the base. Asking the third before the second sends every ordinary
+merge on the base branch into the nothing-to-compare exit, because
+there every parent of HEAD is an ancestor of the base — the degenerate
+base-branch comparison, reached by a different route."
 ```
 
 ---
 
-### Task 3: the tree shortcut
+### Task 5: the tree shortcut
 
 **Files:**
 - Create: `internal/breaking/shortcut.go`
 - Create: `internal/breaking/shortcut_test.go`
 
+Measured at 84.7% of base-branch commits fleet-wide, so this is what makes the ordinary commit free. It runs before anything is fetched or compiled.
+
 **Interfaces:**
-- Consumes: `gitrepo.Repo`, `Previous` from Task 2, `config.File` for the module roots.
-- Produces: `func Unchanged(r *gitrepo.Repo, prev Previous, roots []string, lockPath string) (bool, error)`
+- Produces: `func Unchanged(r *gitrepo.Repo, prev Previous, paths []string) (bool, error)` — `paths` are the module roots and the lock, and the caller assembles them.
 
-Measured at 84.7% of base-branch commits fleet-wide, so this is what makes the ordinary commit free. It runs *before* anything is fetched or compiled.
-
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```go
+package breaking
+
+import (
+	"testing"
+
+	"github.com/thegorangers/stele/internal/gitrepo"
+)
+
+func twoCommits(t *testing.T, second func(dir string)) (*gitrepo.Repo, Previous) {
+	t.Helper()
+	dir := repo(t)
+	commit(t, dir, "api/x.proto", "syntax = \"proto3\";\n", "first")
+	write(t, dir, "stele.lock", "version: 1\n")
+	run(t, dir, "add", ".")
+	run(t, dir, "commit", "-qm", "lock")
+	first := run(t, dir, "rev-parse", "HEAD")
+	second(dir)
+	run(t, dir, "add", ".")
+	run(t, dir, "commit", "-qm", "second")
+	head := run(t, dir, "rev-parse", "HEAD")
+	r, _ := gitrepo.Open(dir)
+	return r, Previous{SHA: first, Working: head}
+}
+
+var watched = []string{"api", "stele.lock"}
+
 func TestUnchangedWhenNeitherProtosNorLockMoved(t *testing.T) {
-	// two commits differing only in README.md
-	// assert Unchanged == true
+	r, prev := twoCommits(t, func(dir string) { write(t, dir, "README.md", "prose") })
+	got, err := Unchanged(r, prev, watched)
+	if err != nil || !got {
+		t.Fatalf("Unchanged = %v, %v; want true", got, err)
+	}
 }
 
-func TestChangedWhenAProtoMoved(t *testing.T) { /* assert false */ }
+func TestChangedWhenAProtoMoved(t *testing.T) {
+	r, prev := twoCommits(t, func(dir string) {
+		write(t, dir, "api/x.proto", "syntax = \"proto3\";\nmessage M {}\n")
+	})
+	got, err := Unchanged(r, prev, watched)
+	if err != nil || got {
+		t.Fatalf("Unchanged = %v, %v; want false", got, err)
+	}
+}
 
+// A dependency bump changes no owned file and can still break the consumers
+// of what this repository re-exports, so the lock is watched too.
 func TestChangedWhenOnlyTheLockMoved(t *testing.T) {
-	// A dependency bump changes no owned file, and can still break the
-	// consumers of what this repository re-exports.
-	// assert false
+	r, prev := twoCommits(t, func(dir string) { write(t, dir, "stele.lock", "version: 1\n# bumped\n") })
+	got, err := Unchanged(r, prev, watched)
+	if err != nil || got {
+		t.Fatalf("Unchanged = %v, %v; want false", got, err)
+	}
 }
 
-func TestAbsentRootIsNotEqualToPresentRoot(t *testing.T) {
-	// A revision that had no api/ at all must not compare equal to one that
-	// does: the sentinel for absence has to differ from every tree SHA.
-	// assert false
+// A revision that had no api/ at all must not compare equal to one that does.
+func TestAbsentPathIsNotEqualToPresentPath(t *testing.T) {
+	dir := repo(t)
+	write(t, dir, "README.md", "prose")
+	run(t, dir, "add", ".")
+	run(t, dir, "commit", "-qm", "no protos yet")
+	first := run(t, dir, "rev-parse", "HEAD")
+	commit(t, dir, "api/x.proto", "syntax = \"proto3\";\n", "protos arrive")
+	head := run(t, dir, "rev-parse", "HEAD")
+
+	r, _ := gitrepo.Open(dir)
+	got, err := Unchanged(r, Previous{SHA: first, Working: head}, []string{"api"})
+	if err != nil || got {
+		t.Fatalf("Unchanged = %v, %v; want false", got, err)
+	}
 }
 ```
 
-- [ ] **Step 2: Run and watch them fail.**
-
+- [ ] **Step 2: Run and see them fail.**
 - [ ] **Step 3: Implement**
 
 ```go
-func Unchanged(r *gitrepo.Repo, prev Previous, roots []string, lockPath string) (bool, error) {
-	for _, p := range append(append([]string(nil), roots...), lockPath) {
-		a, aok, err := r.TreeOrBlob(prev.Working, p)
+// Unchanged reports whether every watched path has the same object in both
+// revisions. Absence is compared as well as identity: a path one revision did
+// not have has not "stayed the same".
+func Unchanged(r *gitrepo.Repo, prev Previous, paths []string) (bool, error) {
+	for _, p := range paths {
+		a, aok, err := r.ObjectSHA(prev.Working, p)
 		if err != nil {
 			return false, err
 		}
-		b, bok, err := r.TreeOrBlob(prev.SHA, p)
+		b, bok, err := r.ObjectSHA(prev.SHA, p)
 		if err != nil {
 			return false, err
 		}
@@ -448,123 +924,176 @@ func Unchanged(r *gitrepo.Repo, prev Previous, roots []string, lockPath string) 
 }
 ```
 
-- [ ] **Step 4: Run and watch them pass.**
+- [ ] **Step 4: Run and see them pass.**
 - [ ] **Step 5: Commit** — `perf(breaking): skip a run whose owned trees and lock are unchanged`.
 
 ---
 
-### Task 4: compiling both revisions
+### Task 6: compiling a revision with the dependencies it recorded
 
 **Files:**
 - Create: `internal/breaking/revisions.go`
 - Create: `internal/breaking/revisions_test.go`
+- Modify: `internal/compile/compile.go` — add source-info control
 
 **Interfaces:**
-- Consumes: `gitrepo.Repo`, `Previous`, `config`, `pin`, `compile`.
-- Produces: `func Load(ctx context.Context, r *gitrepo.Repo, sha string, fetch resolve.FetchFunc) (linker.Files, []string, error)` — the files and the import paths this revision owns.
+- Produces:
+  - `type Revision struct { Files linker.Files; Owned []string }`
+  - `func Load(ctx context.Context, r *gitrepo.Repo, sha string, fetch resolve.FetchFunc, cacheDir string) (Revision, error)`
+  - `var ErrNoManifest = errors.New("breaking: the revision has no manifest")`
+  - `var ErrNoOwnedProtos = errors.New("breaking: the revision owns no proto files")`
 
-- [ ] **Step 1: Write the failing test**
+Read `internal/pin/pin_test.go` first and reuse its fixture pattern for `fetch`; do not invent a second one.
 
-Build a repository with a manifest, a lock and one proto; commit; change the proto; commit. Assert that `Load` at the first commit sees the *first* version of the file, and that both loads succeed. Use a fetch function that serves a local fixture repository, as `internal/pin`'s own tests do — read them first and follow that pattern rather than inventing a second one.
-
-Two behaviours the test must pin down, because they are the reason this task exists:
+- [ ] **Step 1: Write the failing tests**
 
 ```go
-// The previous revision is resolved with the lock that revision carried, not
-// with today's. Compiling yesterday's protos against today's pins either
-// fails outright or attributes another repository's change to this one.
-func TestPreviousRevisionUsesItsOwnLock(t *testing.T) { /* ... */ }
+// The previous revision is resolved with the lock that revision carried.
+// Compiling yesterday's protos against today's pins either fails outright or
+// attributes another repository's change to this one.
+func TestPreviousRevisionUsesItsOwnLock(t *testing.T) { /* see below */ }
 
-// A manifest with no lock fails the run. Resolving it fresh would resolve
-// every ref to today's tip, silently, which is the thing above forbidden.
-func TestManifestWithoutLockIsAnError(t *testing.T) { /* ... */ }
+// A manifest with no lock fails: resolving it fresh would pin every
+// dependency to the commit its ref names today, silently.
+func TestManifestWithoutLockIsAnError(t *testing.T) { /* see below */ }
 
-// A revision with no manifest at all predates adoption. Nothing to compare.
-func TestRevisionWithoutManifestIsNothingToCompare(t *testing.T) { /* ... */ }
+// A revision with no manifest predates adoption. Nothing to compare.
+func TestRevisionWithoutManifestIsErrNoManifest(t *testing.T) { /* see below */ }
+
+// One repository in the measured fleet owns no proto modules at all. That is
+// reported as its own condition, not as a compile failure and not as clean.
+func TestRevisionOwningNoProtosIsErrNoOwnedProtos(t *testing.T) { /* see below */ }
 ```
 
-- [ ] **Step 2: Run and watch them fail.**
+Write each body in full following `internal/pin/pin_test.go`. The bodies are not given here because they depend on that file's fixture helpers, which the implementer must read; **the four assertions above are the contract and none may be dropped.** If a body cannot be written against those helpers, that is a finding to report, not a reason to weaken the test.
 
+- [ ] **Step 2: Run and see them fail.**
 - [ ] **Step 3: Implement**
 
-`Load` materialises the revision into `t.TempDir()`-style scratch (`os.MkdirTemp`, removed by the caller), parses `stele.yaml` from it, and calls the existing resolver pointed at that directory — no new resolution path:
-
 ```go
-dir, err := os.MkdirTemp("", "stele-breaking-")
-if err != nil { return nil, nil, err }
-if err := r.Materialise(sha, dir); err != nil { return nil, nil, err }
+func Load(ctx context.Context, r *gitrepo.Repo, sha string, fetch resolve.FetchFunc, cacheDir string) (Revision, error) {
+	dir, err := os.MkdirTemp("", "stele-breaking-")
+	if err != nil {
+		return Revision{}, err
+	}
+	defer os.RemoveAll(dir)
+	if err := r.Materialise(sha, dir); err != nil {
+		return Revision{}, err
+	}
 
-manifestPath := filepath.Join(dir, "stele.yaml")
-if _, err := os.Stat(manifestPath); errors.Is(err, fs.ErrNotExist) {
-	return nil, nil, ErrNoManifest // predates adoption; the caller exits zero
+	manifestPath := filepath.Join(dir, lint.ManifestName)
+	if _, err := os.Stat(manifestPath); errors.Is(err, fs.ErrNotExist) {
+		return Revision{}, fmt.Errorf("%w: %s", ErrNoManifest, sha[:12])
+	}
+	mf, err := config.Load(manifestPath)
+	if err != nil {
+		return Revision{}, err
+	}
+	lockPath := filepath.Join(dir, lint.LockName)
+	if _, err := os.Stat(lockPath); errors.Is(err, fs.ErrNotExist) {
+		return Revision{}, fmt.Errorf(
+			"revision %s has a manifest and no %s: resolving it afresh would pin every "+
+				"dependency to the commit its ref names today, and compare this revision "+
+				"against dependencies it never used", sha[:12], lint.LockName)
+	}
+	g, err := pin.Resolve(ctx, pin.Options{Dir: dir, Manifest: mf, LockPath: lockPath, Fetch: fetch})
+	if err != nil {
+		return Revision{}, err
+	}
+	owned := ownedPaths(g)
+	if len(owned) == 0 {
+		return Revision{}, fmt.Errorf("%w: %s", ErrNoOwnedProtos, sha[:12])
+	}
+	files, err := compile.Compile(ctx, g, owned, compile.WithoutSourceInfo(false))
+	if err != nil {
+		return Revision{}, err
+	}
+	return Revision{Files: files, Owned: owned}, nil
 }
-mf, err := config.Parse(manifestPath)
-if err != nil { return nil, nil, err }
-lockPath := filepath.Join(dir, "stele.lock")
-if _, err := os.Stat(lockPath); errors.Is(err, fs.ErrNotExist) {
-	return nil, nil, fmt.Errorf("revision %s has a manifest and no stele.lock: "+
-		"resolving it afresh would pin every dependency to the commit its ref "+
-		"names today, and compare this revision against dependencies it never "+
-		"used", sha[:12])
+
+// ownedPaths is internal/lint's owned predicate, which is unexported there.
+// The predicate itself — a file with no git origin is this repository's — is
+// the one thing both must agree on; if it changes there, it changes here.
+func ownedPaths(g *resolve.Graph) []string {
+	var out []string
+	for _, p := range g.ImportPaths() {
+		if f, ok := g.FileFor(p); ok && f.Origin.Git == "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
-g, err := pin.Resolve(ctx, pin.Options{Dir: dir, Manifest: mf, LockPath: lockPath, Fetch: fetch})
 ```
 
-Owned import paths are those whose `Origin.Git` is empty, exactly as `internal/lint`'s `owned` does — read it and use the same predicate rather than a second spelling of it.
+- [ ] **Step 4: Add source-info control to `internal/compile`.** The previous revision never supplies a position, and `Compile` hard-codes `SourceInfoStandard`. Add a variadic option so no existing caller changes:
 
-- [ ] **Step 4: Run and watch them pass.**
-- [ ] **Step 5: Commit** — `feat(breaking): compile a revision with the dependencies it recorded`.
+```go
+type Option func(*options)
+
+// WithoutSourceInfo drops source information from the compiled files. A caller
+// that will never report a position — the older side of a comparison — pays
+// for every comment in every file otherwise. The default is unchanged, because
+// dropping information early cannot be undone downstream.
+func WithoutSourceInfo(drop bool) Option { return func(o *options) { o.dropSourceInfo = drop } }
+
+func Compile(ctx context.Context, g *resolve.Graph, targets []string, opts ...Option) (linker.Files, error)
+```
+
+Write a test in `internal/compile/compile_test.go` asserting that the default still retains source info and that the option drops it. Then pass `WithoutSourceInfo(true)` for the previous side in `Load` — a `prev bool` parameter, not a second function.
+
+- [ ] **Step 5: Run the whole suite and see it pass** — `go test ./...`, because this task changes a shared signature.
+- [ ] **Step 6: Commit** — `feat(breaking): compile a revision with the dependencies it recorded`.
 
 ---
 
-### Task 5: the descriptor diff
+### Task 7: the descriptor diff
 
 **Files:**
 - Create: `internal/breaking/diff.go`
 - Create: `internal/breaking/diff_test.go`
 
+`Diff` reports neutral *changes*; Task 9 decides which are breaking. Splitting them is what lets the type matrix be a function of two kinds rather than a rule that walks descriptors.
+
 **Interfaces:**
 - Produces:
-  - `type Change struct { Kind Kind; Subject string; Path string; Pos lint.Position; Detail string }`
-  - `func Diff(prev, cur linker.Files, owned []string) []Change`
+  - `type Kind int` with `Removed`, `Added`, `Modified`
+  - `type Change struct { Kind Kind; Subject string; Path string; Pos lint.Position; Before, After protoreflect.Descriptor }`
+  - `func Diff(prev, cur Revision) []Change`
 
-`Diff` produces neutral *changes*; Task 6 decides which are breaking. Splitting them is what lets the type matrix be a pure function of two types rather than a rule that has to walk descriptors.
-
-- [ ] **Step 1: Write the failing test** — index by full name, both directions:
+- [ ] **Step 1: Write the failing tests**
 
 ```go
-func TestFieldRemovedIsDetected(t *testing.T)   { /* Order.eta present, then absent */ }
-func TestFieldAddedIsNotAChange(t *testing.T)   { /* additions are never breaking; assert none reported */ }
-func TestRenameIsRemovalPlusAddition(t *testing.T) { /* same number, new name */ }
-func TestFileRemovedYieldsFileSubject(t *testing.T) {
-	// A removed file has no full name. Its subject is its import path,
-	// tagged, so it can never be mistaken for a declaration.
-	// assert Subject == "file:api/orders/v1/order.proto"
-}
+// Additions are never breaking, but they are reported as changes: a rename is
+// a removal and an addition, and the classifier needs both halves to pair
+// them. This is why Diff reports changes and not findings.
+func TestAdditionIsAChangeAndNotAFinding(t *testing.T) { /* build two Revisions from fixtures; assert Kind == Added */ }
+
+func TestFieldRemovedIsReported(t *testing.T) { /* assert Kind == Removed, Subject == "example.orders.v1.Order.eta" */ }
+
+// A removed file has no full name. Its subject is its import path, tagged, so
+// it can never be mistaken for a declaration.
+func TestRemovedFileHasATaggedSubject(t *testing.T) { /* assert Subject == "file:api/orders/v1/order.proto" */ }
 ```
 
-- [ ] **Step 2: Run and watch them fail.**
-- [ ] **Step 3: Implement** — build `map[protoreflect.FullName]descriptor` for both sides over messages, fields, oneofs, enums, enum values, services and methods, restricted to `owned`; walk the union of keys.
+Write the bodies against small in-repository fixtures compiled by Task 6's helpers. **The three assertions are the contract.**
 
-Subjects are supplied by this function, not derived from a position, and the comment must say why:
+- [ ] **Step 2–4: fail, implement, pass.** Index both sides by `protoreflect.FullName` over messages, fields, oneofs, enums, enum values, services and methods, restricted to `Owned`; walk the union of keys. The subject is stated by this function:
 
 ```go
 // The subject is stated here rather than derived from a position, which is
 // how internal/lint does it. That constraint exists so a rule in another
 // process, which can return only a line and a column, is not second-class.
-// There is no plugin host here, and this function holds both descriptor
-// sets, so it knows a removed field's name exactly. Deriving it from a
-// position could not name a removed field at all: it would name the
-// surviving message, and one permission would then license the removal of
-// every field of that message.
+// There is no plugin host here and this function holds both descriptor sets,
+// so it knows a removed field's name exactly. Deriving it from a position
+// could not name a removed field at all: it would name the surviving message,
+// and one permission would then license the removal of every field of it.
 ```
 
-- [ ] **Step 4: Run and watch them pass.**
 - [ ] **Step 5: Commit** — `feat(breaking): diff two revisions by full name`.
 
 ---
 
-### Task 6: the type-compatibility matrix, measured
+### Task 8: the wire-compatibility matrix, measured
 
 **Files:**
 - Create: `internal/breaking/wiretypes.go`
@@ -573,171 +1102,214 @@ Subjects are supplied by this function, not derived from a position, and the com
 **Interfaces:**
 - Produces: `func WireCompatible(from, to protoreflect.Kind) bool`
 
-- [ ] **Step 1: Write the measuring test first — it is the specification**
+- [ ] **Step 1: Write the measuring test — it is the specification**
+
+The oracle is written out here because it is the hardest code in the plan and the previous plan left it as a comment:
 
 ```go
-// The matrix is measured, not written, because hand-written enumerations in
-// this repository have been wrong four revisions running.
+// The matrix is measured because hand-written enumerations in this repository
+// have been wrong four revisions running. "Encode as one, decode as the
+// other" is not the oracle: it measures the wire type. float and fixed32 are
+// both four bytes and every decode succeeds, while 1.0 reads back as
+// 1065353216.
 //
-// "Encode as one, decode as the other" is not the oracle: it measures the
-// wire type. float and fixed32 are both four bytes and every decode
-// succeeds, while 1.0 reads back as 1065353216. So the oracle is a corpus
-// and a defined cross-type equality: numeric kinds compare numerically,
-// string and bytes compare as byte sequences, each direction separately, and
-// a pair is compatible only if the whole corpus agrees.
+// So: a corpus rather than a sample, and an equality defined across kinds.
+var corpus = []int64{0, 1, -1, 127, 128, -128, 2147483647, -2147483648, 4294967295, 9223372036854775807}
+
+// measure encodes each corpus value as from and decodes it as to, and reports
+// whether every value survives with its meaning intact. Numeric kinds compare
+// numerically, which is what rejects float against fixed32.
+func measure(t *testing.T, from, to protoreflect.Kind) bool { /* built with dynamicpb over a synthesised descriptor */ }
+
 func TestMatrixIsWhatMeasurementSays(t *testing.T) {
 	for _, from := range kinds {
 		for _, to := range kinds {
-			want := measure(t, from, to) // encodes the corpus, decodes, compares
-			if got := WireCompatible(from, to); got != want {
+			if got, want := WireCompatible(from, to), measure(t, from, to); got != want {
 				t.Errorf("WireCompatible(%v, %v) = %v, measured %v", from, to, got, want)
 			}
 		}
 	}
 }
 
-func TestFloatAndFixed32AreNotCompatible(t *testing.T) {
+func TestFloatAndFixed32ShareAWireTypeAndNotAValue(t *testing.T) {
 	if WireCompatible(protoreflect.FloatKind, protoreflect.Fixed32Kind) {
-		t.Fatal("float and fixed32 share a wire type and not a value")
+		t.Fatal("float and fixed32 are four bytes each and mean different numbers")
 	}
 }
 ```
 
-The corpus is zero, one, minus one, the boundaries of every width, a value that overflows a narrower type, and invalid UTF-8 for `string`/`bytes`.
+Build `measure` with `dynamicpb` over a synthesised one-field message: set the value with kind `from`, marshal, unmarshal into a message whose field has kind `to`, and compare numerically. String and bytes compare as byte sequences, each direction separately, and the corpus gains an invalid-UTF-8 case for them.
 
-- [ ] **Step 2: Run and watch it fail.**
-- [ ] **Step 3: Implement `WireCompatible` as a table**, and let the test correct it. Where the table and the measurement disagree, **stop and resolve it against the protobuf encoding specification** — do not edit the table to match the measurement reflexively, and do not edit the measurement to match the table. The spec requires a human decision here.
-- [ ] **Step 4: Run and watch it pass.**
+- [ ] **Step 2: Run and see it fail.**
+- [ ] **Step 3: Implement `WireCompatible` as a table.** **Where the table and the measurement disagree, stop.** Do not edit either to match the other: resolve it against the protobuf encoding specification and record the reasoning in a comment. The spec requires a human decision at this point, and the previous plan revision pre-committed to believing the measurement, which would have enshrined the float/fixed32 answer.
+- [ ] **Step 4: Run and see it pass.**
 - [ ] **Step 5: Commit** — `feat(breaking): a measured wire-compatibility matrix`.
 
 ---
 
-### Task 7: the rules
+### Task 9: the rules
 
 **Files:**
 - Create: `internal/breaking/rules.go`
 - Create: `internal/breaking/rules_test.go`
-- Create: `internal/breaking/testdata/` — paired fixtures
+- Create: `internal/breaking/testdata/<case>/{before,after}/`
 
 **Interfaces:**
-- Produces: `func Classify(changes []Change, prev, cur linker.Files) []Finding`, and the ids below.
+- Produces:
+  - `type Category int` with `Wire`, `Source`
+  - `type Finding struct { Rule string; Category Category; Subject string; Path string; Pos lint.Position; Message string; Fix string; Change string }` — `Change` is the discriminant plan B's permissions match on, empty where the rule has none
+  - `func Classify(changes []Change, prev, cur Revision) []Finding`
 
-Ids, fixed now because `RELEASING.md` makes them permanent:
+**The id set, settled here and permanent.** Renames and removals are both present, and the rule that decides between them is stated because the previous plan minted contradictory ids without one: **a removal and an addition within the same parent are reported as a rename when number, type and cardinality all match and only the name differs; otherwise they are a removal and an addition.**
 
-`break/field_removed`, `break/field_renamed`, `break/field_number_changed`, `break/field_type_changed`, `break/field_cardinality_changed`, `break/field_oneof_changed`, `break/message_removed`, `break/enum_removed`, `break/enum_value_removed`, `break/enum_value_number_changed`, `break/service_removed`, `break/method_removed`, `break/method_signature_changed`, `break/method_streaming_changed`, `break/file_removed`, `break/go_package_changed`.
+Wire: `break/field_number_changed`, `break/field_type_changed`, `break/field_cardinality_changed`, `break/field_oneof_changed`, `break/enum_value_number_changed`, `break/package_removed`, `break/package_renamed`, `break/service_removed`, `break/service_renamed`, `break/method_removed`, `break/method_renamed`, `break/method_signature_changed`, `break/method_streaming_changed`.
 
-- [ ] **Step 1: Write paired fixtures, one per rule, in both directions**
+Source: `break/field_removed`, `break/field_renamed`, `break/message_removed`, `break/message_renamed`, `break/enum_removed`, `break/enum_renamed`, `break/enum_value_removed`, `break/enum_value_renamed`, `break/file_removed`, `break/go_package_changed`.
 
-Every rule gets two fixtures: one where it fires, one where a legal change of the same shape leaves it silent. A rule with only the first half is not known to detect what it claims.
+`break/file_removed` fires **only when the file's declarations survive elsewhere** — a file whose contents are gone reports the declaration removals, and reporting both would double-count. It exists because a consumer imports a *path*, so a file split or move breaks the import even when every full name survives.
+
+- [ ] **Step 1: Write the fixtures and the table.** Every rule gets two: one where it fires and one where a legal change of the same shape leaves it silent. A rule with only the first half is not known to detect what it claims.
 
 ```go
-// Each entry names a directory under testdata/ holding before/ and after/.
 var cases = []struct {
-	dir      string
-	wantRule string // empty means: this change is legal and nothing fires
+	dir      string // testdata/<dir>/{before,after}
+	wantRule string // empty means: legal, nothing fires
 }{
 	{"field_removed", "break/field_removed"},
-	{"field_added", ""},                    // additions are never breaking
-	{"field_type_widened_int32_int64", ""}, // wire-compatible
-	{"field_type_int32_string", "break/field_type_changed"},
-	// ...one pair per rule
+	{"field_added", ""},
+	{"field_renamed", "break/field_renamed"},
+	{"field_type_int32_to_int64", ""},
+	{"field_type_int32_to_string", "break/field_type_changed"},
+	{"field_number_changed", "break/field_number_changed"},
+	{"field_reordered_same_numbers", ""},
+	// ...one pair for every id above; write them all out.
 }
 ```
 
-- [ ] **Step 2: Run and watch them fail.**
-- [ ] **Step 3: Implement `Classify`.** Each finding carries the category (wire or source) and, where the rule has one, the discriminant that plan B's permissions will match on — for a type change the pair of kinds, for a oneof change the destination. **Removals have no discriminant**: the subject is the whole of the change.
-- [ ] **Step 4: Run and watch them pass.**
-- [ ] **Step 5: Commit** — `feat(breaking): the first slice of rules, each with a legal counterpart`.
+- [ ] **Step 2: Run and see them fail.**
+- [ ] **Step 3: Implement `Classify`.** Findings carry their category, and their discriminant where they have one: the pair of kinds for a type change, the destination for a oneof change, the direction for a cardinality change. **Removals have no discriminant and set `Change` empty**, and plan B refuses a permission that supplies one.
+- [ ] **Step 4: Run and see them pass.**
+- [ ] **Step 5: Commit** — `feat(breaking): the rules, each with a legal counterpart`.
 
 ---
 
-### Task 8: the report
+### Task 10: what the closure comparison reports
+
+**Files:**
+- Create: `internal/breaking/closure.go`
+- Create: `internal/breaking/closure_test.go`
+
+The spec makes this constitutive of the producer run, not an extra: "bumping a dependency pin can break your consumers while your own files are byte-identical… **So the producer run also compares the resolved closure reachable from owned modules' imports**." Task 5 already pays the cost of a full run whenever the lock moves; without this task it pays that cost and then reports nothing.
+
+**Interfaces:**
+- Produces: `func Reachable(rev Revision) []string` and a `Classify` pass over the closure, whose findings carry `Category` as above and a message naming the dependency.
+
+- [ ] **Step 1: Write the failing test** — a repository whose own protos are byte-identical between two revisions, whose lock moves a dependency to a revision where a message it re-exports lost a field. Assert a finding. Then the counterpart: a dependency bump that changes nothing reachable reports nothing.
+- [ ] **Step 2–4: fail, implement, pass.**
+- [ ] **Step 5: Commit** — `feat(breaking): report changes in the closure this repository re-exports`.
+
+---
+
+### Task 11: the report
 
 **Files:**
 - Create: `internal/breaking/report.go`
 - Create: `internal/breaking/report_test.go`
 
-- [ ] **Step 1: Write the failing test**
-
-Findings render as `path:line:col: category: rule: message`, matching the standard `stele lint` renders to. Three things the test must hold:
+- [ ] **Step 1: Write the failing tests**
 
 ```go
-// Every report names the blind zone, because a report that says "no breaking
-// changes" without qualification reads as "safe to change anything".
+// The format is rule.Finding's, whose third field is the SEVERITY — not the
+// category. Editors and CI log scrapers parse that shape, and the category
+// goes in the message, where it is prose.
+func TestRenderMatchesTheStandardDiagnosticShape(t *testing.T) {
+	// assert: api/orders/v1/order.proto:12:3: error: break/field_removed: ...
+}
+
+// Every report names the blind zone, because "no breaking changes" without
+// qualification reads as "safe to change anything".
 func TestFooterNamesTheBlindZone(t *testing.T) {
-	out := Render(nil, Info{Previous: "abc1234", Reason: "merge-base with master"})
+	out := Render(nil, Info{Previous: "abc1234", Reason: "merge-base with main"})
 	for _, want := range []string{"json_name", "int32", "google.api.http"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("footer does not name %q", want)
+			t.Errorf("the footer does not name %q", want)
 		}
 	}
 }
 
-// A clean run says what it compared. "No breaking changes" with nothing
+// A clean run says what it compared: "no breaking changes" with nothing
 // behind it is indistinguishable from a run that compared nothing.
 func TestCleanRunNamesWhatItCompared(t *testing.T) { /* assert the SHA and the reason appear */ }
 
-// A run with nothing to compare says so, and is not rendered as clean.
-func TestNothingToCompareIsNotClean(t *testing.T) { /* ... */ }
+// The three cases that are NOT clean, each rendered as itself.
+func TestNothingToCompareIsNotRenderedAsClean(t *testing.T)  { /* ... */ }
+func TestShortcutSkipIsNotRenderedAsClean(t *testing.T)      { /* the 84.7% case: say the trees are unchanged */ }
+func TestOwningNoProtosIsNotRenderedAsClean(t *testing.T)    { /* ErrNoOwnedProtos */ }
+
+// Plan A cannot fail a build, and the report says so rather than leaving a
+// reader to infer it from an exit status.
+func TestReportSaysItIsReportOnly(t *testing.T) { /* ... */ }
 ```
+
+Write every body out.
 
 - [ ] **Step 2–4: fail, implement, pass.**
 - [ ] **Step 5: Commit** — `feat(breaking): a report that names what it compared and what it cannot see`.
 
 ---
 
-### Task 9: `stele breaking`
+### Task 12: `stele breaking`
 
 **Files:**
 - Create: `cmd/stele/breaking.go`
-- Modify: `cmd/stele/main.go` — add `case "breaking":` to the dispatch at line 55
+- Modify: `cmd/stele/main.go` — the `usage` constant (lines 16-30) **and** the dispatch (line ~55). `main_test.go` asserts every command appears in `usage`; a command added to the dispatch alone fails that test.
 - Modify: `cmd/stele/main_test.go`
-- Modify: `README.md`
 
-**Interfaces:**
-- Flags: `--against <ref>` (uses that revision directly, no merge-base), `--base <branch>` (overrides `breaking.base`; until plan B lands the manifest key does not exist, so this flag is how the base is named).
+**Flags**, modelled on `cmd/stele/lint.go` — read it first: `--dir` (the repository, default `.`), `--base` (the base branch; plan B moves this into the manifest as `breaking.base`), `--against <ref>` (that revision directly, no merge-base), `--cache-dir`, and whatever `lint.go` uses to build its fetcher. `pin.Resolve` fails with "pin: no fetcher" if one is not supplied.
 
-- [ ] **Step 1: Write the failing end-to-end test** in `main_test.go`, following the shape the existing command tests use: build a repository, run the command, assert exit status and output. Cases: a clean run exits 0; a removal exits non-zero and names the field; nothing-to-compare exits 0 and says so; a shallow clone exits non-zero naming shallowness.
-- [ ] **Step 2: Run and watch it fail.**
-- [ ] **Step 3: Implement.** Wire Tasks 2–8 in order: choose, shortcut, load both, diff, classify, render. Document `--against` in `README.md` as unsuitable for CI, because `--against origin/master` is exactly the neighbour-blaming comparison one copy-paste away.
-- [ ] **Step 4: Run and watch it pass.**
-- [ ] **Step 5: Run the whole suite, and the hygiene test explicitly**
+`--against` needs a branch in `Choose`, so add it there in this task with its own test: `TestAgainstUsesTheRevisionDirectly`, asserting `Previous.SHA` is the named revision and `Working` is HEAD.
 
-```
-go test ./... && go test -count=1 ./internal/hygiene/
-```
-
-- [ ] **Step 6: Commit** — `feat(stele): the breaking command`.
+- [ ] **Step 1: Write the failing end-to-end tests** in `main_test.go`, following the table the existing command tests use: `breaking` appears in the usage; a clean run exits 0; a removal exits **0** and names the field; nothing-to-compare exits 0 and says so; a shallow clone exits **non-zero** naming shallowness — a failure to compare is still a failure, and only *findings* are non-fatal in plan A.
+- [ ] **Step 2: Run and see them fail.**
+- [ ] **Step 3: Implement.** Wire Tasks 4–11 in order: choose, shortcut, load both, diff, classify, closure, render. Exit zero on findings; exit non-zero only when the comparison could not be made.
+- [ ] **Step 4: Run the whole suite** — `go test ./... && go test -count=1 ./internal/hygiene/`.
+- [ ] **Step 5: Commit** — `feat(stele): the breaking command, report-only`.
 
 ---
 
-### Task 10: the narrowing that makes the previous side cheaper
+### Task 13: the documents that say this does not exist
 
 **Files:**
-- Modify: `internal/compile/compile.go:47-79`
-- Modify: `internal/compile/compile_test.go`
+- Modify: `README.md:286` — "**There is no breaking-change detection.**"
+- Modify: `README.md` — the command list and a section for `breaking`
+- Modify: `docs/ROADMAP.md:25` and its milestone 6 section — "Breaking-change detection. Nothing compares this revision against a previous one."
+- Modify: `CHANGELOG.md` — under `[Unreleased]`
 
-The previous revision never supplies a position, so it does not need source info, and `Compile` hard-codes `SourceInfoStandard` with no way to ask for less.
+Landing Tasks 1–12 makes both documents false, and `RELEASING.md` makes the changelog part of cutting a release.
 
-- [ ] **Step 1: Write the failing test** — a compile with source info off produces descriptors with no `SourceCodeInfo`, and one with it on still does. The existing comment in `compile.go` says dropping information early cannot be undone downstream; the test must show the default is unchanged, so no existing caller is affected.
-- [ ] **Step 2–4: fail, implement (an option, defaulting to today's behaviour), pass.**
-- [ ] **Step 5: Commit** — `perf(compile): let a caller compile without source info`.
+- [ ] **Step 1: Update `README.md`** — document `breaking`, its flags, that it is report-only in this release, and the blind zone. Document `--against` as unsuitable for a CI default, because `--against origin/master` is exactly the neighbour-blaming comparison one copy-paste away.
+- [ ] **Step 2: Update `docs/ROADMAP.md`** — strike the two claims, and state what is still missing: the valve (plan B) and the evidence (plan C).
+- [ ] **Step 3: Add the changelog entries** under the existing categories — `Added` for the command and its flags, `Reports and messages` for the footer, `Internal` for the compile option. Note in the entry that the command is report-only and that plan B introduces the non-zero exit together with the valve, so the exit-status change is announced once.
+- [ ] **Step 4: Run the whole suite.**
+- [ ] **Step 5: Commit** — `docs: the breaking command exists`.
 
 ---
 
 ## Self-review
 
-**Spec coverage.** Acquiring the previous revision → Tasks 1, 2. Tree shortcut → 3. Compiling with the revision's own lock, and the three revision states → 4. Findings and typed subjects → 5. Type matrix and its oracle → 6. The two categories and paired fixtures → 7. Blind-zone footer and "never report an empty comparison as clean" → 8. Command and failure taxonomy → 9. Cost narrowing → 10.
+**Spec coverage.** Namespace reservation → 1. Local git driver → 2. Base-ref acquisition, remote rules, `refs/stele/*` → 3. Previous revision, all five states → 4. Tree shortcut → 5. Compilation with the revision's own lock, the three revision states, the cost narrowing → 6. Diff and typed subjects → 7. Type matrix and its oracle → 8. Both categories, the id set, paired fixtures, discriminants → 9. Closure comparison → 10. Blind-zone footer, "never render an empty comparison as clean" in all three of its forms → 11. Command, flags, `--against`, exit status → 12. Documents and changelog → 13.
 
-**Deliberately not covered here, and why.** `allow`, `moves`, `--audit`, `--prune`, the `breaking:` manifest key and `schema/stele.schema.json` are plan B — they are the valve, and none of them can be designed against a comparison nobody has run yet. The shadow period, the open-merge-request measurement and its independent oracle are plan C. The dependency-closure comparison (a pin bump breaking consumers while owned files are identical) is **deferred to plan B** with the valve, because until a permission exists there is no way to accept one of its findings; the spec's scope section is otherwise implemented by Task 4's `owned` predicate.
+**Failure taxonomy, counted against the spec:** shallow (3, 12), base ref absent (3), no remote and ambiguous remote (3), unrelated histories (4), first commit (4), both parents on the base (4), no manifest (6), manifest without lock (6), owns no protos (6, 11). **One is not covered: a rule that crashes.** In plan A every rule is in-process and a panic is a bug rather than a condition, so there is nothing to catch; it becomes real in plan B if a rule host is added, and is recorded here so it is not lost.
 
-**Known gaps carried from the spec, not introduced here:** a human's merge of the base into a topic branch leaves the merge commit itself uncompared; a direct multi-commit push to the base branch is compared only against its last commit; a repository owning no proto modules (one exists in the measured fleet) has an empty producer comparison, which Task 8 must report rather than render as clean.
+**Not covered, deliberately:** `allow`, `moves`, `--audit`, `--prune`, the `breaking:` manifest key, `schema/stele.schema.json`, and the non-zero exit — all plan B. The shadow period and the open-merge-request measurement — plan C.
+
+**Known gaps carried from the spec:** a human's merge of the base into a topic branch leaves the merge commit itself uncompared until the branch lands; a direct multi-commit push to the base branch is compared only against its last commit, and one repository in the measured fleet has taken 97 commits that way.
+
+**Two tests in this plan are elided and say so** — Task 6's four bodies and Task 7's three — because they depend on fixture helpers in `internal/pin/pin_test.go` that the implementer must read. In both cases the assertions are stated as the contract and none may be dropped. Everywhere else the bodies are written out, because a Go test whose body is a comment compiles and passes.
 
 ---
 
 ## Execution
-
-Plan complete. Two options:
 
 1. **Subagent-driven (recommended)** — a fresh subagent per task, reviewed between tasks.
 2. **Inline** — executed in this session with checkpoints.
