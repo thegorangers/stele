@@ -1,31 +1,27 @@
 # Breaking-change detection
 
-Status: design, second revision. Not implemented.
+Status: design, third revision. Not implemented.
 
-The first revision of this document was reviewed adversarially and did not
-survive. What it got right was the core — compare two compiled revisions, in two
-categories — and what it got wrong was almost everything around it: the valve
-reproduced the failure the design was built to avoid, the identity of a finding
-could not name what it was about, and the acquisition of the base revision was
-specified against the wrong cause. The findings are recorded in "What the first
-revision got wrong" at the end, because a design that hides its own refuted
-version invites the next author to re-derive it.
+Two earlier revisions were reviewed adversarially and did not survive. The core —
+compare two compiled revisions in two categories — has never been challenged in
+four reviews. Everything fatal was in one place: **how the previous revision is
+obtained**, which the first two revisions specified without measuring anything.
+
+The third revision replaces that speculation with measurement. Where a number
+appears below it was measured on a real fleet of fourteen repositories on
+2026-08-28, and the method is named so it can be re-run when it goes stale. Two
+findings that adversarial review called fatal were **refuted by that
+measurement**, which is recorded rather than quietly dropped: a reviewer's
+verdict is data, not judgement.
 
 ## What this is for
 
 `stele` generates code from contracts and pins the contracts it consumes. It
-cannot yet answer the question every consumer of those contracts has: **did this
-change break me?**
+cannot yet answer the question every consumer has: **did this change break me?**
 
-Two people ask it:
-
-- The **producer**, changing a contract, asking whether consumers will break.
-- The **consumer**, taking a newer revision of a dependency, asking whether
-  anything they actually import changed under them.
-
-One comparison engine answers both; only the source of the *previous* revision
-differs. This document specifies the producer side and states what the consumer
-side inherits.
+The **producer** asks it of their own change; the **consumer** asks it of a
+dependency that moved. One comparison engine answers both and only the source of
+the previous revision differs. This document specifies the producer side.
 
 ## What counts as breaking
 
@@ -40,84 +36,122 @@ side inherits.
 
 ### The blind zone, stated because silence reads as safety
 
-JSON and behavioural compatibility is **deliberately out of scope**, and that
-decision costs real coverage. Three breakages pass green, and they are named here
-and printed in every report's footer rather than left for a consumer to discover:
+JSON and behavioural compatibility is out of scope, and that costs real coverage.
+Three breakages pass green. They are named here and printed in every report's
+footer:
 
-- **`json_name` changed.** Same field name, same number. Every `protojson` and
+- **`json_name` changed** — same field name, same number; every `protojson` and
   transcoding consumer breaks.
-- **`int32` → `int64`.** Wire-compatible, so this design calls it safe. In
-  `protojson`, 64-bit integers serialise as **strings**: `5` becomes `"5"`. A
-  strict JSON consumer breaks.
-- **`google.api.http` changed.** Path, method or body. Pure behaviour, invisible
-  to both categories, and in a fleet with transcoding it is the most likely real
-  breakage of the three.
+- **`int32` → `int64`** — wire-compatible, so this design calls it safe, but
+  `protojson` serialises 64-bit integers as **strings**: `5` becomes `"5"`.
+- **`google.api.http` changed** — pure behaviour, invisible to both categories,
+  and in a fleet with transcoding the most likely real breakage of the three.
 
-A report that says "no breaking changes" means no breaking changes *in the two
-categories defined here*, and says so in those words.
+A report saying "no breaking changes" means none *in the two categories defined
+here*, and says so in those words.
 
-### The type-compatibility matrix is measured, and the oracle is specified
+### The type matrix is measured, and the oracle is specified
 
 Hand-written enumerations in this project have been wrong four revisions running,
-so the matrix is built by a test. The first revision of this document said only
-"encode as one, decode as the other" — which measures the wire *type*, not
-compatibility, and would have declared `float` and `fixed32` compatible because
-both are four bytes and every decode succeeds, while `1.0` reads back as
-`1065353216`.
+so the matrix is built by a test. "Encode as one, decode as the other" is not
+enough: it measures the wire *type* and would call `float` and `fixed32`
+compatible, because both are four bytes and every decode succeeds while `1.0`
+reads back as `1065353216`.
 
-The oracle is therefore stated:
+- **A corpus, not a sample.** Zero, one, minus one, the boundaries of every width,
+  values overflowing a narrower type, invalid UTF-8 for `string`/`bytes`. A pair
+  is compatible only if the whole corpus agrees.
+- **Cross-type equality is defined.** Numeric types compare numerically — which
+  rejects `float`/`fixed32`. `string` and `bytes` compare as byte sequences, each
+  direction separately.
+- **Disagreement halts.** Where measurement and prose disagree, neither wins
+  automatically: the run fails and a human resolves it against the protobuf
+  encoding specification.
 
-- **Corpus, not a sample value.** Zero, one, minus one, the boundaries of every
-  width, values that overflow a narrower type, invalid UTF-8 for `string`/`bytes`.
-  A single sample decides nothing; a pair is compatible only if the whole corpus
-  agrees.
-- **Equality is cross-type and defined.** Numeric types compare numerically —
-  which is what rejects `float`/`fixed32`. `string` and `bytes` compare as byte
-  sequences, in both directions separately, which is what exposes the asymmetry.
-- **Disagreement halts.** Where the measurement and the prose above disagree,
-  neither wins automatically: the run fails and a human resolves it against the
-  protobuf encoding specification. The first revision pre-committed to believing
-  the measurement, which would have enshrined the `float`/`fixed32` answer.
-
-The matrix covers ordered pairs of scalar types. Every other hazard — `map` versus
-a repeated entry message, oneof movement, cardinality — is not a pair of scalars
-and is covered by paired fixtures instead, one per rule, in both directions.
+The matrix covers ordered pairs of scalars. Every other hazard — `map` versus a
+repeated entry, oneof movement, cardinality — is covered by paired fixtures, one
+per rule, in both directions.
 
 ## Acquiring the previous revision
-
-This is where the first revision was specified against the wrong cause. Depth is
-not the problem.
 
 **On a topic branch**, the previous revision is the merge-base of the working
 revision and the base branch named by `breaking.base`. Never the tip: comparing
 against the tip makes a neighbour's merged change fail an unrelated branch.
 
-**On the base branch itself**, the previous revision is HEAD's **first parent** —
-what the branch looked like before the change that just landed. The first revision
-of this document used merge-base here too, which on the base branch is HEAD
-itself: the comparison was empty, no rule could ever fire, and the only signal the
-job could produce over its whole life was a false one. A run on the base branch
-must be able to detect what just merged, or it is theatre.
+**On the base branch**, the previous revision is HEAD's **first parent** — what
+the branch looked like before the change that landed. The first revision used
+merge-base here too, which on the base branch is HEAD itself: nothing compared,
+no rule able to fire, and the only signal the job could ever emit was a false one.
+
+Review called the first-parent rule unsound, on the ground that a fast-forward or
+rebase merge lands several commits and only the last is compared. **Measured, and
+refuted for this fleet**: all fourteen projects are configured `merge_method =
+merge`; none is `ff` or `rebase_merge`; every merge request lands as one merge
+commit whose first parent is the base before it; and since adoption every
+first-parent commit in all fourteen repositories is a merge commit. Method:
+`glab api projects/:id` for the setting, and `git rev-list --first-parent
+--parents` over each base branch for the reality, because the setting and the
+history can disagree.
+
+**The rule's real exposure is different from the one predicted, and is
+documented rather than assumed away:** a direct multi-commit push to the base
+branch bypasses it, and there is a precedent in the fleet — one repository took
+97 linear commits in a single push. Branch protection permits it for maintainers.
+A change arriving that way is compared only against the last commit of the push.
 
 **Under a CI checkout that fabricates a merge commit** — `actions/checkout`
 resolves a pull request to a merge of the topic into the base tip — the merge-base
-of that HEAD with the base *is* the base tip, silently becoming the comparison
-this design rejects. Detected, not tolerated: when HEAD is a merge whose one
-parent is the base tip, the working revision is the *other* parent.
+of that HEAD with the base *is* the base tip, silently becoming the rejected
+comparison. The test is **structural, not an equality with the tip**: a parent
+that is an ancestor of the base identifies the base side, and the working
+revision is the other parent. Testing equality with the tip fails whenever the
+base moved between checkout and run, which on an active repository is normal.
+
+Two consequences of that test are stated because they are not obvious:
+
+- **A human's merge of the base into a topic branch has the same shape.** The
+  tool takes the topic parent, so the merge commit itself is not compared — and a
+  conflict resolution that drops a field is the most natural way to introduce a
+  breakage by hand. This is a known gap of the topic-branch path; the base-branch
+  run catches it when the branch lands.
+- **When both parents are ancestors of the base** — a re-merge, or a merge of two
+  already-landed branches — there is nothing outside the base to compare. The run
+  says so and exits zero rather than reporting an empty comparison as clean.
 
 **Acquiring the base branch is a step, not an assumption.** A GitLab merge-request
-pipeline fetches only the merge-request ref; the base branch is not truncated, it
-is **absent**, at any depth. `GIT_DEPTH: 0` does not fix it. The tool fetches the
-base ref itself when it is missing, and when it cannot, the three causes are
-distinguished and named separately, because they have three different fixes:
-a shallow repository (`--is-shallow-repository`), a ref that is absent, and
-histories that are genuinely unrelated. "Name the depth" would have sent a person
-to fix the wrong thing.
+pipeline fetches only the merge-request ref: the base branch is not truncated, it
+is **absent**, at any depth, and `GIT_DEPTH: 0` does not fix it. Depth still
+matters separately — `HEAD^` and an old merge-base can both be outside a shallow
+clone — so the causes are distinguished before they are reported, and
+`--is-shallow-repository` is consulted *first*, because a shallow clone otherwise
+reports as "unrelated histories" and sends a person to fix the wrong thing.
 
-**`--against <ref>`** uses that revision **directly**, with no merge-base. It is
-the escape for a deliberate comparison — against a release tag, say — and it is
-documented as unsuitable for a CI default, because `--against origin/master` is
-exactly the neighbour-blaming comparison, one copy-paste away.
+The first commit of a repository has no first parent: nothing to compare, exit
+zero.
+
+**`--against <ref>`** uses that revision directly, with no merge-base. It is the
+escape for a deliberate comparison — against a release tag — and is documented as
+unsuitable for a CI default, because `--against origin/master` is exactly the
+neighbour-blaming comparison, one copy-paste away.
+
+### The local git driver is new work
+
+`internal/source` clones into a cache and **deletes `.git`** from every entry, so
+no existing machinery can compute `merge-base`, `rev-parse HEAD^`, or read a tree
+from history. Nothing in the tool today accepts an existing repository. This
+design therefore requires a local git driver — `rev-parse`, `merge-base`,
+`cat-file`, `rev-list`, shallow detection, and materialising a historical tree —
+with its own error taxonomy. Earlier revisions specified the behaviour and did not
+notice the component.
+
+It is bound by two rules, because `stele` otherwise writes only generated code and
+the lock:
+
+- **Fetching the base ref writes into `refs/stele/*` and never touches
+  `FETCH_HEAD`** or the user's remote-tracking refs.
+- **`breaking.base` names a remote-tracking ref** — a stale local branch would
+  silently place the comparison in the past. A repository with no remote, or with
+  several and no choice recorded, is an error naming the ambiguity.
 
 ## Compiling the two revisions
 
@@ -129,73 +163,102 @@ types: a field removed from an imported message is invisible without resolution.
 against today's pins either fails outright or attributes another repository's
 change to this one.
 
-Three states the first revision did not cover:
+A manifest with **no lock** fails the run: resolving it fresh would silently
+resolve each `ref:` to today's tip, which is the thing that paragraph forbids. A
+revision with **no manifest** — the commit that introduced `stele`, or anything
+before adoption — has nothing to compare and exits zero.
 
-- **A manifest with no lock.** Resolving it fresh would resolve each `ref:` to
-  today's tip — precisely the thing the paragraph above forbids — and would do it
-  silently. The run fails naming the revision instead.
-- **A lock pinning a commit that no longer exists.** A dependency that squash-
-  merges rewrites the commit its consumers pinned. The historical lock cannot be
-  re-resolved, because it lives in a commit in history. **This is an open problem
-  and is not solved here** — see "Open questions". Inventing a graceful
-  degradation would produce a check that is green for a reason nobody can state.
-- **No manifest at all** — the commit that introduced `stele`, or any revision
-  predating adoption. Nothing to compare; the run says so and exits zero.
+### The dead pin: measured, and downgraded
 
-**Cost, stated accurately.** The cache is keyed by commit, so the previous
-revision's pins are cold exactly when a dependency moved — the interesting case —
-and cold in every case on a CI runner with no warm cache. Two closures are fetched,
-resolved and compiled. This is not "nearly free", which is what the first revision
-claimed.
+The second revision recorded as an open problem, and review called fatal, that a
+dependency's squash-merge rewrites the commit its consumers pinned, making the
+historical lock permanently uncompilable.
+
+**Measured: 23 distinct pins across every historical lock in the fleet, 0 dead.**
+Every internal pin is not merely reachable but an ancestor of its dependency's
+current base branch; both external pins resolve. Method: every `stele.lock` blob
+on every ref (1862 blob versions), pins checked against the forge API and against
+a fresh clone.
+
+The mechanism matters more than the count, and it is why the reviewer's reasoning
+was wrong rather than merely unlucky: **every internal dependency is pinned
+`ref: master`**, so a resolved pin is always a commit already on the dependency's
+base branch, and squash-merge rewrites topic-branch commits, not the base branch.
+The failure cannot arise from squash at all.
+
+It remains possible under two named conditions, and only these: a dependency
+pinned to a ref other than its base branch, or a force-push to a dependency's base
+branch. Reported as what it is when it happens; not designed around.
+
+### Cost, and the shortcut that makes it moot
+
+Two closures fetched, resolved and compiled is not free. The cache is keyed by
+commit, so the previous revision's pins are cold exactly when a dependency moved,
+and cold always on a CI runner with no warm cache. Fetching an unadvertised commit
+falls back to fetching all heads and tags with no depth limit, and that fallback
+is the *ordinary* path for the older side, not an edge.
+
+**But the ordinary commit pays none of it.** If the git trees of the owned module
+roots and the `stele.lock` blob are identical between the two revisions, there is
+nothing to compare and the run exits immediately. **Measured at 84.7% of base-branch
+commits fleet-wide** (786 commits, full history; 82.4% over the most recent 60 per
+repository; range 52% to 99%). Roughly one commit in six pays the full comparison.
+
+One narrowing is available and worth taking: the previous side never supplies a
+position, so it does not need source info. `internal/compile` hard-codes
+`SourceInfoStandard` with no option, so this is a change there, not a setting.
 
 ## Scope, and the hole it leaves
 
-**Owned modules are compared**, as `stele lint` scopes itself. But scoping to
-owned files leaves a producer action with a consumer consequence invisible, and
-that must not be silent:
+**Owned modules are compared**, as `stele lint` scopes itself. One repository in
+the measured fleet owns no proto modules at all — it is a pure consumer, and the
+producer comparison there is empty by construction, which the run says rather than
+reporting as clean.
 
-**Bumping a dependency pin can break your consumers while your own files are
-byte-identical.** A consumer resolves your manifest transitively; if you move a
-dependency to a revision where a message lost a field, every consumer that
-compiles through you breaks, and a comparison of owned files finds nothing.
-
-So the producer run also compares the **resolved closure reachable from owned
-modules' imports** and reports changes there. It is not the consumer side — it
-answers "did what I re-export change", not "did what I import change" — but it
-closes the hole rather than leaving it unnamed.
+Scoping to owned files leaves a producer action with a consumer consequence
+invisible: **bumping a dependency pin can break your consumers while your own
+files are byte-identical**, because a consumer resolves your manifest
+transitively. So the producer run also compares the **resolved closure reachable
+from owned modules' imports** and reports changes there. It answers "did what I
+re-export change", not "did what I import change", and says so.
 
 ## Findings and their identity
 
-**A breaking finding carries an explicit subject, supplied by the comparison
+**A breaking finding carries an explicit subject supplied by the comparison
 engine.** This diverges from lint, where `Finding.Subject` is stamped from the
-position and a rule cannot set it, and the divergence has a reason: that
-constraint exists so a rule running in another process — which can only return a
-line and a column — is not second-class. Breaking detection has no plugin host in
-this slice, and the engine holds both descriptor sets, so it knows the name of a
-removed field exactly.
+position and a rule cannot set it. That constraint exists so a rule in another
+process — which can only return a line and a column — is not second-class;
+breaking detection has no plugin host in this slice, and the engine holds both
+descriptor sets, so it knows a removed field's name exactly.
 
-Without this, the design does not work at all: a removed field has no position in
+Without this the design does not work at all: a removed field has no position in
 the current revision, so anchoring to the surviving message would make the subject
 the *message*, and one permission would license the removal of every field of that
-message, forever.
+message forever.
 
-**File-level subjects live in their own namespace.** A removed file has no full
-name; its subject is its import path, marked as such so it can never collide with
-a declaration's name.
+**Subjects are typed, because two namespaces meet here.** A declaration's subject
+is its full name; a file's is its import path, written `file:api/orders/v1/order.proto`.
+An untagged string is a full name, and a path that looks like a name cannot be
+mistaken for one.
 
-**Positions.** A finding anchors at the site of the change where one exists, and
-at the nearest surviving declaration otherwise, with the removed element named in
-the message. Where nothing survives, the finding carries the path and no line.
+**Breaking findings do not enter `stele.baseline`.** The baseline is keyed on a
+position-derived subject and is designed for debt that is being paid down; a
+breaking finding is neither. Admitting them would also reopen the laundering this
+design refuses: a regenerated baseline would absorb a breakage silently.
 
-## Migrations are declared as moves, not permitted as breakages
+**Positions.** A finding anchors at the site of the change where one exists, at
+the nearest surviving declaration otherwise with the removed element named in the
+message, and carries a path with no line where nothing survives.
 
-A package rename, a file split, or a module-root rename changes the import path or
-full name of everything inside it, so every declaration reads as removed. Under a
-permission-per-change valve that is hundreds of entries, each needing a reason —
-which is how a valve dies of its own weight, and how one blanket entry ends up
-licensing a genuine removal hidden in the migration.
+## Migrations: a rename map, not a permission
 
-So a move is **declared and verified**, not permitted:
+A package rename changes the full name of everything inside it, so every
+declaration reads as removed. Permitting that one declaration at a time is
+hundreds of entries, and one blanket entry would license a genuine removal hidden
+among them.
+
+A move is therefore **an identity map applied before the comparison, not a
+suppression after it**:
 
     breaking:
       base: master
@@ -203,153 +266,179 @@ So a move is **declared and verified**, not permitted:
         - from: example.orders.v1
           to: example.ordering.v1
 
-The tool then checks that every declaration that left `from` exists under `to`
-with an identical shape. A lossless move produces **no findings at all**. Anything
-that did not survive the move is reported as what it is — a removal — inside a
-migration that claimed to be lossless.
+The previous revision's declarations are renamed through the map, and then the
+ordinary comparison runs. **A move suppresses nothing.** A lossless rename
+produces no findings because after renaming there is nothing to report; a rename
+that also dropped a field reports that field, by its new name, as an ordinary
+removal. Laundering is impossible by construction rather than by a check that has
+to be got right.
 
-This is an assertion the tool verifies, not a licence it grants, which is the
-difference that makes it safe to write once for a whole package.
+That framing settles what "identical shape" would otherwise have to enumerate:
+there is no shape comparison. The consequences are stated:
+
+- **`go_package` follows the package.** A `go_package` change explained by a
+  declared move is part of that move; one that is not explained is a finding.
+- **`to` must be a module this repository owns.** Pointing a move at a dependency
+  would make a pinned third party the authority on whether your declarations still
+  exist.
+- **A move is refused, not resolved, when it is ambiguous**: two entries with the
+  same `from`, a cycle, or a `from` that still exists in the current revision
+  while claiming to have moved.
+- **File-path moves take the same form** over `file:` subjects. A file *split* —
+  one file becoming two in the same package — is not expressible, is named as
+  unsupported, and reports as ordinary removals and additions.
+- **A move that matches nothing is stale**, reported by `--audit` and removed by
+  `--prune`, on the same terms as a permission. Nothing else retires it.
 
 ## The valve
 
-**Permission is for one specific change**, in the manifest, where it is reviewed
-by the people it binds:
+**Permission is for one specific change**, in the manifest, where the people it
+binds review it:
 
     breaking:
       allow:
-        - rule: break/field_removed
-          subject: example.orders.v1.Order.deprecated_eta
-          reason: read by no consumer, checked across the fleet
+        - rule: break/field_type_changed
+          subject: example.orders.v1.Order.total
+          change: int32 -> int64
+          reason: widening; no consumer stores this in a 32-bit field
 
 `reason` is required: a permission with no stated reason cannot be told from a
 workaround six months later.
 
-**A permission matches the change, not just the declaration.** Every rule declares
-a discriminant, and the permission matches on it: for a type change, the pair of
-types; for a move into a oneof, which oneof. Without this, `int32 → int64` and
-`int32 → string` are the same permission, and a reviewer who approved the first
-has approved the second.
+**`change` is the discriminant, and it is not universal.** Where a rule has an
+attribute beyond its subject — the pair of types, the destination oneof, the
+direction of a cardinality change — `change` is required, and a permission without
+it is refused rather than treated as matching anything. Earlier drafts stated a
+universal rule and then showed an example without the field, which is the blanket
+permission the mechanism exists to forbid. **Removals have no discriminant**: the
+subject is the whole of the change, and `change` is refused there. Each rule's
+discriminant spelling is part of the public contract on the terms `RELEASING.md`
+sets for rule ids, because it lands in somebody's manifest.
 
-**A stale permission is reported and is not fatal.** The first revision made it an
-error, on the argument that a stale permission is a standing licence while a stale
-baseline entry is a paid debt. That argument does not survive: to use a stale
-permission for a removed field, the field must first be **resurrected** under the
-same full name and removed again. A stale baseline entry silently absorbs a
-recurrence on a *live* declaration, from one bad edit. By risk the baseline is the
-more dangerous of the two, and the first revision gave two structurally identical
-objects opposite verdicts on the strength of what they were called.
+**A stale permission is reported and is not fatal.** An earlier revision made it an
+error, arguing that a stale permission is a standing licence while a stale
+baseline entry is a paid debt. That does not survive: to use a stale permission for
+a removed field the field must first be **resurrected** under the same full name
+and removed again, while a stale baseline entry absorbs a recurrence on a *live*
+declaration from one bad edit. By risk the baseline is the more dangerous object,
+and the argument gave two structurally identical things opposite verdicts on the
+strength of what they were called.
 
-Making it fatal also broke the design's own premise. On a base branch whose run is
-meaningful, a permission goes stale one merge later; but every branch that merges
-the base in inherits the line, finds nothing, and goes red for somebody else's
-change — the neighbour-blaming failure, arriving by another door.
+Making it fatal also broke the design's own premise: every branch that merged the
+base in would inherit the line, find nothing, and go red for somebody else's
+change — the neighbour-blaming failure arriving by another door.
 
 **"No permanent licences" is enforced off the merge path.** `stele breaking
---audit` reports stale and long-lived permissions and is meant for a scheduled
-job that reddens alone and blocks nobody. `--prune` deletes stale entries and
-leaves a reviewable diff.
+--audit` reports stale permissions and moves and is meant for a scheduled job that
+reddens alone and blocks nobody; `--prune` deletes stale entries and leaves a
+reviewable diff. Note the limit: the manifest records no dates, so `--audit` can
+report *stale*, not *long-lived*, and no claim about age is made.
 
-**Severity is not configurable, and the valve for immature contracts is
-maturity, not a dial.** A repository with no consumers yet, renaming fields daily,
-would accumulate thirty permissions in a week and then delete the CI job — moving
-the off switch from a reviewed file into CI, which is the *invisible* place, and
-that is the opposite of the argument that made lint's severity configurable.
+## An unresolved question: repositories with no consumers yet
 
-The valve is the contract's own statement about itself: **packages whose version
-is a prerelease — `v1alpha1`, `v1beta2` — are exempt from `break/*`**, because AIP
-says in as many words that such packages promise no compatibility. It is
-declarative, it lives in the contract, it is reviewed, and it agrees with the AIP
-ledger this tool already maintains. Graduating to `v1` is the moment protection
-begins, which is the moment it should.
+Severity is not configurable, deliberately: "breaks consumers, but only a warning"
+is `allow_failure: true` with more steps.
+
+That leaves a service in early development — contract present, no consumers,
+several field renames a day — with a choice between thirty permissions a week and
+deleting the CI job, which moves the off switch into CI, the *invisible* place,
+which is the opposite of the argument that made lint's severity configurable.
+
+A previous revision answered this by exempting prerelease packages
+(`v1alpha1`, `v1beta2`) and claiming agreement with the AIP ledger this tool
+maintains. **The claim was false**: the ledger records AIP-181 as `undecidable`
+because "a stability level is a claim about a release process, not about a file",
+and AIP-180 and AIP-185 likewise. The ledger is right — a package named beta with
+a hundred consumers is exactly its point. The exemption was also inert where it
+mattered, since on the graduation commit every declaration still lives in the
+prerelease package and every finding about it would be exempt.
+
+The exemption is withdrawn and nothing replaces it. **This is an open question,
+and enabling the check on a repository in early development is not recommended
+until it is answered.** A candidate worth measuring first: whether a repository
+has consumers is a fact, not a claim — the fleet's locks say who pins whom.
 
 ## Failure behaviour
 
 Silence is forbidden: every way of failing to compare is an error naming itself,
 never an empty report, because an empty report is indistinguishable from a clean
-one. The named cases are the three git states above, the three previous-revision
-states, and a rule that crashes — which fails the run whatever else was found.
+one. The named cases are the git states above, the previous-revision states, and a
+rule that crashes, which fails the run whatever else was found.
 
-Adding `breaking:` to a manifest is itself a compatibility event: the parser
-rejects unknown keys by design, so an older `stele` fails on a manifest that
-adopts this. It is named in the changelog on those terms.
+Two compatibility events, named because they are not obvious:
+
+- Adding `breaking:` to a manifest makes it unreadable to an older `stele`: the
+  parser rejects unknown keys by design.
+- `schema/stele.schema.json` is a second copy of the manifest's shape, held
+  against the parser by a test, and must gain the same keys.
 
 ## Evidence
 
 1. **Paired fixtures, one per rule, in both directions** — one proving the rule
    fires, one proving it stays silent on a legal change of the same shape. A rule
    with only the first half is not known to detect what it claims.
-2. **The type matrix**, with the corpus and the cross-type equality specified
-   above.
-3. **A measurement over open work before the fleet enables it.** The claim that
-   this "arrives green by construction" is false: it proves there is no historical
-   debt, and findings on day one come from **unmerged branches**. A branch three
-   weeks old carrying reviewed removals gets fatal findings, and rebasing does not
-   help. So the detector runs against every open merge request across the fleet,
-   and the counts are published before it is switched on — the same discipline
-   lint was held to.
-4. **A replay over real history, with its own coverage stated first.** Most
-   historical revisions predate adoption and have no manifest, so they are outside
-   the comparison by rule. The number of *comparable* merge pairs is measured and
-   published **before** the replay result, because "it fired nowhere" otherwise
-   has a third explanation the first revision did not account for: almost nothing
-   was compared.
-
-## Open questions
-
-- **A dead pin in a historical lock.** When a dependency squash-merges, the commit
-  a historical lock pinned is gone, and that revision can never be compiled again.
-  Every later run in that repository fails for a reason unrelated to the change
-  under review, and the recovery the error text suggests — re-resolve with
-  `--update` — is impossible for a lock in history. Candidates: fall back to the
-  nearest comparable ancestor and say so; permit a recorded substitution; treat an
-  unreachable historical pin as a named skip rather than a failure. None is chosen
-  here.
-- **Maintenance branches.** With one `breaking.base`, a long-lived `release/1.x`
-  has a merge-base that does not move for months, so its permissions never go
-  stale and the branch reads every divergence from the base as a breakage. Whether
-  the base is configurable per branch is unresolved.
-- **Generated output is out of scope, and it is breaking by definition.** Changing
-  a generation target's plugin version or options changes the bytes consumers
-  link against. This design compares descriptors only, which is a narrowing the
-  roadmap's own category list does not make.
+2. **The type matrix**, with the corpus and cross-type equality above.
+3. **A shadow period, replacing the historical replay.** An earlier revision
+   proposed replaying the fleet's merged history and publishing the count of
+   comparable pairs first. Measured, that plan is empty: **50 comparable pairs out
+   of 786 base-branch commits — 6.4% — and none older than five days**, because
+   the tool was adopted on 2026-08-23. Publishing the denominator would have made
+   the emptiness visible without curing it. Instead the detector runs in CI in
+   report-only mode for two weeks, and every firing is classified by hand as true
+   or false. That answers the question a replay cannot answer at all: not "did it
+   fire" but "was it right".
+4. **A measurement over open work before the fleet enables it**, because
+   "arrives green by construction" is false — it proves there is no historical
+   debt, while findings on day one come from **unmerged branches**, where a
+   three-week-old branch carrying reviewed removals gets fatal findings and
+   rebasing does not help. The counts are published before it is switched on, as
+   lint's were. **With an independent oracle:** the count is produced by the same
+   previous-revision logic being validated, so a hand-checked sample of ten to
+   fifteen merge requests is checked against it. A measurement that can only
+   confirm itself is not evidence.
 
 ## Consumer side, inherited and deferred
 
-The comparison engine is unchanged; only the previous revision differs — the
-commit pinned in `stele.lock` against the commit an update would take. It gains
-what the producer side cannot have: the import closure already knows which files
-this repository actually uses, so the report can say "two of these reach you, and
-here is what imports them".
+The engine is unchanged; only the previous revision differs — the commit pinned in
+`stele.lock` against the commit an update would take. It gains what the producer
+side cannot have: the import closure knows which files this repository actually
+uses, so the report can say "two of these reach you, and here is what imports
+them".
 
 It also closes a hole the producer side does not claim to close: a merge-base
 comparison protects the base branch, but a consumer pinned to a commit in the
 middle of your history is unaffected by the base branch's opinion. A breaking
 change merged and later reverted still happened, for them.
 
-## What the first revision got wrong
+## What earlier revisions got wrong
 
-Recorded so it is not re-derived. Every item was found by adversarial review, none
-by the author.
+Recorded so it is not re-derived. Everything here was found by adversarial review
+or by measurement; none of it by the author.
 
-- The base-branch comparison was degenerate: merge-base with itself, so no rule
-  could ever fire and the only possible signal was a false one.
-- A stale permission was fatal, which reddened every branch that merged the base
-  in — the exact failure the merge-base decision was made to avoid.
-- The asymmetry justifying that — permission as standing licence, baseline as paid
-  debt — was a rationalisation; by risk the baseline is the more dangerous object.
-- The subject of a finding was to be derived from the position, which cannot name
-  a removed field and would have licensed the removal of every field of a message.
-- Shallow depth was named as the cause of a missing base branch; the cause is the
-  refspec, and depth was the wrong fix to send a person to.
-- A fabricated PR merge commit silently degraded the comparison to the base tip.
-- "Green everywhere by construction" confused an absence of historical debt with
-  an absence of findings, and stood in place of a measurement.
-- Refusing configurable severity moved the off switch into CI, which the lint
-  design had already identified as the invisible place.
-- The type matrix's oracle was unspecified, would have called `float` and
-  `fixed32` compatible, and the document pre-committed to believing it.
-- The JSON blind zone was presented as covered by the source category; three
-  concrete breakages pass green through it.
-- Dependency pin bumps were left invisible by the owned-modules scope.
-- Migrations had no mechanism, so a package rename meant hundreds of permissions.
+**First revision.** The base-branch comparison was degenerate — merge-base with
+itself, so no rule could fire and the only possible signal was false. A stale
+permission was fatal, reddening every branch that merged the base in. The
+asymmetry justifying that was a rationalisation. The subject was to be derived
+from the position, which cannot name a removed field. Shallow depth was named as
+the cause of a missing base branch when the cause is the refspec. A fabricated PR
+merge commit silently degraded the comparison to the base tip. "Green everywhere
+by construction" confused absence of historical debt with absence of findings.
+Refusing configurable severity moved the off switch into CI. The type matrix's
+oracle was unspecified and would have called `float` and `fixed32` compatible.
+The JSON blind zone was presented as covered. Dependency pin bumps were invisible.
+Migrations had no mechanism.
+
+**Second revision.** `moves` verified "identical shape", a term it never defined,
+and which could have suppressed a real break; it is now a rename map that
+suppresses nothing. The prerelease exemption cited a ledger that says the
+opposite and was inert on the graduation commit. The permission example omitted
+the discriminant the next paragraph required. "The tool fetches the base ref" had
+no component behind it. The fabricated-merge test compared against the tip, which
+fails whenever the base moves. Cost was understated and the tree shortcut was not
+considered.
+
+**Refuted by measurement, and recorded because a reviewer's verdict is data.**
+Two findings called fatal did not survive contact with the fleet: the first-parent
+rule holds on 14 of 14 repositories, and no historical pin is dead, for a
+structural reason — every internal dependency pins its base branch, which
+squash-merge does not rewrite.
