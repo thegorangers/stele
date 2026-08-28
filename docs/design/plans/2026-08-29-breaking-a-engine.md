@@ -1216,6 +1216,12 @@ The spec makes this constitutive of the producer run, not an extra: "bumping a d
 - Create: `internal/breaking/report.go`
 - Create: `internal/breaking/report_test.go`
 
+**Interfaces:**
+- Produces:
+  - `type Outcome int` with `Compared`, `NothingToCompare`, `Unchanged`, `NoOwnedProtos` — four outcomes because three of them are *not* a clean comparison and each must render as itself
+  - `type Info struct { Outcome Outcome; Previous string; Reason string }`
+  - `func Render(findings []Finding, info Info) string`
+
 - [ ] **Step 1: Write the failing tests**
 
 ```go
@@ -1223,7 +1229,17 @@ The spec makes this constitutive of the producer run, not an extra: "bumping a d
 // category. Editors and CI log scrapers parse that shape, and the category
 // goes in the message, where it is prose.
 func TestRenderMatchesTheStandardDiagnosticShape(t *testing.T) {
-	// assert: api/orders/v1/order.proto:12:3: error: break/field_removed: ...
+	out := Render([]Finding{{
+		Rule: "break/field_removed", Category: Source,
+		Path: "api/orders/v1/order.proto", Pos: lint.Position{Line: 12, Col: 3},
+		Subject: "example.orders.v1.Order.eta",
+		Message: "field eta was removed; a consumer that reads it stops compiling",
+	}}, Info{Outcome: Compared, Previous: "abc1234", Reason: "merge-base with main"})
+
+	const want = "api/orders/v1/order.proto:12:3: error: break/field_removed: "
+	if !strings.Contains(out, want) {
+		t.Fatalf("rendered as\n%s\nwant a line beginning %q", out, want)
+	}
 }
 
 // Every report names the blind zone, because "no breaking changes" without
@@ -1239,16 +1255,53 @@ func TestFooterNamesTheBlindZone(t *testing.T) {
 
 // A clean run says what it compared: "no breaking changes" with nothing
 // behind it is indistinguishable from a run that compared nothing.
-func TestCleanRunNamesWhatItCompared(t *testing.T) { /* assert the SHA and the reason appear */ }
+func TestCleanRunNamesWhatItCompared(t *testing.T) {
+	out := Render(nil, Info{Outcome: Compared, Previous: "abc1234", Reason: "merge-base with main"})
+	for _, want := range []string{"abc1234", "merge-base with main"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("a clean report does not say %q, so it cannot be told from a run that compared nothing", want)
+		}
+	}
+}
 
 // The three cases that are NOT clean, each rendered as itself.
-func TestNothingToCompareIsNotRenderedAsClean(t *testing.T)  { /* ... */ }
-func TestShortcutSkipIsNotRenderedAsClean(t *testing.T)      { /* the 84.7% case: say the trees are unchanged */ }
-func TestOwningNoProtosIsNotRenderedAsClean(t *testing.T)    { /* ErrNoOwnedProtos */ }
+func TestNothingToCompareIsNotRenderedAsClean(t *testing.T) {
+	out := Render(nil, Info{Outcome: NothingToCompare, Reason: "HEAD is the first commit"})
+	if strings.Contains(out, "no breaking changes") {
+		t.Error("a run that compared nothing must not read as a clean run")
+	}
+	if !strings.Contains(out, "first commit") {
+		t.Error("the reason it compared nothing must be in the output")
+	}
+}
+// The commonest outcome in the measured fleet — 84.7% of base-branch commits
+// — and so the one most likely to be misread as a clean comparison.
+func TestShortcutSkipIsNotRenderedAsClean(t *testing.T) {
+	out := Render(nil, Info{Outcome: Unchanged, Previous: "abc1234"})
+	if strings.Contains(out, "no breaking changes") {
+		t.Error("a skipped run must not read as a compared one")
+	}
+	if !strings.Contains(out, "unchanged") {
+		t.Error("the output must say the owned trees and the lock did not move")
+	}
+}
+func TestOwningNoProtosIsNotRenderedAsClean(t *testing.T) {
+	out := Render(nil, Info{Outcome: NoOwnedProtos})
+	if strings.Contains(out, "no breaking changes") {
+		t.Error("a repository that owns no protos has not been checked, and must not read as checked")
+	}
+}
 
 // Plan A cannot fail a build, and the report says so rather than leaving a
 // reader to infer it from an exit status.
-func TestReportSaysItIsReportOnly(t *testing.T) { /* ... */ }
+func TestReportSaysItIsReportOnly(t *testing.T) {
+	out := Render([]Finding{{Rule: "break/field_removed", Category: Source,
+		Path: "api/orders/v1/order.proto", Subject: "example.orders.v1.Order.eta"}},
+		Info{Outcome: Compared, Previous: "abc1234", Reason: "merge-base with main"})
+	if !strings.Contains(out, "report-only") {
+		t.Error("a reader must not have to infer from the exit status that nothing failed")
+	}
+}
 ```
 
 Write every body out.
