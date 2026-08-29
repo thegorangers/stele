@@ -4,6 +4,8 @@ import (
 	"sort"
 
 	"github.com/thegorangers/stele/internal/lint"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -127,6 +129,9 @@ func diffDeclarations(prev, cur Revision) []Change {
 				After:   after,
 			})
 		default:
+			if descEqual(before, after) {
+				continue
+			}
 			changes = append(changes, Change{
 				Kind:    Modified,
 				Subject: string(name),
@@ -208,6 +213,13 @@ func indexFile(idx map[protoreflect.FullName]protoreflect.Descriptor, fd protore
 }
 
 func indexMessage(idx map[protoreflect.FullName]protoreflect.Descriptor, md protoreflect.MessageDescriptor) {
+	if md.IsMapEntry() {
+		// A map field synthesises this message (and its key/value fields);
+		// the author never wrote it, so it is not a declaration to report on.
+		// internal/lint's eachEnum applies the same guard for the same
+		// reason.
+		return
+	}
 	idx[md.FullName()] = md
 
 	fields := md.Fields()
@@ -270,4 +282,78 @@ func sortedUnion[K ~string, V any](a, b map[K]V) []K {
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 	return keys
+}
+
+// descEqual reports whether before and after are the same declaration at its
+// own granularity: a message is compared on its own properties only, never
+// on the fields, oneofs, enums or nested messages it contains, because those
+// are indexed and compared separately — comparing a message whole would
+// report the parent as Modified every time a child changed, on top of the
+// child's own Change, and a rule reacting to "this message changed" would
+// then fire on every field edit anywhere inside it. Likewise a service is
+// compared without its methods, and an enum without its values.
+//
+// The descriptorpb form these produce never carries source positions —
+// SourceCodeInfo lives on the file as a whole, not on an individual
+// FieldDescriptorProto or DescriptorProto — so a reformatting that moves a
+// declaration to a different line never reads as a change here.
+func descEqual(before, after protoreflect.Descriptor) bool {
+	switch b := before.(type) {
+	case protoreflect.MessageDescriptor:
+		a, ok := after.(protoreflect.MessageDescriptor)
+		if !ok {
+			return false
+		}
+		bp, ap := protodesc.ToDescriptorProto(b), protodesc.ToDescriptorProto(a)
+		bp.Field, ap.Field = nil, nil
+		bp.NestedType, ap.NestedType = nil, nil
+		bp.EnumType, ap.EnumType = nil, nil
+		bp.OneofDecl, ap.OneofDecl = nil, nil
+		return proto.Equal(bp, ap)
+	case protoreflect.FieldDescriptor:
+		a, ok := after.(protoreflect.FieldDescriptor)
+		if !ok {
+			return false
+		}
+		return proto.Equal(protodesc.ToFieldDescriptorProto(b), protodesc.ToFieldDescriptorProto(a))
+	case protoreflect.OneofDescriptor:
+		a, ok := after.(protoreflect.OneofDescriptor)
+		if !ok {
+			return false
+		}
+		return proto.Equal(protodesc.ToOneofDescriptorProto(b), protodesc.ToOneofDescriptorProto(a))
+	case protoreflect.EnumDescriptor:
+		a, ok := after.(protoreflect.EnumDescriptor)
+		if !ok {
+			return false
+		}
+		bp, ap := protodesc.ToEnumDescriptorProto(b), protodesc.ToEnumDescriptorProto(a)
+		bp.Value, ap.Value = nil, nil
+		return proto.Equal(bp, ap)
+	case protoreflect.EnumValueDescriptor:
+		a, ok := after.(protoreflect.EnumValueDescriptor)
+		if !ok {
+			return false
+		}
+		return proto.Equal(protodesc.ToEnumValueDescriptorProto(b), protodesc.ToEnumValueDescriptorProto(a))
+	case protoreflect.ServiceDescriptor:
+		a, ok := after.(protoreflect.ServiceDescriptor)
+		if !ok {
+			return false
+		}
+		bp, ap := protodesc.ToServiceDescriptorProto(b), protodesc.ToServiceDescriptorProto(a)
+		bp.Method, ap.Method = nil, nil
+		return proto.Equal(bp, ap)
+	case protoreflect.MethodDescriptor:
+		a, ok := after.(protoreflect.MethodDescriptor)
+		if !ok {
+			return false
+		}
+		return proto.Equal(protodesc.ToMethodDescriptorProto(b), protodesc.ToMethodDescriptorProto(a))
+	default:
+		// No other descriptor kind is ever indexed; a change here without a
+		// matching case would otherwise report every occurrence as
+		// unmodified.
+		return false
+	}
 }

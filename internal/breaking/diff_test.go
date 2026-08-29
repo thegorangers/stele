@@ -167,3 +167,63 @@ func TestRemovedFileHasATaggedSubject(t *testing.T) {
 		t.Fatal("Diff did not report the removed file file:api/orders/v1/order.proto")
 	}
 }
+
+// Two byte-identical revisions produce no changes at all. Diff reports
+// difference, not presence: a declaration untouched between revisions is not
+// a Change, however it is indexed.
+func TestIdenticalRevisionsProduceNoChanges(t *testing.T) {
+	body := "syntax = \"proto3\";\npackage example.orders.v1;\n" +
+		"message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n" +
+		"enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_PLACED = 1;\n}\n" +
+		"service Orders {\n  rpc Get(Order) returns (Order);\n}\n"
+	prevRev, curRev := diffFixture(t, "example/orders/v1/order.proto", body, body)
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 0 {
+		t.Fatalf("Diff = %+v, want no changes between identical revisions", changes)
+	}
+}
+
+// Adding one map field produces exactly one change — the field itself — and
+// nothing about the synthesised map-entry message or its key/value fields.
+func TestAddingAMapFieldProducesOnlyTheField(t *testing.T) {
+	prevRev, curRev := diffFixture(t, "example/orders/v1/order.proto",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  string id = 1;\n}\n",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  string id = 1;\n  map<string, string> tags = 2;\n}\n")
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 1 {
+		t.Fatalf("Diff = %+v, want exactly one change (the added field)", changes)
+	}
+	c := changes[0]
+	if c.Subject != "example.orders.v1.Order.tags" {
+		t.Fatalf("Subject = %q, want example.orders.v1.Order.tags", c.Subject)
+	}
+	if c.Kind != Added {
+		t.Fatalf("Kind = %v, want Added", c.Kind)
+	}
+}
+
+// Removing a field reports the field's removal alone: no Modified for its
+// parent message or for a sibling field that did not change.
+func TestFieldRemovalDoesNotTouchItsParentOrSiblings(t *testing.T) {
+	prevRev, curRev := diffFixture(t, "example/orders/v1/order.proto",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  string id = 1;\n}\n")
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 1 {
+		t.Fatalf("Diff = %+v, want exactly one change (the removed field)", changes)
+	}
+	c := changes[0]
+	if c.Subject != "example.orders.v1.Order.eta" {
+		t.Fatalf("Subject = %q, want example.orders.v1.Order.eta", c.Subject)
+	}
+	if c.Kind != Removed {
+		t.Fatalf("Kind = %v, want Removed", c.Kind)
+	}
+}
