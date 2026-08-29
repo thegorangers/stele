@@ -118,8 +118,23 @@ func Classify(changes []Change, prev, cur Revision) []Finding {
 		return declSwallowed[parent]
 	}
 
-	findings = append(findings, classifyFields(byKindParent, changes, skipMember)...)
-	findings = append(findings, classifyOneofs(byKindParent, skipMember)...)
+	oneofFindings, oneofRenames := classifyOneofs(byKindParent, skipMember)
+
+	// skipFieldOneofRename reports whether a field's oneof move from
+	// before to after, within parent, is exactly a rename classifyOneofs
+	// already reported at the container level — see oneofRename's doc
+	// comment.
+	skipFieldOneofRename := func(parent, before, after protoreflect.FullName) bool {
+		for _, r := range oneofRenames {
+			if r.parent == parent && r.before == before && r.after == after {
+				return true
+			}
+		}
+		return false
+	}
+
+	findings = append(findings, classifyFields(byKindParent, changes, skipMember, skipFieldOneofRename)...)
+	findings = append(findings, oneofFindings...)
 	findings = append(findings, classifyEnumValues(byKindParent, changes, skipMember)...)
 	findings = append(findings, classifyMessages(byKindParent, skipContainer)...)
 	findings = append(findings, classifyEnums(byKindParent, skipContainer)...)
@@ -267,7 +282,7 @@ func pairRenames(g *grouped, match func(before, after protoreflect.Descriptor) b
 
 // ---- fields ----
 
-func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip func(protoreflect.FullName) bool) []Finding {
+func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip func(protoreflect.FullName) bool, skipOneofRename func(parent, before, after protoreflect.FullName) bool) []Finding {
 	var findings []Finding
 
 	renamedField := make(map[string]bool) // Subject of the removed field
@@ -367,24 +382,39 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 		beforeOneof := oneofDescName(beforeOneofDesc)
 		afterOneof := oneofDescName(afterOneofDesc)
 		if beforeOneof != afterOneof {
-			cat := oneofChangeCategory(beforeOneofDesc, afterOneofDesc)
-			beforeLabel, afterLabel := beforeOneof, afterOneof
-			if beforeLabel == "" {
-				beforeLabel = "none"
+			var beforeFull, afterFull protoreflect.FullName
+			if beforeOneofDesc != nil {
+				beforeFull = beforeOneofDesc.FullName()
 			}
-			if afterLabel == "" {
-				afterLabel = "none"
+			if afterOneofDesc != nil {
+				afterFull = afterOneofDesc.FullName()
 			}
-			findings = append(findings, Finding{
-				Rule:     "break/field_oneof_changed",
-				Category: cat,
-				Subject:  c.Subject,
-				Path:     c.Path,
-				Pos:      c.Pos,
-				Message:  "field " + c.Subject + " moved oneof membership from " + beforeLabel + " to " + afterLabel,
-				Change:   beforeLabel + " -> " + afterLabel,
-				Fix:      "revert the oneof membership, or add a new field instead of moving an existing one between oneofs",
-			})
+			// A move that IS the container-level rename classifyOneofs
+			// already reported is not a second, field-level fact about a
+			// different thing — see oneofRename's doc comment. A field
+			// whose before/after is not exactly that pair (joining or
+			// leaving the renamed oneof from/to somewhere else) still
+			// reports, because that genuinely is a different fact.
+			if !skipOneofRename(before.Parent().FullName(), beforeFull, afterFull) {
+				cat := oneofChangeCategory(beforeOneofDesc, afterOneofDesc)
+				beforeLabel, afterLabel := beforeOneof, afterOneof
+				if beforeLabel == "" {
+					beforeLabel = "none"
+				}
+				if afterLabel == "" {
+					afterLabel = "none"
+				}
+				findings = append(findings, Finding{
+					Rule:     "break/field_oneof_changed",
+					Category: cat,
+					Subject:  c.Subject,
+					Path:     c.Path,
+					Pos:      c.Pos,
+					Message:  "field " + c.Subject + " moved oneof membership from " + beforeLabel + " to " + afterLabel,
+					Change:   beforeLabel + " -> " + afterLabel,
+					Fix:      "revert the oneof membership, or add a new field instead of moving an existing one between oneofs",
+				})
+			}
 		}
 	}
 
@@ -498,8 +528,9 @@ func fieldShapeEqual(before, after protoreflect.Descriptor) bool {
 // fire. break/field_oneof_changed already reports the field-level truth for
 // whichever fields actually moved; firing a oneof rename on top of that
 // would tell two different stories about the same restructuring.
-func classifyOneofs(byKindParent map[parentKey]*grouped, skip func(protoreflect.FullName) bool) []Finding {
+func classifyOneofs(byKindParent map[parentKey]*grouped, skip func(protoreflect.FullName) bool) ([]Finding, []oneofRename) {
 	var findings []Finding
+	var renames []oneofRename
 
 	for key, g := range byKindParent {
 		if key.kind != declOneof {
@@ -522,10 +553,28 @@ func classifyOneofs(byKindParent map[parentKey]*grouped, skip func(protoreflect.
 				Change:   oneofDescName(before) + " -> " + oneofDescName(after),
 				Fix:      "revert the oneof's name, or add a new oneof instead of renaming an existing one — the generated wrapper type and getter are derived from its name and every caller using them stops compiling",
 			})
+			renames = append(renames, oneofRename{
+				parent: key.parent,
+				before: before.FullName(),
+				after:  after.FullName(),
+			})
 		}
 	}
 
-	return findings
+	return findings, renames
+}
+
+// oneofRename is one message's oneof rename, as classifyOneofs paired it.
+// classifyFields uses it to suppress break/field_oneof_changed for exactly
+// the fields whose oneof move IS that rename — the same underlying fact the
+// container-level finding already reported, not a fact of its own. A field
+// whose membership changed some other way (into the renamed oneof from
+// elsewhere, or out of it to somewhere else) still reports normally,
+// because before/after there is not this exact pair.
+type oneofRename struct {
+	parent protoreflect.FullName
+	before protoreflect.FullName
+	after  protoreflect.FullName
 }
 
 // oneofFieldNumbers returns the set of field numbers o's members occupy.

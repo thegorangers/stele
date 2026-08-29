@@ -289,12 +289,14 @@ var cases = []struct {
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n  }\n  oneof w {\n    string p = 5;\n  }\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof w {\n    string p = 5;\n  }\n  oneof y {\n    string a = 1;\n  }\n}\n"},
 		// x and y are both singletons holding field 1: that member set is
-		// identical, so break/oneof_renamed correctly pairs them as a
-		// rename in addition to the per-field break/field_oneof_changed —
-		// the two rules see the same underlying fact from two angles, and
-		// nothing here makes that ambiguous with an unrelated w.
+		// identical, so this IS a rename, reported once as
+		// break/oneof_renamed. classifyFields suppresses the
+		// break/field_oneof_changed it would otherwise also produce for a,
+		// because a's move from x to y is exactly the fact the container
+		// finding already reported, not a second one — an unrelated w
+		// stays untouched throughout and proves the suppression is keyed
+		// on the specific pair, not on "any oneof change in this message".
 		[]rulePair{
-			{"break/field_oneof_changed", Source, "x -> y"},
 			{"break/oneof_renamed", Source, "x -> y"},
 		},
 	},
@@ -597,6 +599,30 @@ var cases = []struct {
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof choose {\n    string a = 1;\n  }\n  oneof steady {\n    string s = 9;\n  }\n}\n"},
 		[]rulePair{{"break/oneof_renamed", Source, "pick -> choose"}},
 	},
+	// Suppression boundary: x renames to y (member set {1} on both sides,
+	// so break/oneof_renamed fires) in the same commit that b — completely
+	// unrelated to x/y — joins a brand-new oneof z. b's move is genuinely
+	// a different fact (its before/after pair is ("", z), not (x, y)), so
+	// it must still report break/field_oneof_changed: the rename must not
+	// swallow a field whose membership change it is not the story of.
+	//
+	// This is deliberately NOT "b joins y" as phrased informally — b
+	// joining y directly would change y's member set to {a=1, b=2},
+	// which no longer matches x's {a=1}: oneof_renamed_with_membership_
+	// change_is_not_a_rename above already covers that case (the pairing
+	// fails outright, per the exact-set rule, and nothing but the
+	// per-field findings fire). This case instead pins the suppression's
+	// precision when the rename DOES pair successfully.
+	{
+		"oneof_rename_does_not_swallow_unrelated_field_change",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n  }\n  string b = 2;\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof y {\n    string a = 1;\n  }\n  oneof z {\n    string b = 2;\n  }\n}\n"},
+		[]rulePair{
+			{"break/oneof_renamed", Source, "x -> y"},
+			{"break/field_oneof_changed", Source, "none -> z"},
+		},
+	},
+
 	// Reordering a oneof's fields (in source, and in the wire-irrelevant
 	// declaration order) without renaming the oneof itself is legal.
 	{
