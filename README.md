@@ -609,15 +609,35 @@ that landed.
 Two changes checked:
 
 - **Wire.** Already-serialised bytes stop being read correctly: field numbers,
-  incompatible type changes, cardinality, movement between oneofs, enum value
-  numbers, and — because in gRPC a name is a path on the wire — a renamed or
-  removed package, service or method, a changed request or response type, or
-  whether a method streams.
+  incompatible type changes, cardinality, enum value numbers, and — because in
+  gRPC a name is a path on the wire — a renamed or removed package, service or
+  method, a changed request or response type, or whether a method streams. A
+  field moving, joining or leaving a oneof is wire too, but only when the
+  oneof on either side has another member: sibling-clearing on decode
+  behaves differently, whichever direction the field moved. Between two
+  oneofs that each have only that one field, nothing observable changes on
+  the wire.
 - **Source.** The bytes survive; a consumer's generated code stops compiling:
-  field renames at a stable number, removals, a removed or renamed message,
-  enum or enum value, a changed `go_package`, a field moved into a oneof.
+  field renames at a stable number, a removed field, message or enum, a
+  changed `go_package`, and a oneof move where no oneof involved has another
+  member — only the generated accessor changes.
 
-19 rule ids, in the reserved `break/` namespace, one per shape above.
+  A renamed message or enum is deliberately not its own rule: pairing
+  containers by shape would marry unrelated declarations and hide a real
+  removal behind a coincidental rename, so a rename reports as a removal plus
+  an addition instead. A field or an enum value has a number to key a pairing
+  on rather than shape, so `break/field_renamed` and `break/enum_value_renamed`
+  exist where `break/message_renamed` and `break/enum_renamed` do not.
+
+19 rule ids, in the reserved `break/` namespace: `break/enum_removed`,
+`break/enum_value_number_changed`, `break/enum_value_removed`,
+`break/enum_value_renamed`, `break/field_cardinality_changed`,
+`break/field_number_changed`, `break/field_oneof_changed`,
+`break/field_removed`, `break/field_renamed`, `break/field_type_changed`,
+`break/file_removed`, `break/go_package_changed`, `break/message_removed`,
+`break/method_removed`, `break/method_signature_changed`,
+`break/method_streaming_changed`, `break/package_removed`,
+`break/package_renamed`, `break/service_removed`.
 
 **It also compares the dependency closure this repository re-exports.** Your
 own files can be byte-identical while a bumped dependency pin still breaks
