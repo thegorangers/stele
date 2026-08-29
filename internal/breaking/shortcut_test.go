@@ -52,7 +52,8 @@ func TestChangedWhenOnlyTheLockMoved(t *testing.T) {
 	}
 }
 
-// A revision that had no api/ at all must not compare equal to one that does.
+// A path that appeared between the two revisions (absent in the earlier one,
+// present in the later one) must not be reported as unchanged.
 func TestAbsentPathIsNotEqualToPresentPath(t *testing.T) {
 	dir := repo(t)
 	write(t, dir, "README.md", "prose")
@@ -66,5 +67,20 @@ func TestAbsentPathIsNotEqualToPresentPath(t *testing.T) {
 	got, err := Unchanged(r, Previous{SHA: first, Working: head}, []string{"api"})
 	if err != nil || got {
 		t.Fatalf("Unchanged = %v, %v; want false", got, err)
+	}
+}
+
+// An empty set of watched paths compares nothing, and reporting that as
+// "unchanged" would skip every run forever. That is the
+// empty-comparison-as-clean failure this package exists to avoid, so it must
+// be an error.
+func TestUnchangedRejectsEmptyPaths(t *testing.T) {
+	r, prev := twoCommits(t, func(dir string) { write(t, dir, "README.md", "prose") })
+	got, err := Unchanged(r, prev, nil)
+	if err == nil {
+		t.Fatalf("Unchanged with no paths: err = nil, want an error")
+	}
+	if got {
+		t.Fatalf("Unchanged with no paths: got = true, want false")
 	}
 }

@@ -68,6 +68,38 @@ func TestObjectSHAReportsAbsence(t *testing.T) {
 	}
 }
 
+// The breaking-change shortcut (internal/breaking.Unchanged) leans on this
+// exact contract: a non-empty SHA if and only if ok is true. Pin it here,
+// where it is made, so a future change to ObjectSHA cannot silently turn
+// "appeared" into "unchanged" for that caller.
+func TestObjectSHAEmptyIffAbsent(t *testing.T) {
+	dir := repo(t)
+	head := commit(t, dir, filepath.Join("api", "x.proto"), "syntax = \"proto3\";", "first")
+	r, _ := Open(dir)
+
+	sha, ok, err := r.ObjectSHA(head, "api/x.proto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok && sha == "" {
+		t.Fatalf("ObjectSHA: ok=true but sha is empty")
+	}
+	if !ok && sha != "" {
+		t.Fatalf("ObjectSHA: ok=false but sha=%q, want empty", sha)
+	}
+
+	sha, ok, err = r.ObjectSHA(head, "nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok && sha == "" {
+		t.Fatalf("ObjectSHA: ok=true but sha is empty")
+	}
+	if !ok && sha != "" {
+		t.Fatalf("ObjectSHA: ok=false but sha=%q, want empty", sha)
+	}
+}
+
 // Materialise must not move HEAD or write into the user's .git.
 func TestMaterialiseLeavesTheRepositoryAlone(t *testing.T) {
 	dir := repo(t)
