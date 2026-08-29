@@ -108,3 +108,24 @@ func TestReMergeOfTwoLandedBranchesHasNothingToCompare(t *testing.T) {
 		t.Fatalf("ok=%v err=%v, want nothing to compare", ok, err)
 	}
 }
+
+// TestAgainstUsesTheRevisionDirectly: --against names the previous revision
+// directly, with no merge-base computed at all — SHA is exactly the ref
+// handed in, Working is HEAD, regardless of where that ref sits in history.
+func TestAgainstUsesTheRevisionDirectly(t *testing.T) {
+	dir := repo(t)
+	first := commit(t, dir, "a.txt", "one", "first")
+	head := commit(t, dir, "b.txt", "two", "second")
+
+	r, _ := gitrepo.Open(dir)
+	got, err := Against(r, first)
+	if err != nil {
+		t.Fatalf("Against: %v", err)
+	}
+	if got.SHA != first {
+		t.Fatalf("SHA = %s, want the named revision %s", got.SHA, first)
+	}
+	if got.Working != head {
+		t.Fatalf("Working = %s, want HEAD %s", got.Working, head)
+	}
+}

@@ -87,3 +87,20 @@ func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
 	}
 	return Previous{SHA: prev, Working: working, Reason: reason + staleNote}, true, nil
 }
+
+// Against returns the revision named by ref, compared directly against HEAD
+// with no merge-base.
+//
+// It exists for a manual, local check against a specific commit — not for a
+// CI default. --against origin/master is exactly the neighbour-blaming
+// comparison this design rejects (see Choose's doc comment), reached one
+// flag away rather than by asking the three questions Choose asks. Callers
+// must say so in their own help text; this function only implements the
+// mechanism.
+func Against(r *gitrepo.Repo, ref string) (Previous, error) {
+	head, err := r.Head()
+	if err != nil {
+		return Previous{}, err
+	}
+	return Previous{SHA: ref, Working: head, Reason: "given directly by --against, no merge-base"}, nil
+}

@@ -68,6 +68,18 @@ func TestCLI(t *testing.T) {
 		{name: "lint help states the adoption mechanism", args: []string{"lint", "--help"}, help: true, wantHelp: "severity: warning"},
 		{name: "lint unknown flag is named", args: []string{"lint", "--nosuch"}, wantErr: "not defined: -nosuch"},
 		{name: "lint positional argument refused", args: []string{"lint", "x"}, wantErr: `unexpected argument "x"`},
+		{name: "breaking is listed in the usage", args: nil, help: true, wantHelp: "breaking"},
+		{name: "breaking help", args: []string{"breaking", "--help"}, help: true},
+		{name: "breaking documents dir", args: []string{"breaking", "--help"}, help: true, wantHelp: "--dir"},
+		{name: "breaking documents base", args: []string{"breaking", "--help"}, help: true, wantHelp: "--base"},
+		{name: "breaking documents against", args: []string{"breaking", "--help"}, help: true, wantHelp: "--against"},
+		{name: "breaking documents cache-dir", args: []string{"breaking", "--help"}, help: true, wantHelp: "--cache-dir"},
+		// --against is a manual override, not a CI default; the help has to
+		// say so, or origin/master-as-default is one copy-paste away.
+		{name: "breaking warns against is not a CI default", args: []string{"breaking", "--help"}, help: true, wantHelp: "NOT a substitute for --base"},
+		{name: "breaking unknown flag is named", args: []string{"breaking", "--nosuch"}, wantErr: "not defined: -nosuch"},
+		{name: "breaking positional argument refused", args: []string{"breaking", "x"}, wantErr: `unexpected argument "x"`},
+		{name: "breaking requires base or against", args: []string{"breaking"}, wantErr: "--base or --against is required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errOut strings.Builder
@@ -706,5 +718,177 @@ func rewrite(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// --- stele breaking end-to-end tests ---
+//
+// These exercise the command against real git repositories: Choose,
+// TreesUnchanged and Load all read git history directly, and nothing short
+// of a real repository proves they are wired together correctly.
+
+// breakingGit runs git in dir, failing the test on error. The environment is
+// pinned so a developer's global git configuration cannot change what these
+// tests mean.
+func breakingGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(cmd.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// breakingRepo makes a git repository with a self-referential remote:
+// gitrepo.BaseRef always fetches from a configured remote, and the tests
+// never push or pull for real, so a file:// remote pointed at itself is
+// sufficient.
+func breakingRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	breakingGit(t, dir, "init", "-q", "-b", "main")
+	breakingGit(t, dir, "remote", "add", "origin", "file://"+dir)
+	return dir
+}
+
+func breakingWrite(t *testing.T, dir, name, body string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func breakingCommit(t *testing.T, dir, name, body, msg string) string {
+	t.Helper()
+	breakingWrite(t, dir, name, body)
+	breakingGit(t, dir, "add", ".")
+	breakingGit(t, dir, "commit", "-qm", msg)
+	return breakingGit(t, dir, "rev-parse", "HEAD")
+}
+
+const breakingManifest = "version: 1\nmodules:\n  - path: api\n"
+const breakingLock = "version: 1\n"
+
+func breakingOrder(status string) string {
+	return `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+  string status = 2;` + status + `
+}
+`
+}
+
+// TestBreakingCleanRunExitsZero: an ordinary commit on a topic branch, ahead
+// of the base with no proto change at all beyond a comment, must not fail —
+// there is nothing here for a consumer to notice.
+func TestBreakingCleanRunExitsZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a clean run must exit zero: %v\n%s", err, out.String())
+	}
+	// README.md is outside the watched module and lock paths, so this hits
+	// the tree shortcut: the run must still say the comparison was skipped
+	// rather than silently reporting nothing.
+	if !strings.Contains(out.String(), "unchanged") {
+		t.Errorf("a clean run does not say so:\n%s", out.String())
+	}
+}
+
+// TestBreakingRemovedFieldExitsZeroAndNamesTheField: this release is
+// report-only. A finding — even one as serious as a removed field — must
+// still exit zero, and the field must be named in the output.
+func TestBreakingRemovedFieldExitsZeroAndNamesTheField(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a finding must not fail the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("the removed field is not named:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "report-only") {
+		t.Errorf("the report does not say it is report-only:\n%s", out.String())
+	}
+}
+
+// TestBreakingNothingToCompareExitsZero: the first commit in a repository's
+// history has no previous revision at all. That is not a finding and not a
+// failure; the run says so and exits zero.
+func TestBreakingNothingToCompareExitsZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "first commit")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("nothing to compare must exit zero: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "nothing to compare") {
+		t.Errorf("the report does not say there was nothing to compare:\n%s", out.String())
+	}
+}
+
+// TestBreakingShallowCloneFailsAndNamesShallowness: a failure to compare is
+// still a failure, unlike a finding. A shallow clone cannot support
+// merge-base or ancestry queries, and the run must fail loudly rather than
+// guess.
+func TestBreakingShallowCloneFailsAndNamesShallowness(t *testing.T) {
+	origin := breakingRepo(t)
+	breakingWrite(t, origin, "stele.yaml", breakingManifest)
+	breakingWrite(t, origin, "stele.lock", breakingLock)
+	breakingCommit(t, origin, "api/example/v1/order.proto", breakingOrder(""), "base")
+	breakingCommit(t, origin, "api/example/v1/order.proto", breakingOrder("\n  string note = 3;"), "second")
+
+	parent := t.TempDir()
+	shallow := filepath.Join(parent, "shallow")
+	cmd := exec.Command("git", "clone", "-q", "--depth", "1", "file://"+origin, shallow)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git clone --depth 1: %v\n%s", err, out)
+	}
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", shallow, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a shallow clone must fail the run, not exit zero")
+	}
+	if !strings.Contains(err.Error(), "shallow") {
+		t.Errorf("the failure does not name shallowness: %v", err)
 	}
 }
