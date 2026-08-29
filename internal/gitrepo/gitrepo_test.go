@@ -100,6 +100,29 @@ func TestObjectSHAEmptyIffAbsent(t *testing.T) {
 	}
 }
 
+// A manifest naming its module `path: .` is a plausible layout for a
+// repository that is one module end to end. `HEAD:.` is not a valid git
+// object spec (only `HEAD:./` is), so ObjectSHA must resolve "." and "" to
+// the root tree some other way rather than reporting the repository root as
+// absent.
+func TestObjectSHAResolvesRepositoryRoot(t *testing.T) {
+	dir := repo(t)
+	head := commit(t, dir, filepath.Join("api", "x.proto"), "syntax = \"proto3\";", "first")
+	r, _ := Open(dir)
+
+	dot, ok, err := r.ObjectSHA(head, ".")
+	if err != nil || !ok || dot == "" {
+		t.Fatalf("ObjectSHA(.) = %q, %v, %v; want the root tree", dot, ok, err)
+	}
+	empty, ok, err := r.ObjectSHA(head, "")
+	if err != nil || !ok || empty == "" {
+		t.Fatalf(`ObjectSHA("") = %q, %v, %v; want the root tree`, empty, ok, err)
+	}
+	if dot != empty {
+		t.Fatalf(`ObjectSHA(.) = %s, ObjectSHA("") = %s; want the same root tree`, dot, empty)
+	}
+}
+
 // Materialise must not move HEAD or write into the user's .git.
 func TestMaterialiseLeavesTheRepositoryAlone(t *testing.T) {
 	dir := repo(t)

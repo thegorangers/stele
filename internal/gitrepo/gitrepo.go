@@ -95,8 +95,18 @@ func (r *Repo) IsShallow() (bool, error) {
 // ObjectSHA reports the object at path in rev, and whether it is there.
 // cat-file -e is the test rather than matching rev-parse's message, because
 // git's messages are English prose and are not a contract.
+//
+// "." and "" name the repository root. rev+":."  is not a valid object spec —
+// git accepts "HEAD:./" but not "HEAD:." — so the root is named with
+// rev+"^{tree}" instead, the spelling that resolves the root tree directly.
+// A manifest with `modules: - path: .` is a plausible layout, and a caller
+// that instead rewrote "." upstream would only move this defect to wherever
+// that rewriting was forgotten.
 func (r *Repo) ObjectSHA(rev, path string) (string, bool, error) {
 	spec := rev + ":" + path
+	if path == "." || path == "" {
+		spec = rev + "^{tree}"
+	}
 	cmd := exec.Command("git", "cat-file", "-e", spec)
 	cmd.Dir = r.dir
 	if err := cmd.Run(); err != nil {

@@ -2,6 +2,7 @@ package breaking
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/thegorangers/stele/internal/gitrepo"
 )
@@ -25,6 +26,14 @@ func TreesUnchanged(r *gitrepo.Repo, prev Previous, paths []string) (bool, error
 		b, bok, err := r.ObjectSHA(prev.SHA, p)
 		if err != nil {
 			return false, err
+		}
+		// A watched path missing from both revisions cannot be compared at
+		// all: it names nothing in either tree. Reporting that as
+		// "unchanged" is exactly the empty-comparison-as-clean failure this
+		// package exists to avoid, so it is a broken watch list and an
+		// error, not a silent pass.
+		if !aok && !bok {
+			return false, fmt.Errorf("breaking: watched path %q is absent from both %s and %s", p, prev.Working, prev.SHA)
 		}
 		// aok != bok is redundant given ObjectSHA's current contract
 		// (empty SHA iff absent, pinned by
