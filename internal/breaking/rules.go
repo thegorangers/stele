@@ -277,6 +277,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Path:     p.add.Path,
 				Pos:      p.add.Pos,
 				Message:  "field " + p.rem.Subject + " was renamed to " + p.add.Subject,
+				Fix:      "confirm this is a rename, not a coincidental match; a consumer that reads by name, not by field number, still breaks until it is updated",
 			})
 		}
 		for i, r := range g.removed {
@@ -290,6 +291,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Path:     r.Path,
 				Pos:      r.Pos,
 				Message:  "field " + r.Subject + " was removed",
+				Fix:      "restore the field, or reserve its number and name so it is never reused",
 			})
 		}
 		_ = usedAdd // additions are never findings on their own
@@ -314,6 +316,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Pos:      c.Pos,
 				Message:  "field " + c.Subject + " changed its field number",
 				Change:   fmt.Sprintf("%d -> %d", before.Number(), after.Number()),
+				Fix:      "restore the original field number; renumbering an existing field is never safe on the wire",
 			})
 		}
 
@@ -330,6 +333,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Pos:      c.Pos,
 				Message:  "field " + c.Subject + " changed type from " + before.Kind().String() + " to " + after.Kind().String(),
 				Change:   before.Kind().String() + " -> " + after.Kind().String(),
+				Fix:      "revert the type, or add a new field instead of changing an existing one's type",
 			})
 		}
 
@@ -342,6 +346,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Pos:      c.Pos,
 				Message:  "field " + c.Subject + " changed cardinality from " + before.Cardinality().String() + " to " + after.Cardinality().String(),
 				Change:   before.Cardinality().String() + " -> " + after.Cardinality().String(),
+				Fix:      "revert the cardinality, or add a new field instead of changing an existing one's plurality",
 			})
 		}
 
@@ -366,6 +371,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Pos:      c.Pos,
 				Message:  "field " + c.Subject + " moved oneof membership from " + beforeLabel + " to " + afterLabel,
 				Change:   beforeLabel + " -> " + afterLabel,
+				Fix:      "revert the oneof membership, or add a new field instead of moving an existing one between oneofs",
 			})
 		}
 	}
@@ -468,6 +474,7 @@ func classifyEnumValues(byKindParent map[parentKey]*grouped, changes []Change, s
 				Path:     p.add.Path,
 				Pos:      p.add.Pos,
 				Message:  "enum value " + p.rem.Subject + " was renamed to " + p.add.Subject,
+				Fix:      "confirm this is a rename; a consumer that reads by name, not by number, still breaks until it is updated",
 			})
 		}
 		for i, r := range g.removed {
@@ -481,6 +488,7 @@ func classifyEnumValues(byKindParent map[parentKey]*grouped, changes []Change, s
 				Path:     r.Path,
 				Pos:      r.Pos,
 				Message:  "enum value " + r.Subject + " was removed",
+				Fix:      "restore the enum value, or reserve its number and name so it is never reused",
 			})
 		}
 	}
@@ -503,6 +511,7 @@ func classifyEnumValues(byKindParent map[parentKey]*grouped, changes []Change, s
 				Pos:      c.Pos,
 				Message:  "enum value " + c.Subject + " changed its number",
 				Change:   fmt.Sprintf("%d -> %d", before.Number(), after.Number()),
+				Fix:      "restore the original enum value number; renumbering an existing value is never safe on the wire",
 			})
 		}
 	}
@@ -534,6 +543,7 @@ func classifyMessages(byKindParent map[parentKey]*grouped, skip func(protoreflec
 				Path:     r.Path,
 				Pos:      r.Pos,
 				Message:  "message " + r.Subject + " was removed",
+				Fix:      "restore the message, or keep it declared even once nothing produces it any more",
 			})
 		}
 	}
@@ -562,6 +572,7 @@ func classifyEnums(byKindParent map[parentKey]*grouped, skip func(protoreflect.F
 				Path:     r.Path,
 				Pos:      r.Pos,
 				Message:  "enum " + r.Subject + " was removed",
+				Fix:      "restore the enum, or keep it declared even once nothing produces it any more",
 			})
 		}
 	}
@@ -590,6 +601,7 @@ func classifyServices(byKindParent map[parentKey]*grouped, skip func(protoreflec
 				Path:     r.Path,
 				Pos:      r.Pos,
 				Message:  "service " + r.Subject + " was removed",
+				Fix:      "restore the service, or keep it declared even once every method on it is deprecated",
 			})
 		}
 	}
@@ -624,6 +636,7 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 				Path:     r.Path,
 				Pos:      r.Pos,
 				Message:  "method " + r.Subject + " was removed",
+				Fix:      "restore the method, or keep it declared and mark it deprecated instead of deleting it",
 			})
 		}
 	}
@@ -647,6 +660,7 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 				Message:  "method " + c.Subject + " changed its input or output type",
 				Change: string(before.Input().FullName()) + "/" + string(before.Output().FullName()) +
 					" -> " + string(after.Input().FullName()) + "/" + string(after.Output().FullName()),
+				Fix: "revert the input or output type, or add a new method instead of changing an existing one's signature",
 			})
 		}
 		if before.IsStreamingClient() != after.IsStreamingClient() || before.IsStreamingServer() != after.IsStreamingServer() {
@@ -660,6 +674,7 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 				Pos:      c.Pos,
 				Message:  "method " + c.Subject + " changed its streaming shape from " + beforeLabel + " to " + afterLabel,
 				Change:   beforeLabel + " -> " + afterLabel,
+				Fix:      "revert the streaming shape, or add a new method instead of changing an existing one's shape",
 			})
 		}
 	}
@@ -729,19 +744,29 @@ func classifyPackages(prev, cur Revision) (findings []Finding, swallowed map[pro
 			}
 		}
 		swallowed[p] = true
+		// A package-level finding has no single declaration of its own to
+		// point at, but leaving Path empty makes String() print a bare
+		// leading colon no editor can navigate and no CI annotator can
+		// split on. Point at the first owned file that declared the
+		// package, prev-side and sorted for determinism.
+		path := firstOwnedFileOfPackage(prev, p)
 		if renamedTo != "" {
 			findings = append(findings, Finding{
 				Rule:     "break/package_renamed",
 				Category: Wire,
 				Subject:  string(p),
+				Path:     path,
 				Message:  "package " + string(p) + " was renamed to " + string(renamedTo),
+				Fix:      "confirm this is a rename; a consumer resolving by package path stops resolving until it is updated",
 			})
 		} else {
 			findings = append(findings, Finding{
 				Rule:     "break/package_removed",
 				Category: Wire,
 				Subject:  string(p),
+				Path:     path,
 				Message:  "package " + string(p) + " was removed",
+				Fix:      "restore the package, or keep at least one declaration in it so it is not silently dropped",
 			})
 		}
 	}
@@ -769,6 +794,28 @@ func topLevelNamesByPackage(r Revision) map[protoreflect.FullName][]protoreflect
 		out[pkg] = append(out[pkg], names...)
 	}
 	return out
+}
+
+// firstOwnedFileOfPackage returns the import path of the first owned file in
+// r that declares pkg, sorted, so that a package-level finding — which has no
+// single declaration of its own to point at — still names a file a reader can
+// open and a CI annotator can attach the finding to, deterministically.
+func firstOwnedFileOfPackage(r Revision, pkg protoreflect.FullName) string {
+	owned := ownedSet(r.Owned)
+	var paths []string
+	for _, f := range r.Files {
+		if _, ok := owned[f.Path()]; !ok {
+			continue
+		}
+		if f.Package() == pkg {
+			paths = append(paths, f.Path())
+		}
+	}
+	sort.Strings(paths)
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
 }
 
 func sameNameSet(a, b []protoreflect.Name) bool {
@@ -858,6 +905,7 @@ func classifyFiles(changes []Change, prev Revision) []Finding {
 				Subject:  c.Subject,
 				Path:     path,
 				Message:  "file " + path + " was removed, breaking any import of that path",
+				Fix:      "restore the file at this import path, or leave an empty file there so the import still resolves",
 			})
 		}
 	}
@@ -911,6 +959,7 @@ func classifyGoPackage(prev, cur Revision) []Finding {
 				Path:     f.Path(),
 				Message:  "go_package for " + f.Path() + " changed from " + bgp + " to " + agp,
 				Change:   bgp + " -> " + agp,
+				Fix:      "revert go_package; a consumer's generated import path moves whenever this changes",
 			})
 		}
 	}

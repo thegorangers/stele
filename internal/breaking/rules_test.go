@@ -569,3 +569,32 @@ func TestClassify(t *testing.T) {
 		})
 	}
 }
+
+// A package finding has no single declaration of its own to point at —
+// Subject names the package, not a message or field — but rule.Finding's
+// String() writes Path first, and an empty Path renders as a bare leading
+// colon nothing can navigate to. break/package_removed must name the first
+// owned file (sorted, for determinism) that declared the package.
+func TestPackageFindingsNameTheirFirstFile(t *testing.T) {
+	keep := "syntax = \"proto3\";\npackage example.other.v1;\nmessage Keep {\n  string id = 1;\n}\n"
+	findings := classifyFixture(t,
+		map[string]string{
+			"z.proto": hdr + "message Order {\n  string id = 1;\n}\n",
+			"a.proto": hdr + "message Other {\n  string id = 1;\n}\n",
+			"b.proto": keep,
+		},
+		map[string]string{"b.proto": keep},
+	)
+	var f Finding
+	for _, c := range findings {
+		if c.Rule == "break/package_removed" {
+			f = c
+		}
+	}
+	if f.Rule == "" {
+		t.Fatalf("break/package_removed did not fire: %+v", findings)
+	}
+	if f.Path != "a.proto" {
+		t.Errorf("Path = %q, want the first owned file sorted, \"a.proto\"", f.Path)
+	}
+}
