@@ -16,7 +16,10 @@ func TestReservedNamespaces(t *testing.T) {
 	if rule.NamespaceAIP != "aip" {
 		t.Errorf("the AIP namespace is %q, and it is a published contract", rule.NamespaceAIP)
 	}
-	for _, ns := range []string{rule.NamespaceBuiltin, rule.NamespaceAIP} {
+	if rule.NamespaceBreaking != "break" {
+		t.Errorf("the breaking namespace is %q, and it is a published contract", rule.NamespaceBreaking)
+	}
+	for _, ns := range []string{rule.NamespaceBuiltin, rule.NamespaceAIP, rule.NamespaceBreaking} {
 		if !rule.Reserved(ns) {
 			t.Errorf("%q must be reserved: a third-party rule that claimed it could take over the "+
 				"configuration of a rule that ships here", ns)

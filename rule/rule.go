@@ -318,6 +318,11 @@ const NamespaceBuiltin = "stele"
 // named it.
 const NamespaceAIP = "aip"
 
+// NamespaceBreaking is the origin part of a rule ID reserved for the rules
+// that compare this revision against a previous one. It is reserved here,
+// before the first such rule ships, for the reason NamespaceBuiltin gives.
+const NamespaceBreaking = "break"
+
 // Reserved reports whether ns is a rule namespace this tool keeps for itself.
 //
 // A rule from outside declares its own namespace. The reservation is not
@@ -326,7 +331,7 @@ const NamespaceAIP = "aip"
 // take over the configuration of a rule that ships here, or be displaced by a
 // rule of the same ID in a later release.
 func Reserved(ns string) bool {
-	return ns == NamespaceBuiltin || ns == NamespaceAIP
+	return ns == NamespaceBuiltin || ns == NamespaceAIP || ns == NamespaceBreaking
 }
 
 // Namespace is the origin part of id, or the empty string when id has none.
