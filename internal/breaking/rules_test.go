@@ -234,13 +234,16 @@ var cases = []struct {
 	},
 
 	// -- field_oneof_changed --
-	// R7: the discriminator is not "was there a real oneof on either side"
-	// but "did sibling-clearing semantics change on the wire". Joining or
-	// leaving a SINGLETON oneof changes nothing a decoder keeps — there was
-	// never a sibling to clear — so that is Source. Joining or leaving a
-	// oneof that has OTHER members, or moving between two distinct real
-	// oneofs, changes which sibling a decoder clears on receipt: a peer
-	// observes that without recompiling anything, so those are Wire.
+	// R8: one rule applies uniformly to all three directions (join, leave,
+	// move between two distinct oneofs): does sibling-clearing semantics
+	// change on the wire? That is true exactly when EITHER side's oneof —
+	// when it has one — has another member besides the field itself. A
+	// decoder only ever clears a sibling on receipt when there is a
+	// sibling to clear, so a move, join or leave touching only singleton
+	// oneofs changes nothing observable on the wire (Source); one touching
+	// a populated oneof on either side does (Wire) — including a move
+	// between two DISTINCT oneofs, which is why that case still needs its
+	// own fixture even though it is not a join or a leave.
 	{
 		"field_oneof_join_singleton_is_source",
 		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n  string b = 2;\n}\n"},
@@ -265,15 +268,27 @@ var cases = []struct {
 		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n  oneof choice {\n    string c = 3;\n  }\n}\n"},
 		[]rulePair{{"break/field_oneof_changed", Wire, "choice -> none"}},
 	},
-	// Moving a field FROM one real oneof to a DIFFERENT real oneof is
-	// always Wire, regardless of either oneof's population: whichever of
-	// the two fields is set on the wire now clears a different sibling
-	// group on decode than it used to.
+	// Moving between two DISTINCT oneofs where at least one side is
+	// populated: the sibling-clearing group changes on decode, so Wire.
 	{
-		"field_oneof_between_is_wire",
+		"field_oneof_between_populated_is_wire",
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n    string keep_x = 3;\n  }\n  oneof y {\n    string b = 2;\n  }\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string keep_x = 3;\n  }\n  oneof y {\n    string b = 2;\n    string a = 1;\n  }\n}\n"},
 		[]rulePair{{"break/field_oneof_changed", Wire, "x -> y"}},
+	},
+	// The case R8 exists to fix: a move between two SINGLETON oneofs.
+	// Neither x nor y ever has a sibling to clear, before or after, so a
+	// decoder behaves identically byte for byte — Source, not Wire. A third
+	// oneof (w, with its own field p, untouched throughout) has to be
+	// present on both sides purely so that a's declared oneof_index
+	// actually changes value (0 -> 1) between revisions — otherwise this
+	// diffs as a same-shaped field descriptor and Diff has nothing to
+	// report at the field level at all, independent of Classify.
+	{
+		"field_oneof_between_singletons_is_source",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n  }\n  oneof w {\n    string p = 5;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof w {\n    string p = 5;\n  }\n  oneof y {\n    string a = 1;\n  }\n}\n"},
+		[]rulePair{{"break/field_oneof_changed", Source, "x -> y"}},
 	},
 	{
 		"field_oneof_unchanged",

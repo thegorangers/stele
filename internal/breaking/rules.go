@@ -399,39 +399,32 @@ func oneofDescName(o protoreflect.OneofDescriptor) string {
 }
 
 // oneofChangeCategory decides break/field_oneof_changed's Category from the
-// field's oneof membership before and after, per the design's discriminator:
-// not "was there a real oneof on either side" but "did sibling-clearing
-// semantics change on the wire".
+// field's oneof membership before and after. There is one rule, applied
+// uniformly to every direction (join, leave, or move between two distinct
+// oneofs): does sibling-clearing semantics change on the wire? A oneof only
+// clears a sibling on decode when it has one — a member beyond the field
+// under discussion. So the category depends solely on whether EITHER side's
+// oneof (when it has one) has such a sibling, never on which of the three
+// directions this is:
 //
-//   - Moving between two DISTINCT real oneofs is always Wire: whichever of
-//     the two fields is set on the wire now clears a different sibling on
-//     decode than it used to — a behavioural change a peer observes without
-//     recompiling anything.
-//   - Joining or leaving a oneof that has OTHER members is Wire for the same
-//     reason: before, a decoder receiving two of that oneof's fields on the
-//     wire (from an old-schema peer, or a malformed/adversarial message)
-//     keeps both; after, it keeps only the last one.
-//   - Joining or leaving a SINGLETON oneof (this field is the only member of
-//     the oneof on the side that has one) is Source: nothing about what a
-//     decoder keeps changes, because there was never a sibling to clear;
-//     only the generated accessor's shape changes.
+//   - If either side's oneof has another member, the answer is yes: before,
+//     a decoder receiving two of that oneof's fields on the wire (from an
+//     old-schema peer, or a malformed/adversarial message) kept both;
+//     after, it keeps only the last one, on at least one side of the
+//     change. That is Wire.
+//   - If neither side's oneof (where present) has any other member, the
+//     answer is no in both directions: there was never a sibling to clear,
+//     so a decoder behaves identically byte for byte, including a move
+//     between two distinct SINGLETON oneofs. Only the generated accessor's
+//     shape changes. That is Source.
 func oneofChangeCategory(before, after protoreflect.OneofDescriptor) Category {
-	switch {
-	case before != nil && after != nil:
+	if before != nil && before.Fields().Len() > 1 {
 		return Wire
-	case before != nil:
-		if before.Fields().Len() > 1 {
-			return Wire
-		}
-		return Source
-	case after != nil:
-		if after.Fields().Len() > 1 {
-			return Wire
-		}
-		return Source
-	default:
-		return Source // unreachable: caller only invokes this when the two differ
 	}
+	if after != nil && after.Fields().Len() > 1 {
+		return Wire
+	}
+	return Source
 }
 
 // fieldShapeEqual is the rename rule for fields: same number, kind,
