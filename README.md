@@ -596,7 +596,7 @@ example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) 
     revert the type, or add a new field instead of changing an existing one's type
 
 report-only: this run always exits zero
-blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, google.api.http changes, or a oneof renamed with its members intact — the generated wrapper type and getter change and every Go consumer stops compiling, but no descriptor index shifts, so Diff emits nothing
+blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, or google.api.http changes
 ```
 
 **The previous revision is chosen the way a code review chooses one, not
@@ -619,25 +619,31 @@ Two changes checked:
   the wire.
 - **Source.** The bytes survive; a consumer's generated code stops compiling:
   field renames at a stable number, a removed field, message or enum, a
-  changed `go_package`, and a oneof move where no oneof involved has another
-  member — only the generated accessor changes.
+  changed `go_package`, a oneof move where no oneof involved has another
+  member — only the generated accessor changes — and a oneof rename with its
+  members intact: a oneof's name is not on the wire, only each member's
+  `oneof_index` is, but the generated wrapper type and getter are named after
+  it, and every caller using either stops compiling.
 
   A renamed message or enum is deliberately not its own rule: pairing
   containers by shape would marry unrelated declarations and hide a real
   removal behind a coincidental rename, so a rename reports as a removal plus
-  an addition instead. A field or an enum value has a number to key a pairing
-  on rather than shape, so `break/field_renamed` and `break/enum_value_renamed`
-  exist where `break/message_renamed` and `break/enum_renamed` do not.
+  an addition instead. A field, an enum value, or a oneof has something
+  sharper than shape to key a pairing on — a field number, or, for a oneof,
+  the exact set of field numbers its members occupy, which is disjoint from
+  every sibling oneof's by construction — so `break/field_renamed`,
+  `break/enum_value_renamed` and `break/oneof_renamed` exist where
+  `break/message_renamed` and `break/enum_renamed` do not.
 
-19 rule ids, in the reserved `break/` namespace: `break/enum_removed`,
+20 rule ids, in the reserved `break/` namespace: `break/enum_removed`,
 `break/enum_value_number_changed`, `break/enum_value_removed`,
 `break/enum_value_renamed`, `break/field_cardinality_changed`,
 `break/field_number_changed`, `break/field_oneof_changed`,
 `break/field_removed`, `break/field_renamed`, `break/field_type_changed`,
 `break/file_removed`, `break/go_package_changed`, `break/message_removed`,
 `break/method_removed`, `break/method_signature_changed`,
-`break/method_streaming_changed`, `break/package_removed`,
-`break/package_renamed`, `break/service_removed`.
+`break/method_streaming_changed`, `break/oneof_renamed`,
+`break/package_removed`, `break/package_renamed`, `break/service_removed`.
 
 **It also compares the dependency closure this repository re-exports.** Your
 own files can be byte-identical while a bumped dependency pin still breaks
