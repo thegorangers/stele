@@ -50,3 +50,12 @@ func repo(t *testing.T) string {
 	run(t, dir, "init", "-q", "-b", "main")
 	return dir
 }
+
+// run2 is git, in dir, returning its error rather than failing the test —
+// needed for tests that assert a command fails.
+func run2(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
