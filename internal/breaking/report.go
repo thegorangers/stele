@@ -46,7 +46,10 @@ type Info struct {
 // footer. A report saying "no breaking changes" without this reads as "safe
 // to change anything", and these three pass green by design.
 const blindZone = `blind zone: this engine does not check json_name renames, ` +
-	`int32 widening to int64 under protojson, or google.api.http changes`
+	`int32 widening to int64 under protojson, google.api.http changes, ` +
+	`or a oneof renamed with its members intact — the generated wrapper type ` +
+	`and getter change and every Go consumer stops compiling, but no ` +
+	`descriptor index shifts, so Diff emits nothing`
 
 // reportOnlyNotice says the run cannot fail a build, so a reader does not
 // have to infer that from the exit status.
@@ -114,8 +117,13 @@ func renderFinding(f Finding) string {
 	if f.Subject != "" {
 		message = fmt.Sprintf("%s: %s", f.Subject, message)
 	}
+	// ClassifyClosure has already prefixed Message with "[dependency <name>]"
+	// (closure.go), naming the dependency the finding came from. A second
+	// "[dependency: <path>]" here would print two dependency markers, one of
+	// them a bare import path rather than the name a reader can act on — so
+	// this marker stays bare and lets the message carry the name.
 	if f.Closure {
-		message = fmt.Sprintf("[dependency: %s] (category: %s) %s", f.Path, categoryName(f.Category), message)
+		message = fmt.Sprintf("[dependency] (category: %s) %s", categoryName(f.Category), message)
 	} else {
 		message = fmt.Sprintf("(category: %s) %s", categoryName(f.Category), message)
 	}

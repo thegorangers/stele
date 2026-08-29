@@ -139,3 +139,51 @@ func TestComparedCleanDoesNotSayNothingToCompare(t *testing.T) {
 		t.Error("a clean comparison must not read as a run that compared nothing")
 	}
 }
+
+// categoryName must return "wire" for Wire and "source" for Source: not the
+// same fragment shared with an unrelated fixture, and not a constant that
+// happens to be correct for whichever category a test reaches for first. A
+// rewrite that returns "source" unconditionally must fail this.
+func TestCategoryNameRendersWireAndSourceDistinctly(t *testing.T) {
+	wire := renderFinding(Finding{Rule: "break/field_type_changed", Category: Wire,
+		Path: "api/orders/v1/order.proto", Subject: "example.orders.v1.Order.eta", Message: "m"})
+	if !strings.Contains(wire, "(category: wire)") {
+		t.Errorf("a Wire finding does not render as %q:\n%s", "(category: wire)", wire)
+	}
+	if strings.Contains(wire, "(category: source)") {
+		t.Errorf("a Wire finding renders as source:\n%s", wire)
+	}
+
+	src := renderFinding(Finding{Rule: "break/comment_removed", Category: Source,
+		Path: "api/orders/v1/order.proto", Subject: "example.orders.v1.Order.eta", Message: "m"})
+	if !strings.Contains(src, "(category: source)") {
+		t.Errorf("a Source finding does not render as %q:\n%s", "(category: source)", src)
+	}
+	if strings.Contains(src, "(category: wire)") {
+		t.Errorf("a Source finding renders as wire:\n%s", src)
+	}
+}
+
+// renderFinding's closure branch must actually run: a closure finding
+// carries the bare "[dependency]" marker (I3: the dependency name itself
+// lives in Message, prefixed there by ClassifyClosure) and a non-closure
+// finding must never carry it. Collapsing the closure branch into the
+// non-closure one — I1's second named mutation — makes both render
+// identically and this test catches exactly that: it asserts the marker as
+// an exact substring, not via a fragment ("category: ...") the two branches
+// already share.
+func TestRenderFindingMarksClosureFindingsAndOnlyThem(t *testing.T) {
+	closure := renderFinding(Finding{Rule: "break/field_removed", Category: Source,
+		Path: "example/dep.proto", Subject: "example.Dep.extra",
+		Message: "[dependency dep] field extra was removed", Closure: true})
+	if !strings.Contains(closure, "[dependency]") {
+		t.Errorf("a closure finding does not carry the [dependency] marker:\n%s", closure)
+	}
+
+	owned := renderFinding(Finding{Rule: "break/field_removed", Category: Source,
+		Path: "api/orders/v1/order.proto", Subject: "example.orders.v1.Order.eta",
+		Message: "field eta was removed", Closure: false})
+	if strings.Contains(owned, "[dependency]") {
+		t.Errorf("an owned finding must not carry the [dependency] marker:\n%s", owned)
+	}
+}
