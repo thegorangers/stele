@@ -68,7 +68,7 @@ func TestObjectSHAReportsAbsence(t *testing.T) {
 	}
 }
 
-// The breaking-change shortcut (internal/breaking.Unchanged) leans on this
+// The breaking-change shortcut (internal/breaking.TreesUnchanged) leans on this
 // exact contract: a non-empty SHA if and only if ok is true. Pin it here,
 // where it is made, so a future change to ObjectSHA cannot silently turn
 // "appeared" into "unchanged" for that caller.

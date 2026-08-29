@@ -6,14 +6,14 @@ import (
 	"github.com/thegorangers/stele/internal/gitrepo"
 )
 
-// Unchanged reports whether every watched path has the same object in both
+// TreesUnchanged reports whether every watched path has the same object in both
 // revisions. Absence is compared as well as identity: a path one revision did
 // not have has not "stayed the same".
 //
 // paths must not be empty: an empty set would compare nothing and report
 // "unchanged" forever, which is the empty-comparison-as-clean failure this
 // package exists to avoid.
-func Unchanged(r *gitrepo.Repo, prev Previous, paths []string) (bool, error) {
+func TreesUnchanged(r *gitrepo.Repo, prev Previous, paths []string) (bool, error) {
 	if len(paths) == 0 {
 		return false, errors.New("breaking: nothing to compare against: no paths were watched")
 	}

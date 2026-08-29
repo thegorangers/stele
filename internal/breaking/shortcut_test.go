@@ -24,9 +24,9 @@ func twoCommits(t *testing.T, second func(dir string)) (*gitrepo.Repo, Previous)
 
 var watched = []string{"api", "stele.lock"}
 
-func TestUnchangedWhenNeitherProtosNorLockMoved(t *testing.T) {
+func TestTreesUnchangedWhenNeitherProtosNorLockMoved(t *testing.T) {
 	r, prev := twoCommits(t, func(dir string) { write(t, dir, "README.md", "prose") })
-	got, err := Unchanged(r, prev, watched)
+	got, err := TreesUnchanged(r, prev, watched)
 	if err != nil || !got {
 		t.Fatalf("Unchanged = %v, %v; want true", got, err)
 	}
@@ -36,7 +36,7 @@ func TestChangedWhenAProtoMoved(t *testing.T) {
 	r, prev := twoCommits(t, func(dir string) {
 		write(t, dir, "api/x.proto", "syntax = \"proto3\";\nmessage M {}\n")
 	})
-	got, err := Unchanged(r, prev, watched)
+	got, err := TreesUnchanged(r, prev, watched)
 	if err != nil || got {
 		t.Fatalf("Unchanged = %v, %v; want false", got, err)
 	}
@@ -46,7 +46,7 @@ func TestChangedWhenAProtoMoved(t *testing.T) {
 // of what this repository re-exports, so the lock is watched too.
 func TestChangedWhenOnlyTheLockMoved(t *testing.T) {
 	r, prev := twoCommits(t, func(dir string) { write(t, dir, "stele.lock", "version: 1\n# bumped\n") })
-	got, err := Unchanged(r, prev, watched)
+	got, err := TreesUnchanged(r, prev, watched)
 	if err != nil || got {
 		t.Fatalf("Unchanged = %v, %v; want false", got, err)
 	}
@@ -64,7 +64,7 @@ func TestAbsentPathIsNotEqualToPresentPath(t *testing.T) {
 	head := run(t, dir, "rev-parse", "HEAD")
 
 	r, _ := gitrepo.Open(dir)
-	got, err := Unchanged(r, Previous{SHA: first, Working: head}, []string{"api"})
+	got, err := TreesUnchanged(r, Previous{SHA: first, Working: head}, []string{"api"})
 	if err != nil || got {
 		t.Fatalf("Unchanged = %v, %v; want false", got, err)
 	}
@@ -74,9 +74,9 @@ func TestAbsentPathIsNotEqualToPresentPath(t *testing.T) {
 // "unchanged" would skip every run forever. That is the
 // empty-comparison-as-clean failure this package exists to avoid, so it must
 // be an error.
-func TestUnchangedRejectsEmptyPaths(t *testing.T) {
+func TestTreesUnchangedRejectsEmptyPaths(t *testing.T) {
 	r, prev := twoCommits(t, func(dir string) { write(t, dir, "README.md", "prose") })
-	got, err := Unchanged(r, prev, nil)
+	got, err := TreesUnchanged(r, prev, nil)
 	if err == nil {
 		t.Fatalf("Unchanged with no paths: err = nil, want an error")
 	}
