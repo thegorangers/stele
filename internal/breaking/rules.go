@@ -1,6 +1,7 @@
 package breaking
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/thegorangers/stele/internal/lint"
@@ -55,10 +56,22 @@ type Finding struct {
 //
 // The rename rule, stated once here because two permanent ids would
 // otherwise contradict each other: a removal and an addition within the
-// same parent are reported as a rename when number, type and cardinality
-// (or, for a declaration with no number, its shape) all match and only the
-// name differs; otherwise they are reported separately, as a removal and an
-// addition (the addition is never a finding on its own).
+// same parent are reported as a rename ONLY when the declaration has a
+// number to key on — a field or an enum value — and that number, its type
+// and its cardinality (a field's oneof membership counts as part of its
+// shape too) all match while only the name differs. A message, enum,
+// service or method has no identity beyond its name: shape is not identity
+// (two empty messages have identical shape; pairing them by shape alone can
+// match the wrong two members of an unrelated batch of removals and
+// additions and silently hide a real removal, which is the expensive
+// direction to be wrong in). So those four kinds are never paired — a
+// renamed message, enum, service or method is reported as a removal plus an
+// addition, and the addition is never a finding on its own, exactly as an
+// unrelated removal and addition would be. break/package_renamed is the one
+// exception with no number to key on that still pairs: it requires an exact
+// match of the whole top-level name *set* moving to one specific new
+// package, which is a far stronger signal than shape, and it degrades
+// loudly to break/package_removed the moment that exact match fails.
 func Classify(changes []Change, prev, cur Revision) []Finding {
 	var findings []Finding
 
@@ -103,7 +116,7 @@ func Classify(changes []Change, prev, cur Revision) []Finding {
 	findings = append(findings, classifyServices(byKindParent, skipContainer)...)
 	findings = append(findings, classifyMethods(byKindParent, changes, skipMember)...)
 	findings = append(findings, packageFindings...)
-	findings = append(findings, classifyFiles(changes)...)
+	findings = append(findings, classifyFiles(changes, prev)...)
 	findings = append(findings, classifyGoPackage(prev, cur)...)
 
 	sort.Slice(findings, func(i, j int) bool {
@@ -291,6 +304,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Path:     c.Path,
 				Pos:      c.Pos,
 				Message:  "field " + c.Subject + " changed its field number",
+				Change:   fmt.Sprintf("%d -> %d", before.Number(), after.Number()),
 			})
 		}
 
@@ -306,7 +320,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Path:     c.Path,
 				Pos:      c.Pos,
 				Message:  "field " + c.Subject + " changed type from " + before.Kind().String() + " to " + after.Kind().String(),
-				Change:   before.Kind().String() + "->" + after.Kind().String(),
+				Change:   before.Kind().String() + " -> " + after.Kind().String(),
 			})
 		}
 
@@ -318,25 +332,41 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				Path:     c.Path,
 				Pos:      c.Pos,
 				Message:  "field " + c.Subject + " changed cardinality from " + before.Cardinality().String() + " to " + after.Cardinality().String(),
-				Change:   before.Cardinality().String() + "->" + after.Cardinality().String(),
+				Change:   before.Cardinality().String() + " -> " + after.Cardinality().String(),
 			})
 		}
 
 		beforeOneof := effectiveOneof(before)
 		afterOneof := effectiveOneof(after)
 		if beforeOneof != afterOneof {
-			dest := afterOneof
-			if dest == "" {
-				dest = "none"
+			// Wire encoding never depends on oneof membership by itself —
+			// the tag on the wire is the same whether or not a field
+			// belongs to a oneof. Joining or leaving a oneof only changes
+			// generated code (the accessor pattern), so that is Source.
+			// Moving between two DISTINCT oneofs is different: whichever of
+			// the two fields is set on the wire now clears the other field
+			// in its new group on decode, a behavioural change a peer can
+			// observe without recompiling anything, so that direction is
+			// Wire.
+			cat := Source
+			if beforeOneof != "" && afterOneof != "" {
+				cat = Wire
+			}
+			beforeLabel, afterLabel := beforeOneof, afterOneof
+			if beforeLabel == "" {
+				beforeLabel = "none"
+			}
+			if afterLabel == "" {
+				afterLabel = "none"
 			}
 			findings = append(findings, Finding{
 				Rule:     "break/field_oneof_changed",
-				Category: Wire,
+				Category: cat,
 				Subject:  c.Subject,
 				Path:     c.Path,
 				Pos:      c.Pos,
-				Message:  "field " + c.Subject + " moved oneof membership to " + dest,
-				Change:   dest,
+				Message:  "field " + c.Subject + " moved oneof membership from " + beforeLabel + " to " + afterLabel,
+				Change:   beforeLabel + " -> " + afterLabel,
 			})
 		}
 	}
@@ -356,13 +386,20 @@ func effectiveOneof(f protoreflect.FieldDescriptor) string {
 	return string(o.Name())
 }
 
+// fieldShapeEqual is the rename rule for fields: same number, kind,
+// cardinality AND oneof membership. Oneof membership is part of the shape,
+// not just the name, so "string a = 1;" becoming
+// "oneof choice { string b = 1; }" is never paired into a rename — the move
+// into the oneof is a real, separate fact, not something a rename finding
+// should absorb and hide.
 func fieldShapeEqual(before, after protoreflect.Descriptor) bool {
 	b, ok1 := before.(protoreflect.FieldDescriptor)
 	a, ok2 := after.(protoreflect.FieldDescriptor)
 	if !ok1 || !ok2 {
 		return false
 	}
-	return b.Number() == a.Number() && b.Kind() == a.Kind() && b.Cardinality() == a.Cardinality()
+	return b.Number() == a.Number() && b.Kind() == a.Kind() && b.Cardinality() == a.Cardinality() &&
+		effectiveOneof(b) == effectiveOneof(a)
 }
 
 // ---- enum values ----
@@ -424,6 +461,7 @@ func classifyEnumValues(byKindParent map[parentKey]*grouped, changes []Change, s
 				Path:     c.Path,
 				Pos:      c.Pos,
 				Message:  "enum value " + c.Subject + " changed its number",
+				Change:   fmt.Sprintf("%d -> %d", before.Number(), after.Number()),
 			})
 		}
 	}
@@ -433,6 +471,11 @@ func classifyEnumValues(byKindParent map[parentKey]*grouped, changes []Change, s
 
 // ---- messages ----
 
+// classifyMessages reports break/message_removed. There is no
+// break/message_renamed: a message has no number to key a rename pairing
+// on, and pairing by shape alone is unsound — see Classify's doc comment.
+// A renamed message is reported as a plain removal (and the addition,
+// which is never a finding on its own).
 func classifyMessages(byKindParent map[parentKey]*grouped, skip func(protoreflect.FullName) bool) []Finding {
 	var findings []Finding
 	for key, g := range byKindParent {
@@ -442,21 +485,7 @@ func classifyMessages(byKindParent map[parentKey]*grouped, skip func(protoreflec
 		if skip(key.parent) {
 			continue
 		}
-		pairs, usedRem, _ := pairRenames(g, messageShapeEqual)
-		for _, p := range pairs {
-			findings = append(findings, Finding{
-				Rule:     "break/message_renamed",
-				Category: Source,
-				Subject:  p.add.Subject,
-				Path:     p.add.Path,
-				Pos:      p.add.Pos,
-				Message:  "message " + p.rem.Subject + " was renamed to " + p.add.Subject,
-			})
-		}
-		for i, r := range g.removed {
-			if usedRem[i] {
-				continue
-			}
+		for _, r := range g.removed {
 			findings = append(findings, Finding{
 				Rule:     "break/message_removed",
 				Category: Source,
@@ -470,49 +499,11 @@ func classifyMessages(byKindParent map[parentKey]*grouped, skip func(protoreflec
 	return findings
 }
 
-// messageShapeEqual reports whether two messages have the same set of
-// direct fields by (number, kind, cardinality), ignoring field names: this
-// is what tells a message rename apart from an unrelated removal and
-// addition. It intentionally does not compare nested declarations, which
-// are indexed and diffed separately.
-func messageShapeEqual(before, after protoreflect.Descriptor) bool {
-	b, ok1 := before.(protoreflect.MessageDescriptor)
-	a, ok2 := after.(protoreflect.MessageDescriptor)
-	if !ok1 || !ok2 {
-		return false
-	}
-	return fieldSetEqual(b.Fields(), a.Fields())
-}
-
-func fieldSetEqual(b, a protoreflect.FieldDescriptors) bool {
-	if b.Len() != a.Len() {
-		return false
-	}
-	type shape struct {
-		num  protoreflect.FieldNumber
-		kind protoreflect.Kind
-		card protoreflect.Cardinality
-	}
-	toShapes := func(fs protoreflect.FieldDescriptors) []shape {
-		out := make([]shape, fs.Len())
-		for i := 0; i < fs.Len(); i++ {
-			f := fs.Get(i)
-			out[i] = shape{f.Number(), f.Kind(), f.Cardinality()}
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].num < out[j].num })
-		return out
-	}
-	bs, as := toShapes(b), toShapes(a)
-	for i := range bs {
-		if bs[i] != as[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // ---- enums ----
 
+// classifyEnums reports break/enum_removed. There is no break/enum_renamed
+// for the same reason there is no break/message_renamed — see Classify's
+// doc comment.
 func classifyEnums(byKindParent map[parentKey]*grouped, skip func(protoreflect.FullName) bool) []Finding {
 	var findings []Finding
 	for key, g := range byKindParent {
@@ -522,21 +513,7 @@ func classifyEnums(byKindParent map[parentKey]*grouped, skip func(protoreflect.F
 		if skip(key.parent) {
 			continue
 		}
-		pairs, usedRem, _ := pairRenames(g, enumShapeEqual)
-		for _, p := range pairs {
-			findings = append(findings, Finding{
-				Rule:     "break/enum_renamed",
-				Category: Source,
-				Subject:  p.add.Subject,
-				Path:     p.add.Path,
-				Pos:      p.add.Pos,
-				Message:  "enum " + p.rem.Subject + " was renamed to " + p.add.Subject,
-			})
-		}
-		for i, r := range g.removed {
-			if usedRem[i] {
-				continue
-			}
+		for _, r := range g.removed {
 			findings = append(findings, Finding{
 				Rule:     "break/enum_removed",
 				Category: Source,
@@ -550,35 +527,11 @@ func classifyEnums(byKindParent map[parentKey]*grouped, skip func(protoreflect.F
 	return findings
 }
 
-func enumShapeEqual(before, after protoreflect.Descriptor) bool {
-	b, ok1 := before.(protoreflect.EnumDescriptor)
-	a, ok2 := after.(protoreflect.EnumDescriptor)
-	if !ok1 || !ok2 {
-		return false
-	}
-	if b.Values().Len() != a.Values().Len() {
-		return false
-	}
-	bn := make([]protoreflect.EnumNumber, b.Values().Len())
-	for i := range bn {
-		bn[i] = b.Values().Get(i).Number()
-	}
-	an := make([]protoreflect.EnumNumber, a.Values().Len())
-	for i := range an {
-		an[i] = a.Values().Get(i).Number()
-	}
-	sort.Slice(bn, func(i, j int) bool { return bn[i] < bn[j] })
-	sort.Slice(an, func(i, j int) bool { return an[i] < an[j] })
-	for i := range bn {
-		if bn[i] != an[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // ---- services ----
 
+// classifyServices reports break/service_removed. There is no
+// break/service_renamed for the same reason there is no
+// break/message_renamed — see Classify's doc comment.
 func classifyServices(byKindParent map[parentKey]*grouped, skip func(protoreflect.FullName) bool) []Finding {
 	var findings []Finding
 	for key, g := range byKindParent {
@@ -588,21 +541,7 @@ func classifyServices(byKindParent map[parentKey]*grouped, skip func(protoreflec
 		if skip(key.parent) {
 			continue
 		}
-		pairs, usedRem, _ := pairRenames(g, serviceShapeEqual)
-		for _, p := range pairs {
-			findings = append(findings, Finding{
-				Rule:     "break/service_renamed",
-				Category: Wire,
-				Subject:  p.add.Subject,
-				Path:     p.add.Path,
-				Pos:      p.add.Pos,
-				Message:  "service " + p.rem.Subject + " was renamed to " + p.add.Subject,
-			})
-		}
-		for i, r := range g.removed {
-			if usedRem[i] {
-				continue
-			}
+		for _, r := range g.removed {
 			findings = append(findings, Finding{
 				Rule:     "break/service_removed",
 				Category: Wire,
@@ -616,40 +555,12 @@ func classifyServices(byKindParent map[parentKey]*grouped, skip func(protoreflec
 	return findings
 }
 
-func serviceShapeEqual(before, after protoreflect.Descriptor) bool {
-	b, ok1 := before.(protoreflect.ServiceDescriptor)
-	a, ok2 := after.(protoreflect.ServiceDescriptor)
-	if !ok1 || !ok2 {
-		return false
-	}
-	if b.Methods().Len() != a.Methods().Len() {
-		return false
-	}
-	type shape struct {
-		name             protoreflect.Name
-		in, out          protoreflect.FullName
-		streamC, streamS bool
-	}
-	toShapes := func(ms protoreflect.MethodDescriptors) []shape {
-		out := make([]shape, ms.Len())
-		for i := 0; i < ms.Len(); i++ {
-			m := ms.Get(i)
-			out[i] = shape{m.Name(), m.Input().FullName(), m.Output().FullName(), m.IsStreamingClient(), m.IsStreamingServer()}
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
-		return out
-	}
-	bs, as := toShapes(b.Methods()), toShapes(a.Methods())
-	for i := range bs {
-		if bs[i] != as[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // ---- methods ----
 
+// classifyMethods reports break/method_removed, break/method_signature_changed
+// and break/method_streaming_changed. There is no break/method_renamed for
+// the same reason there is no break/message_renamed — see Classify's doc
+// comment.
 func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip func(protoreflect.FullName) bool) []Finding {
 	var findings []Finding
 
@@ -664,21 +575,7 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 		if skip(key.parent) {
 			continue
 		}
-		pairs, usedRem, _ := pairRenames(g, methodShapeEqual)
-		for _, p := range pairs {
-			findings = append(findings, Finding{
-				Rule:     "break/method_renamed",
-				Category: Wire,
-				Subject:  p.add.Subject,
-				Path:     p.add.Path,
-				Pos:      p.add.Pos,
-				Message:  "method " + p.rem.Subject + " was renamed to " + p.add.Subject,
-			})
-		}
-		for i, r := range g.removed {
-			if usedRem[i] {
-				continue
-			}
+		for _, r := range g.removed {
 			findings = append(findings, Finding{
 				Rule:     "break/method_removed",
 				Category: Wire,
@@ -707,17 +604,21 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 				Path:     c.Path,
 				Pos:      c.Pos,
 				Message:  "method " + c.Subject + " changed its input or output type",
-				Change:   string(before.Input().FullName()) + "/" + string(before.Output().FullName()) + "->" + string(after.Input().FullName()) + "/" + string(after.Output().FullName()),
+				Change: string(before.Input().FullName()) + "/" + string(before.Output().FullName()) +
+					" -> " + string(after.Input().FullName()) + "/" + string(after.Output().FullName()),
 			})
 		}
 		if before.IsStreamingClient() != after.IsStreamingClient() || before.IsStreamingServer() != after.IsStreamingServer() {
+			beforeLabel := streamingLabel(before.IsStreamingClient(), before.IsStreamingServer())
+			afterLabel := streamingLabel(after.IsStreamingClient(), after.IsStreamingServer())
 			findings = append(findings, Finding{
 				Rule:     "break/method_streaming_changed",
 				Category: Wire,
 				Subject:  c.Subject,
 				Path:     c.Path,
 				Pos:      c.Pos,
-				Message:  "method " + c.Subject + " changed its streaming shape",
+				Message:  "method " + c.Subject + " changed its streaming shape from " + beforeLabel + " to " + afterLabel,
+				Change:   beforeLabel + " -> " + afterLabel,
 			})
 		}
 	}
@@ -725,16 +626,18 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 	return findings
 }
 
-func methodShapeEqual(before, after protoreflect.Descriptor) bool {
-	b, ok1 := before.(protoreflect.MethodDescriptor)
-	a, ok2 := after.(protoreflect.MethodDescriptor)
-	if !ok1 || !ok2 {
-		return false
+// streamingLabel names an RPC's streaming shape, for break/method_streaming_changed's Change.
+func streamingLabel(client, server bool) string {
+	switch {
+	case client && server:
+		return "bidi-streaming"
+	case client:
+		return "client-streaming"
+	case server:
+		return "server-streaming"
+	default:
+		return "unary"
 	}
-	return b.Input().FullName() == a.Input().FullName() &&
-		b.Output().FullName() == a.Output().FullName() &&
-		b.IsStreamingClient() == a.IsStreamingClient() &&
-		b.IsStreamingServer() == a.IsStreamingServer()
 }
 
 // ---- packages ----
@@ -836,45 +739,64 @@ func sameNameSet(a, b []protoreflect.Name) bool {
 
 // ---- files ----
 
-// classifyFiles fires break/file_removed only when a removed file's
-// top-level declarations all survive elsewhere in cur: a file whose
-// contents are altogether gone is already covered by the declaration-level
-// removals, and reporting both would double-count.
-func classifyFiles(changes []Change) []Finding {
-	removedNames := make(map[string]bool)
+// classifyFiles fires break/file_removed whenever a removed file's path is
+// gone AND at least one message, enum or service that used to live in that
+// file survives elsewhere in cur (under the same full name, moved or
+// otherwise) — because a consumer imports a PATH, and that import breaks
+// regardless of how many of the file's declarations moved rather than
+// vanished.
+//
+// It fires for none of the file's contents ONLY when every declaration that
+// used to be in the file is also gone: that all-gone case is already fully
+// covered by the declaration-level break/message_removed, break/enum_removed
+// and break/service_removed findings, and reporting break/file_removed on
+// top of them would double-count the same fact. A file holding both a
+// declaration that moved and one that was deleted outright still fires:
+// the moved declaration is the "at least one survives" that matters here,
+// and the deleted one is reported separately by its own removal finding.
+func classifyFiles(changes []Change, prev Revision) []Finding {
+	// removedFullNames is every message/enum/service full name Diff
+	// reported Removed, regardless of why — the same fact declSwallowed in
+	// Classify tracks, computed independently here because this function
+	// does not see it.
+	removedFullNames := make(map[string]bool)
 	for _, c := range changes {
-		if c.Kind == Removed && c.Before != nil {
-			removedNames[c.Subject] = true
+		if c.Kind != Removed || c.Before == nil {
+			continue
+		}
+		switch kindOf(c.Before) {
+		case declMessage, declEnum, declService:
+			removedFullNames[c.Subject] = true
 		}
 	}
 
-	var findings []Finding
+	prevFilesByPath := make(map[string]protoreflect.FileDescriptor)
+	for _, f := range prev.Files {
+		prevFilesByPath[f.Path()] = f
+	}
 
-	// A file-level removal is identified by Subject "file:"+Path with a nil
-	// Before (Diff never attaches a descriptor to a file-level change). It
-	// fires only when no declaration that used to live in that file was
-	// itself reported removed: if one was, the file's contents are gone and
-	// the declaration-level removal already covers it.
+	var findings []Finding
 	for _, c := range changes {
 		if c.Kind != Removed || c.Before != nil {
-			continue
+			continue // not a file-level removal (those carry no descriptor)
 		}
 		if len(c.Subject) < 5 || c.Subject[:5] != "file:" {
 			continue
 		}
 		path := c.Path
-		survived := true
-		for _, d := range changes {
-			if d.Kind != Removed || d.Before == nil {
-				continue
-			}
-			if d.Path != path {
-				continue
-			}
-			survived = false
-			break
+		fd, ok := prevFilesByPath[path]
+		if !ok {
+			continue
 		}
-		if survived {
+		declared := declarationFullNames(fd)
+		survives := false
+		for _, name := range declared {
+			if !removedFullNames[string(name)] {
+				survives = true
+				break
+			}
+		}
+		if len(declared) > 0 && survives {
 			findings = append(findings, Finding{
 				Rule:     "break/file_removed",
 				Category: Source,
@@ -885,6 +807,22 @@ func classifyFiles(changes []Change) []Finding {
 		}
 	}
 	return findings
+}
+
+// declarationFullNames lists the full name of every message, enum and
+// service fd declares, at every nesting depth, reusing diff.go's own
+// indexFile so this walks nested declarations exactly the way Diff does.
+func declarationFullNames(fd protoreflect.FileDescriptor) []protoreflect.FullName {
+	idx := make(map[protoreflect.FullName]protoreflect.Descriptor)
+	indexFile(idx, fd)
+	var out []protoreflect.FullName
+	for name, d := range idx {
+		switch kindOf(d) {
+		case declMessage, declEnum, declService:
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // ---- go_package ----
@@ -917,7 +855,7 @@ func classifyGoPackage(prev, cur Revision) []Finding {
 				Subject:  "file:" + f.Path(),
 				Path:     f.Path(),
 				Message:  "go_package for " + f.Path() + " changed from " + bgp + " to " + agp,
-				Change:   bgp + "->" + agp,
+				Change:   bgp + " -> " + agp,
 			})
 		}
 	}

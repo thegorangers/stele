@@ -54,29 +54,52 @@ func classifyFixture(t *testing.T, prevFiles, curFiles map[string]string) []Find
 	return Classify(changes, prevRev, curRev)
 }
 
-// rules reports the sorted, de-duplicated set of rule ids a set of findings
-// carries, for a clean assertion of exactly what fired.
-func rules(findings []Finding) []string {
-	seen := make(map[string]bool)
+// rulePair is a (rule id, category) pair, the unit assertFires and
+// assertClean compare on. Asserting rule ids alone lets a miscategorised
+// finding (Wire reported as Source, or vice versa) hide behind a green
+// test: Category is half of what a permanent id means, so every assertion
+// in this file checks both.
+type rulePair struct {
+	rule string
+	cat  Category
+}
+
+// rulePairs reports the sorted, de-duplicated set of (rule, category) pairs
+// a set of findings carries.
+func rulePairs(findings []Finding) []rulePair {
+	seen := make(map[rulePair]bool)
 	for _, f := range findings {
-		seen[f.Rule] = true
+		seen[rulePair{f.Rule, f.Category}] = true
 	}
-	out := make([]string, 0, len(seen))
-	for r := range seen {
-		out = append(out, r)
+	out := make([]rulePair, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].rule != out[j].rule {
+			return out[i].rule < out[j].rule
+		}
+		return out[i].cat < out[j].cat
+	})
 	return out
 }
 
-// assertFires checks that wantRule fired and that nothing else did: a case
-// that only asserts presence cannot tell a correctly narrow rule apart from
-// one that also fires on everything else.
-func assertFires(t *testing.T, findings []Finding, wantRule string) {
+// assertFires checks that exactly want fired, in full, and that nothing
+// else did: a case that only asserts presence cannot tell a correctly
+// narrow, correctly categorised rule apart from one that also fires on
+// everything else, or fires with the wrong category.
+func assertFires(t *testing.T, findings []Finding, want []rulePair) {
 	t.Helper()
-	got := rules(findings)
-	if len(got) != 1 || got[0] != wantRule {
-		t.Fatalf("rules fired = %v, want exactly [%s]", got, wantRule)
+	got := rulePairs(findings)
+	wantSorted := append([]rulePair(nil), want...)
+	sort.Slice(wantSorted, func(i, j int) bool {
+		if wantSorted[i].rule != wantSorted[j].rule {
+			return wantSorted[i].rule < wantSorted[j].rule
+		}
+		return wantSorted[i].cat < wantSorted[j].cat
+	})
+	if !equalPairs(got, wantSorted) {
+		t.Fatalf("(rule, category) pairs fired = %v, want exactly %v", got, wantSorted)
 	}
 }
 
@@ -84,9 +107,21 @@ func assertFires(t *testing.T, findings []Finding, wantRule string) {
 // shape as a firing case must leave every rule silent.
 func assertClean(t *testing.T, findings []Finding) {
 	t.Helper()
-	if got := rules(findings); len(got) != 0 {
-		t.Fatalf("rules fired = %v, want none", got)
+	if got := rulePairs(findings); len(got) != 0 {
+		t.Fatalf("(rule, category) pairs fired = %v, want none", got)
 	}
+}
+
+func equalPairs(a, b []rulePair) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 const hdr = "syntax = \"proto3\";\npackage example.orders.v1;\n"
@@ -94,20 +129,20 @@ const hdr = "syntax = \"proto3\";\npackage example.orders.v1;\n"
 var cases = []struct {
 	name      string
 	prev, cur map[string]string
-	wantRule  string // empty means: legal, nothing should fire
+	want      []rulePair // empty means: legal, nothing should fire
 }{
 	// -- field_removed / field_added --
 	{
 		"field_removed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
-		"break/field_removed",
+		[]rulePair{{"break/field_removed", Source}},
 	},
 	{
 		"field_added",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
-		"",
+		nil,
 	},
 
 	// -- field_renamed --
@@ -115,13 +150,23 @@ var cases = []struct {
 		"field_renamed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 promised_at = 2;\n}\n"},
-		"break/field_renamed",
+		[]rulePair{{"break/field_renamed", Source}},
 	},
 	{
 		"field_not_renamed_type_differs",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  string promised_at = 3;\n}\n"},
-		"break/field_removed", // eta removed, promised_at is a new field: shape (number, kind) differs
+		[]rulePair{{"break/field_removed", Source}}, // eta removed, promised_at is a new field: shape (number, kind) differs
+	},
+	// I1: a field entering a oneof is never paired into a rename, even when
+	// it also changes name in the same commit — oneof membership is part of
+	// the rename rule's shape, so this is a removal, and the entry into the
+	// oneof is a fresh addition (not a finding on its own).
+	{
+		"field_not_renamed_oneof_membership_differs",
+		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string b = 1;\n  }\n}\n"},
+		[]rulePair{{"break/field_removed", Source}},
 	},
 
 	// -- field_type_changed --
@@ -129,13 +174,24 @@ var cases = []struct {
 		"field_type_int32_to_string",
 		map[string]string{"a.proto": hdr + "message Order {\n  int32 code = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string code = 1;\n}\n"},
-		"break/field_type_changed",
+		[]rulePair{{"break/field_type_changed", Wire}},
+	},
+	// R4: int32 -> int64 is wire-compatible (WireCompatible reports true),
+	// but the generated accessor's Go type still changes underneath every
+	// caller, which is a source breakage, not a wire one. The brief's table
+	// called this legal; it was wrong, per the design's own permission
+	// example for exactly this change.
+	{
+		"field_type_int32_to_int64",
+		map[string]string{"a.proto": hdr + "message Order {\n  int32 code = 1;\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  int64 code = 1;\n}\n"},
+		[]rulePair{{"break/field_type_changed", Source}},
 	},
 	{
 		"field_type_unchanged",
 		map[string]string{"a.proto": hdr + "message Order {\n  int32 code = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  int32 code = 1;\n  string note = 2;\n}\n"},
-		"",
+		nil,
 	},
 
 	// -- field_number_changed --
@@ -143,13 +199,13 @@ var cases = []struct {
 		"field_number_changed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 2;\n}\n"},
-		"break/field_number_changed",
+		[]rulePair{{"break/field_number_changed", Wire}},
 	},
 	{
 		"field_number_unchanged_reordered",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  int64 eta = 2;\n  string id = 1;\n}\n"},
-		"",
+		nil,
 	},
 
 	// -- field_cardinality_changed --
@@ -157,61 +213,79 @@ var cases = []struct {
 		"field_cardinality_changed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string tag = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  repeated string tag = 1;\n}\n"},
-		"break/field_cardinality_changed",
+		[]rulePair{{"break/field_cardinality_changed", Wire}},
 	},
 	{
 		"field_cardinality_unchanged",
 		map[string]string{"a.proto": hdr + "message Order {\n  repeated string tag = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  repeated string tag = 1;\n  string note = 2;\n}\n"},
-		"",
+		nil,
 	},
 
 	// -- field_oneof_changed --
+	// C3: moving a field INTO a oneof changes nothing on the wire (the tag
+	// is the same either way) but changes the generated accessor, so it is
+	// Source.
 	{
-		"field_oneof_changed",
+		"field_oneof_into_is_source",
 		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n  string b = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string a = 1;\n  }\n  string b = 2;\n}\n"},
-		"break/field_oneof_changed",
+		[]rulePair{{"break/field_oneof_changed", Source}},
+	},
+	// Moving a field FROM one real oneof to a DIFFERENT real oneof is Wire:
+	// a peer that sets the field now clears a different sibling on decode
+	// than it used to, a behavioural change nobody needed to recompile to
+	// observe.
+	{
+		"field_oneof_between_is_wire",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n    string keep_x = 3;\n  }\n  oneof y {\n    string b = 2;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string keep_x = 3;\n  }\n  oneof y {\n    string b = 2;\n    string a = 1;\n  }\n}\n"},
+		[]rulePair{{"break/field_oneof_changed", Wire}},
 	},
 	{
 		"field_oneof_unchanged",
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string a = 1;\n  }\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string a = 1;\n    string c = 3;\n  }\n}\n"},
-		"",
+		nil,
 	},
 
-	// -- message_removed / renamed --
+	// -- message_removed --
+	// There is no break/message_renamed: a message has no number to key a
+	// rename pairing on. A message that is removed under one name and
+	// added back with an identical (or different) shape under another name
+	// is reported as a removal, never hidden behind a "rename".
 	{
 		"message_removed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\nmessage Keep {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Keep {\n  string id = 1;\n}\n"},
-		"break/message_removed",
+		[]rulePair{{"break/message_removed", Source}},
 	},
 	{
-		"message_renamed",
+		"message_removed_even_with_matching_shape",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Purchase {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
-		"break/message_renamed",
+		[]rulePair{{"break/message_removed", Source}},
 	},
 	{
-		"message_not_renamed_shape_differs",
+		"message_kept",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
-		map[string]string{"a.proto": hdr + "message Purchase {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
-		"break/message_removed",
+		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\nmessage Extra {\n  string id = 1;\n}\n"},
+		nil,
 	},
 
-	// -- enum_removed / renamed --
+	// -- enum_removed --
+	// There is no break/enum_renamed, for the same reason as messages.
 	{
 		"enum_removed",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\nmessage Keep {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Keep {\n  string id = 1;\n}\n"},
-		"break/enum_removed",
+		[]rulePair{{"break/enum_removed", Source}},
 	},
 	{
-		"enum_renamed",
-		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
-		map[string]string{"a.proto": hdr + "enum State {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
-		"break/enum_renamed",
+		"enum_kept",
+		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n}\n"},
+		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n}\nmessage Extra {\n  string id = 1;\n}\n"},
+		nil,
 	},
 
 	// -- enum_value_removed / renamed / number_changed --
@@ -219,28 +293,29 @@ var cases = []struct {
 		"enum_value_removed",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n}\n"},
-		"break/enum_value_removed",
+		[]rulePair{{"break/enum_value_removed", Source}},
 	},
 	{
 		"enum_value_added",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n}\n"},
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
-		"",
+		nil,
 	},
 	{
 		"enum_value_renamed",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_DONE = 1;\n}\n"},
-		"break/enum_value_renamed",
+		[]rulePair{{"break/enum_value_renamed", Source}},
 	},
 	{
 		"enum_value_number_changed",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 2;\n  STATUS_RESERVED_1 = 1;\n}\n"},
-		"break/enum_value_number_changed",
+		[]rulePair{{"break/enum_value_number_changed", Wire}},
 	},
 
-	// -- service_removed / renamed --
+	// -- service_removed --
+	// There is no break/service_renamed, for the same reason as messages.
 	{
 		"service_removed",
 		map[string]string{
@@ -249,20 +324,21 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\n",
 		},
-		"break/service_removed",
+		[]rulePair{{"break/service_removed", Wire}},
 	},
 	{
-		"service_renamed",
+		"service_kept",
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc Get(Req) returns (Resp);\n}\n",
 		},
 		map[string]string{
-			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice OrderService {\n  rpc Get(Req) returns (Resp);\n}\n",
+			"a.proto": hdr + "message Req {}\nmessage Resp {}\nmessage Extra {}\nservice Orders {\n  rpc Get(Req) returns (Resp);\n}\n",
 		},
-		"break/service_renamed",
+		nil,
 	},
 
-	// -- method_removed / renamed / signature / streaming --
+	// -- method_removed / signature / streaming --
+	// There is no break/method_renamed, for the same reason as messages.
 	{
 		"method_removed",
 		map[string]string{
@@ -271,7 +347,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc List(Req) returns (Resp);\n}\n",
 		},
-		"break/method_removed",
+		[]rulePair{{"break/method_removed", Wire}},
 	},
 	{
 		"method_added",
@@ -281,17 +357,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc List(Req) returns (Resp);\n  rpc Get(Req) returns (Resp);\n}\n",
 		},
-		"",
-	},
-	{
-		"method_renamed",
-		map[string]string{
-			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc Get(Req) returns (Resp);\n}\n",
-		},
-		map[string]string{
-			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc Fetch(Req) returns (Resp);\n}\n",
-		},
-		"break/method_renamed",
+		nil,
 	},
 	{
 		"method_signature_changed",
@@ -301,7 +367,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nmessage Resp2 {}\nservice Orders {\n  rpc Get(Req) returns (Resp2);\n}\n",
 		},
-		"break/method_signature_changed",
+		[]rulePair{{"break/method_signature_changed", Wire}},
 	},
 	{
 		"method_signature_unchanged",
@@ -311,7 +377,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc Get(Req) returns (Resp);\n  rpc List(Req) returns (Resp);\n}\n",
 		},
-		"",
+		nil,
 	},
 	{
 		"method_streaming_changed",
@@ -321,7 +387,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc Get(Req) returns (stream Resp);\n}\n",
 		},
-		"break/method_streaming_changed",
+		[]rulePair{{"break/method_streaming_changed", Wire}},
 	},
 	{
 		"method_streaming_unchanged",
@@ -331,7 +397,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc Get(Req) returns (stream Resp);\n  rpc List(Req) returns (stream Resp);\n}\n",
 		},
-		"",
+		nil,
 	},
 
 	// -- package_removed / renamed --
@@ -344,13 +410,27 @@ var cases = []struct {
 		map[string]string{
 			"b.proto": "syntax = \"proto3\";\npackage example.other.v1;\nmessage Keep {\n  string id = 1;\n}\n",
 		},
-		"break/package_removed",
+		[]rulePair{{"break/package_removed", Wire}},
 	},
 	{
 		"package_renamed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": "syntax = \"proto3\";\npackage example.orders.v2;\nmessage Order {\n  string id = 1;\n}\n"},
-		"break/package_renamed",
+		[]rulePair{{"break/package_renamed", Wire}},
+	},
+	// The negative half of the rename rule for packages: the old package
+	// survives untouched, so an unrelated new package appearing alongside
+	// it must never be paired into a rename — package_renamed degrades to
+	// firing nothing at all, not to package_removed, because the old
+	// package didn't go anywhere.
+	{
+		"package_not_renamed_old_package_survives",
+		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
+		map[string]string{
+			"a.proto": hdr + "message Order {\n  string id = 1;\n}\n",
+			"c.proto": "syntax = \"proto3\";\npackage example.other.v1;\nmessage Unrelated {\n  string id = 1;\n}\n",
+		},
+		nil,
 	},
 
 	// -- file_removed --
@@ -363,7 +443,22 @@ var cases = []struct {
 		map[string]string{
 			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\nmessage Order {\n  string id = 1;\n}\n",
 		},
-		"break/file_removed",
+		[]rulePair{{"break/file_removed", Source}},
+	},
+	// I2: partial survival still breaks the import of the old path. Gone is
+	// deleted outright (reported by its own message_removed); Moved
+	// migrates to another file. file_removed must still fire because the
+	// path itself is gone and at least one declaration survives.
+	{
+		"file_removed_declarations_partially_survive",
+		map[string]string{
+			"a.proto": hdr + "message Moved {\n  string id = 1;\n}\nmessage Gone {\n  string id = 1;\n}\n",
+			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\n",
+		},
+		map[string]string{
+			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\nmessage Moved {\n  string id = 1;\n}\n",
+		},
+		[]rulePair{{"break/file_removed", Source}, {"break/message_removed", Source}},
 	},
 	{
 		"file_removed_declarations_gone_too",
@@ -374,7 +469,7 @@ var cases = []struct {
 		map[string]string{
 			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\n",
 		},
-		"break/message_removed",
+		[]rulePair{{"break/message_removed", Source}},
 	},
 
 	// -- go_package_changed --
@@ -382,13 +477,13 @@ var cases = []struct {
 		"go_package_changed",
 		map[string]string{"a.proto": hdr + "option go_package = \"example.com/orders/v1;ordersv1\";\nmessage Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "option go_package = \"example.com/orders/v2;ordersv2\";\nmessage Order {\n  string id = 1;\n}\n"},
-		"break/go_package_changed",
+		[]rulePair{{"break/go_package_changed", Source}},
 	},
 	{
 		"go_package_unchanged",
 		map[string]string{"a.proto": hdr + "option go_package = \"example.com/orders/v1;ordersv1\";\nmessage Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "option go_package = \"example.com/orders/v1;ordersv1\";\nmessage Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
-		"",
+		nil,
 	},
 }
 
@@ -396,11 +491,11 @@ func TestClassify(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			findings := classifyFixture(t, tc.prev, tc.cur)
-			if tc.wantRule == "" {
+			if len(tc.want) == 0 {
 				assertClean(t, findings)
 				return
 			}
-			assertFires(t, findings, tc.wantRule)
+			assertFires(t, findings, tc.want)
 		})
 	}
 }
