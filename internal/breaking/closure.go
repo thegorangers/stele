@@ -11,9 +11,9 @@ package breaking
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/bufbuild/protocompile/linker"
+	"github.com/thegorangers/stele/internal/genreq"
 )
 
 // Reachable returns the import paths reachable, transitively, from the
@@ -57,7 +57,7 @@ func reachableClosure(rev Revision) ([]string, linker.Files) {
 			if _, ok := owned[p]; ok {
 				continue
 			}
-			if isWellKnownType(p) {
+			if genreq.IsWellKnown(p) {
 				continue
 			}
 			child := f.FindImportByPath(p)
@@ -87,12 +87,6 @@ func reachableClosure(rev Revision) ([]string, linker.Files) {
 	sort.Strings(paths)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path() < files[j].Path() })
 	return paths, files
-}
-
-// isWellKnownType reports whether path is one of the protobuf well-known
-// types, vendored under google/protobuf/ by every proto toolchain.
-func isWellKnownType(path string) bool {
-	return strings.HasPrefix(path, "google/protobuf/")
 }
 
 // ClassifyClosure compares the resolved closure reachable from prev's and

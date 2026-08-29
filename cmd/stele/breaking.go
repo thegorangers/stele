@@ -13,7 +13,6 @@ import (
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/gitrepo"
 	"github.com/thegorangers/stele/internal/lint"
-	"github.com/thegorangers/stele/internal/resolve"
 	"github.com/thegorangers/stele/internal/source"
 )
 
@@ -143,7 +142,7 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if err != nil {
 		return err
 	}
-	fetch := breakingNetworkFetch(root)
+	fetch := source.NetworkFetch(root)
 
 	cur, err := breaking.Load(ctx, r, prev.Working, fetch, false)
 	if err != nil {
@@ -178,19 +177,4 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	// This release is report-only: findings never fail the run. Only the
 	// errors returned above — a failure to compare — do.
 	return nil
-}
-
-// breakingNetworkFetch mirrors internal/lint's unexported networkFetch: the
-// same address-parsing-then-fetch pipeline, built here because pin.Resolve
-// (via breaking.Load) needs a resolve.FetchFunc and lint does not export
-// one.
-func breakingNetworkFetch(cacheRoot string) resolve.FetchFunc {
-	hosts := source.DefaultHosts()
-	return func(ctx context.Context, git, ref string) (string, string, error) {
-		addr, err := source.ParseAddr(git, hosts)
-		if err != nil {
-			return "", "", err
-		}
-		return source.FetchInto(ctx, cacheRoot, addr.CloneURL(), ref)
-	}
 }

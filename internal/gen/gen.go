@@ -113,7 +113,7 @@ func Run(ctx context.Context, opts Options) (*report.Report, error) {
 		if opts.CacheRoot == "" {
 			return nil, errors.New("generate: no cache root and no fetcher")
 		}
-		fetch = networkFetch(opts.CacheRoot)
+		fetch = source.NetworkFetch(opts.CacheRoot)
 	}
 
 	graph, err := pin.Resolve(ctx, pin.Options{
@@ -551,13 +551,3 @@ func writeResponse(out, bin string, resp *pluginpb.CodeGeneratorResponse) (int, 
 }
 
 // networkFetch fetches repositories into a cache root.
-func networkFetch(cacheRoot string) resolve.FetchFunc {
-	hosts := source.DefaultHosts()
-	return func(ctx context.Context, git, ref string) (string, string, error) {
-		addr, err := source.ParseAddr(git, hosts)
-		if err != nil {
-			return "", "", err
-		}
-		return source.FetchInto(ctx, cacheRoot, addr.CloneURL(), ref)
-	}
-}
