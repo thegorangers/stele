@@ -54,8 +54,13 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
   ```
   $ stele breaking --base master
-  api/example/v1/order.proto: break/field_type_changed: example.v1.Order.total: int32 -> int64
-    wire-compatible, source-breaking for a consumer reading the generated field as int32
+  breaking changes compared against b43992ea4f37bdc0116ac912f543ac3d0e4d6734 (merge-base with master):
+
+  example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) example.v1.Order.total: field example.v1.Order.total changed type from int32 to int64
+      revert the type, or add a new field instead of changing an existing one's type
+
+  report-only: this run always exits zero
+  blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, google.api.http changes, or a oneof renamed with its members intact — the generated wrapper type and getter change and every Go consumer stops compiling, but no descriptor index shifts, so Diff emits nothing
   ```
 
   **This release is report-only: it always exits zero when it finds
