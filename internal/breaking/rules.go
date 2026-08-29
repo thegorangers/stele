@@ -598,6 +598,15 @@ func oneofFieldSetEqual(before, after protoreflect.Descriptor) bool {
 	}
 	bs := oneofFieldNumbers(b)
 	as := oneofFieldNumbers(a)
+	if len(bs) == 0 {
+		// protoc refuses to compile an empty oneof today, so this is
+		// unreachable in practice — but that unreachability belongs to
+		// protoc, not to this rule. Two empty sets are exactly the "no
+		// sharper than shape" case that made pairing unsound for the four
+		// dropped container kinds, so the guard is explicit here rather
+		// than left to rest on a constraint this engine does not own.
+		return false
+	}
 	if len(bs) != len(as) {
 		return false
 	}
