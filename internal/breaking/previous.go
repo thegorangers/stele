@@ -31,9 +31,13 @@ func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
 	if len(parents) == 0 {
 		return Previous{}, false, nil
 	}
-	baseSHA, err := r.BaseRef(base)
+	baseSHA, fresh, err := r.BaseRef(base)
 	if err != nil {
 		return Previous{}, false, err
+	}
+	staleNote := ""
+	if !fresh {
+		staleNote = " (the base could not be refreshed; the last fetched " + base + " was used)"
 	}
 
 	// Is HEAD itself on the base branch? Then the previous revision is what
@@ -44,7 +48,7 @@ func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
 	}
 	if onBase {
 		return Previous{SHA: parents[0], Working: head,
-			Reason: "the first parent, because HEAD is on " + base}, true, nil
+			Reason: "the first parent, because HEAD is on " + base + staleNote}, true, nil
 	}
 
 	// HEAD is off the base. A two-parent HEAD with exactly one parent on the
@@ -58,6 +62,13 @@ func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
 			if on[i], err = r.IsAncestor(p, baseSHA); err != nil {
 				return Previous{}, false, err
 			}
+		}
+		// Both parents already on the base: a re-merge, or a merge of two
+		// branches that have both already landed. There is nothing outside
+		// the base to compare, and reporting an empty comparison as clean
+		// would be worse than saying so and exiting.
+		if on[0] && on[1] {
+			return Previous{}, false, nil
 		}
 		if on[0] != on[1] {
 			working = parents[0]
@@ -74,5 +85,5 @@ func Choose(r *gitrepo.Repo, base string) (Previous, bool, error) {
 	if working != head {
 		reason += ", from the topic side of a merge commit"
 	}
-	return Previous{SHA: prev, Working: working, Reason: reason}, true, nil
+	return Previous{SHA: prev, Working: working, Reason: reason + staleNote}, true, nil
 }

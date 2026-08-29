@@ -29,30 +29,48 @@ func (r *Repo) Remote() (string, error) {
 	return remotes[0], nil
 }
 
-// BaseRef resolves branch to a remote-tracking commit, fetching it into
-// refs/stele/base when it is absent. A stale local branch is never used:
-// that would silently place the comparison in the past. In a GitLab
-// merge-request pipeline the clone fetches only the merge-request ref, so
-// the base branch is absent at any depth, and it must be fetched.
-func (r *Repo) BaseRef(branch string) (string, error) {
+// BaseRef resolves branch to the commit it points at on the remote, fetching
+// on every call. A cached answer would silently place the comparison in the
+// past: the base moves, and a clone that fetched once and never again would
+// keep comparing against where the base used to be. So the fetch runs first,
+// unconditionally, into refs/stele/base — the same ref, on every call, so a
+// second fetch simply moves it.
+//
+// fresh reports whether that fetch succeeded. When it did not — no network,
+// an offline developer — BaseRef falls back to whatever was fetched before:
+// first refs/stele/base from an earlier call, then, for a clone that has
+// never called BaseRef but does have an ordinary remote-tracking branch,
+// refs/remotes/<remote>/<branch>. fresh is false whenever a fallback was
+// used, so a caller can say so rather than comparing against a stale base in
+// silence. When the fetch fails and neither fallback exists, BaseRef returns
+// the fetch error.
+func (r *Repo) BaseRef(branch string) (sha string, fresh bool, err error) {
 	remote, err := r.Remote()
 	if err != nil {
-		return "", err
-	}
-
-	if sha, err := r.ResolveRef("refs/remotes/" + remote + "/" + branch); err == nil {
-		return sha, nil
-	}
-	if sha, err := r.ResolveRef("refs/stele/base"); err == nil {
-		return sha, nil
+		return "", false, err
 	}
 
 	// The fetch writes one ref of our own and nothing else. The user's
 	// remote-tracking refs and FETCH_HEAD are theirs, and this tool
 	// otherwise writes only generated code and the lock.
-	if _, err := r.git("fetch", "--quiet", "--no-write-fetch-head",
-		remote, "+refs/heads/"+branch+":refs/stele/base"); err != nil {
-		return "", err
+	fetchErr := func() error {
+		_, err := r.git("fetch", "--quiet", "--no-write-fetch-head",
+			remote, "+refs/heads/"+branch+":refs/stele/base")
+		return err
+	}()
+	if fetchErr == nil {
+		sha, err = r.ResolveRef("refs/stele/base")
+		if err != nil {
+			return "", false, err
+		}
+		return sha, true, nil
 	}
-	return r.ResolveRef("refs/stele/base")
+
+	if sha, err := r.ResolveRef("refs/stele/base"); err == nil {
+		return sha, false, nil
+	}
+	if sha, err := r.ResolveRef("refs/remotes/" + remote + "/" + branch); err == nil {
+		return sha, false, nil
+	}
+	return "", false, fetchErr
 }

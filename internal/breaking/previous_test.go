@@ -78,3 +78,33 @@ func TestFirstCommitHasNothingToCompare(t *testing.T) {
 		t.Fatalf("ok=%v err=%v, want nothing to compare", ok, err)
 	}
 }
+
+// A merge of two branches that have both already landed on the base has
+// nothing outside the base to compare: both parents are ancestors of the
+// base, and Choose must say so rather than falling through to MergeBase and
+// comparing HEAD against one of its own parents.
+func TestReMergeOfTwoLandedBranchesHasNothingToCompare(t *testing.T) {
+	dir := repo(t)
+	commit(t, dir, "a.txt", "one", "first")
+
+	run(t, dir, "checkout", "-q", "-b", "topicA")
+	topicA := commit(t, dir, "a.txt", "two", "topicA work")
+	run(t, dir, "checkout", "-q", "main")
+	run(t, dir, "merge", "-q", "--no-ff", "-m", "merge topicA", "topicA")
+
+	run(t, dir, "checkout", "-q", "-b", "topicB")
+	topicB := commit(t, dir, "b.txt", "three", "topicB work")
+	run(t, dir, "checkout", "-q", "main")
+	run(t, dir, "merge", "-q", "--no-ff", "-m", "merge topicB", "topicB")
+
+	// Both topicA and topicB are now ancestors of main. Re-merge them
+	// together while detached, so HEAD itself is off the base but both of
+	// its parents are on it.
+	run(t, dir, "checkout", "-q", "--detach", topicA)
+	run(t, dir, "merge", "-q", "--no-ff", "-m", "re-merge", topicB)
+
+	r, _ := gitrepo.Open(dir)
+	if _, ok, err := Choose(r, "main"); ok || err != nil {
+		t.Fatalf("ok=%v err=%v, want nothing to compare", ok, err)
+	}
+}
