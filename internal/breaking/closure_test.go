@@ -192,3 +192,98 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
+
+// closureDepTreeTwoHop lays out a producer repository with mid.proto and
+// leaf.proto: mid.proto imports leaf.proto and re-exports its message
+// through a field, and the consumer fixture below imports mid.proto only —
+// never leaf.proto directly. leaf.proto's message Leaf carries an extra
+// field only when withExtraField is true, modelling two revisions of the
+// dependency where a message reached only two hops away from what the
+// consumer owns loses a field.
+func closureDepTreeTwoHop(t *testing.T, marker string, withExtraField bool) string {
+	t.Helper()
+	dir := t.TempDir()
+	write(t, dir, "stele.yaml", "version: 1\nmodules:\n  - path: proto\n")
+
+	extra := ""
+	if withExtraField {
+		extra = "\n  string extra = 2;"
+	}
+	write(t, dir, "proto/example/leaf.proto",
+		"syntax = \"proto3\";\npackage example;\n// "+marker+"\nmessage Leaf {\n  int64 value = 1;"+extra+"\n}\n")
+	write(t, dir, "proto/example/mid.proto",
+		"syntax = \"proto3\";\npackage example;\n\nimport \"example/leaf.proto\";\n\n"+
+			"message Mid {\n  Leaf leaf = 1;\n}\n")
+	return dir
+}
+
+func writeClosureConsumerManifestTwoHop(t *testing.T, dir string) {
+	t.Helper()
+	write(t, dir, lint.ManifestName, "version: 1\nmodules:\n  - path: own\n"+
+		"deps:\n  - name: dep\n    git: "+closureDepGit+"\n    ref: main\n    module: proto\n")
+	write(t, dir, "own/example/a.proto",
+		"syntax = \"proto3\";\npackage example;\n\nimport \"example/mid.proto\";\n\n"+
+			"message Owned {\n  Mid mid = 1;\n}\n")
+}
+
+// A repository whose own protos are byte-identical between two revisions,
+// whose lock moves a dependency where leaf.proto — reached only through
+// mid.proto, never imported by anything owned directly — loses a field.
+// This is the transitivity claim the package exists to make: a consumer
+// reaches leaf.proto THROUGH this repository, two hops deep, and a walk that
+// quietly degraded to a single-level scan would report nothing here while
+// every other test in this file stayed green.
+func TestClassifyClosureReportsRemovedFieldTwoHopsAway(t *testing.T) {
+	dir := repo(t)
+	writeClosureConsumerManifestTwoHop(t, dir)
+	writeClosureLock(t, dir, revShaOne)
+	prevSHA := commit(t, dir, "marker.txt", "prev", "resolves against shaOne")
+	writeClosureLock(t, dir, revShaTwo)
+	curSHA := commit(t, dir, "marker.txt", "cur", "resolves against shaTwo")
+
+	treePrev := closureDepTreeTwoHop(t, "v1", true)
+	treeCur := closureDepTreeTwoHop(t, "v2", false)
+
+	m := &movingFetch{trees: map[string]string{revShaOne: treePrev, revShaTwo: treeCur}}
+	r, err := gitrepo.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev, err := Load(context.Background(), r, prevSHA, m.fetch, true)
+	if err != nil {
+		t.Fatalf("Load(prev): %v", err)
+	}
+	cur, err := Load(context.Background(), r, curSHA, m.fetch, false)
+	if err != nil {
+		t.Fatalf("Load(cur): %v", err)
+	}
+
+	reach := Reachable(cur)
+	found := false
+	for _, p := range reach {
+		if p == "example/leaf.proto" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Reachable(cur) = %v, want it to include example/leaf.proto, reached via example/mid.proto", reach)
+	}
+
+	findings := ClassifyClosure(prev, cur)
+	if len(findings) != 1 {
+		t.Fatalf("ClassifyClosure findings = %d, want exactly 1: %+v", len(findings), findings)
+	}
+	f := findings[0]
+	if f.Rule != "break/field_removed" {
+		t.Errorf("Rule = %q, want break/field_removed", f.Rule)
+	}
+	if f.Subject != "example.Leaf.extra" {
+		t.Errorf("Subject = %q, want example.Leaf.extra", f.Subject)
+	}
+	if !f.Closure {
+		t.Errorf("Closure = false, want true")
+	}
+	if want := "dep"; !contains(f.Message, want) {
+		t.Errorf("Message = %q, want it to name the dependency %q", f.Message, want)
+	}
+}
