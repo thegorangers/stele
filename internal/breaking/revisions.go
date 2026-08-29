@@ -32,6 +32,14 @@ var ErrNoOwnedProtos = errors.New("breaking: the revision owns no proto files")
 type Revision struct {
 	Files linker.Files
 	Owned []string
+	// DepName maps every import path this revision's graph resolved from a
+	// dependency (as opposed to this repository's own root manifest) to the
+	// name that dependency was given. It exists so the closure comparison
+	// (closure.go) can name the dependency responsible for a finding without
+	// re-resolving the graph: Load already has this in hand, and discarding
+	// it would force the closure comparison to reconstruct what Load already
+	// knew.
+	DepName map[string]string
 }
 
 // Load materialises sha into a temporary directory and compiles it with the
@@ -103,7 +111,23 @@ func Load(ctx context.Context, r *gitrepo.Repo, sha string, fetch resolve.FetchF
 	if err != nil {
 		return Revision{}, err
 	}
-	return Revision{Files: files, Owned: owned}, nil
+	return Revision{Files: files, Owned: owned, DepName: depNames(g)}, nil
+}
+
+// depNames maps every import path the graph resolved from a dependency to
+// the name that dependency was given by the manifest that requested it. A
+// path resolved from the root manifest has an empty Origin.Git and is never
+// entered here: it is owned, not a dependency to blame.
+func depNames(g *resolve.Graph) map[string]string {
+	out := make(map[string]string)
+	for _, p := range g.ImportPaths() {
+		f, ok := g.FileFor(p)
+		if !ok || f.Origin.Git == "" {
+			continue
+		}
+		out[p] = f.Origin.Name
+	}
+	return out
 }
 
 // ownedPaths returns the import paths this revision's own repository

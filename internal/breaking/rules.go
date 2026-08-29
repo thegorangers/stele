@@ -49,6 +49,15 @@ type Finding struct {
 	// is a removal plus an addition with nothing else to discriminate on)
 	// has no discriminant, and Change stays empty.
 	Change string
+	// Closure reports whether this finding came from the resolved closure
+	// reachable from owned modules' imports (closure.go), rather than from
+	// this repository's own owned files. It is a field, not a
+	// message-string convention, because a breakage in a dependency is a
+	// different thing to act on than a breakage in this repository's own
+	// contract — it cannot be fixed by editing a file here, only by not
+	// taking the pin bump, or by taking it deliberately — and the report
+	// task needs to render that distinction without parsing prose.
+	Closure bool
 }
 
 // Classify turns Diff's neutral changes into findings, each carrying a
