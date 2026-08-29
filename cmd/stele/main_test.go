@@ -15,6 +15,7 @@ import (
 
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/lint"
+	"github.com/thegorangers/stele/internal/lockfile"
 	"github.com/thegorangers/stele/internal/report"
 )
 
@@ -890,5 +891,93 @@ func TestBreakingShallowCloneFailsAndNamesShallowness(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "shallow") {
 		t.Errorf("the failure does not name shallowness: %v", err)
+	}
+}
+
+// TestBreakingReportsClosureFinding is the command-level guard for the
+// closure comparison: internal/breaking has thorough unit coverage of
+// ClassifyClosure, but nothing before this test failed if the call to it
+// were simply deleted from runBreaking — the command's own protos were
+// still diffed, the run still exited zero, and every other test in this
+// file stayed green. That is the branch's headline feature with no
+// protection at the seam that actually ships it.
+//
+// The fixture: a consumer repository whose own protos do not move between
+// the two revisions compared, but whose lock moves a dependency to a
+// revision where a message it re-exports has lost a field. The dependency
+// is a real git repository on disk, reached through a fake HTTPS address
+// redirected to it with git's own url.insteadOf — the same mechanism a
+// real CI runner's global git config uses for an internal host, just
+// pointed at a temp directory instead.
+func TestBreakingReportsClosureFinding(t *testing.T) {
+	depDir := t.TempDir()
+	breakingGit(t, depDir, "init", "-q", "-b", "main")
+	breakingWrite(t, depDir, "stele.yaml", "version: 1\nmodules:\n  - path: proto\n")
+	depSHA1 := breakingCommit(t, depDir, "proto/example/dep.proto", `syntax = "proto3";
+package example;
+
+message Dep {
+  int64 value = 1;
+  string extra = 2;
+}
+`, "dep with extra field")
+	depSHA2 := breakingCommit(t, depDir, "proto/example/dep.proto", `syntax = "proto3";
+package example;
+
+message Dep {
+  int64 value = 1;
+}
+`, "dep loses the extra field")
+
+	// Redirect the fake dependency address to the real repository on disk,
+	// through a global git config scoped to this test by GIT_CONFIG_GLOBAL —
+	// the same variable breakingGit already pins for every git invocation
+	// these tests make.
+	const depGit = "https://example.invalid/example/closure-consumer-dep.git"
+	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(gitConfig, []byte(
+		"[url \"file://"+depDir+"\"]\n\tinsteadOf = "+depGit+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", "version: 1\nmodules:\n  - path: own\n"+
+		"deps:\n  - name: dep\n    git: "+depGit+"\n    ref: main\n    module: proto\n")
+	breakingWrite(t, dir, "own/example/a.proto", `syntax = "proto3";
+package example;
+
+import "example/dep.proto";
+
+message Owned {
+  Dep dep = 1;
+}
+`)
+	l := &lockfile.Lock{Version: lockfile.Version,
+		Deps: []lockfile.Entry{{Name: "dep", Git: depGit, Ref: "main", SHA: depSHA1}}}
+	if err := lockfile.Save(filepath.Join(dir, "stele.lock"), l); err != nil {
+		t.Fatal(err)
+	}
+	breakingGit(t, dir, "add", ".")
+	breakingGit(t, dir, "commit", "-qm", "base")
+	base := breakingGit(t, dir, "rev-parse", "HEAD")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	l2 := &lockfile.Lock{Version: lockfile.Version,
+		Deps: []lockfile.Entry{{Name: "dep", Git: depGit, Ref: "main", SHA: depSHA2}}}
+	if err := lockfile.Save(filepath.Join(dir, "stele.lock"), l2); err != nil {
+		t.Fatal(err)
+	}
+	breakingGit(t, dir, "add", ".")
+	breakingGit(t, dir, "commit", "-qm", "bump dep, losing a re-exported field")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--against", base}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a closure finding must not fail the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.Dep.extra") {
+		t.Errorf("the closure finding does not name the removed field example.Dep.extra:\n%s", out.String())
 	}
 }
