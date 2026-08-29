@@ -227,3 +227,116 @@ func TestFieldRemovalDoesNotTouchItsParentOrSiblings(t *testing.T) {
 		t.Fatalf("Kind = %v, want Removed", c.Kind)
 	}
 }
+
+// Retyping a map's value is a wire breakage, and it must be visible even
+// though the map field's own FieldDescriptorProto never changes: the entry
+// type name it points at is the same synthesised *Entry on both sides. The
+// change has to be reported against the field's own subject, never against
+// the entry type — a subject naming a type nobody wrote is exactly the
+// defect the map-entry guard exists to prevent.
+func TestRetypingAMapValueIsDetected(t *testing.T) {
+	prevRev, curRev := diffFixture(t, "example/orders/v1/order.proto",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  map<string, string> tags = 1;\n}\n",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  map<string, int64> tags = 1;\n}\n")
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 1 {
+		t.Fatalf("Diff = %+v, want exactly one change (the retyped field)", changes)
+	}
+	c := changes[0]
+	if c.Subject != "example.orders.v1.Order.tags" {
+		t.Fatalf("Subject = %q, want example.orders.v1.Order.tags", c.Subject)
+	}
+	if c.Kind != Modified {
+		t.Fatalf("Kind = %v, want Modified", c.Kind)
+	}
+}
+
+// Retyping a map's key must be detected exactly the same way as its value:
+// the fix is not allowed to cover only one half of the map entry.
+func TestRetypingAMapKeyIsDetected(t *testing.T) {
+	prevRev, curRev := diffFixture(t, "example/orders/v1/order.proto",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  map<string, string> tags = 1;\n}\n",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  map<int64, string> tags = 1;\n}\n")
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 1 {
+		t.Fatalf("Diff = %+v, want exactly one change (the retyped field)", changes)
+	}
+	c := changes[0]
+	if c.Subject != "example.orders.v1.Order.tags" {
+		t.Fatalf("Subject = %q, want example.orders.v1.Order.tags", c.Subject)
+	}
+	if c.Kind != Modified {
+		t.Fatalf("Kind = %v, want Modified", c.Kind)
+	}
+}
+
+// The round-1 fix must still hold: adding a map field is one change (the
+// field itself), and nothing is reported about the synthesised TagsEntry
+// message or its key/value fields.
+func TestAddingAMapFieldStillProducesOnlyTheFieldAfterMapValueFix(t *testing.T) {
+	prevRev, curRev := diffFixture(t, "example/orders/v1/order.proto",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  string id = 1;\n}\n",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  string id = 1;\n  map<string, string> tags = 2;\n}\n")
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 1 {
+		t.Fatalf("Diff = %+v, want exactly one change (the added field)", changes)
+	}
+	c := changes[0]
+	if c.Subject != "example.orders.v1.Order.tags" {
+		t.Fatalf("Subject = %q, want example.orders.v1.Order.tags", c.Subject)
+	}
+	if c.Kind != Added {
+		t.Fatalf("Kind = %v, want Added", c.Kind)
+	}
+}
+
+// This is the test that proves the comparison is not vacuous: an ordinary,
+// non-map field retype must be detected too, by the same descEqual path
+// every other field goes through.
+func TestFieldTypeChangeIsDetected(t *testing.T) {
+	prevRev, curRev := diffFixture(t, "example/orders/v1/order.proto",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  int64 eta = 1;\n}\n",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n  string eta = 1;\n}\n")
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 1 {
+		t.Fatalf("Diff = %+v, want exactly one change (the retyped field)", changes)
+	}
+	c := changes[0]
+	if c.Subject != "example.orders.v1.Order.eta" {
+		t.Fatalf("Subject = %q, want example.orders.v1.Order.eta", c.Subject)
+	}
+	if c.Kind != Modified {
+		t.Fatalf("Kind = %v, want Modified", c.Kind)
+	}
+}
+
+// A reformat — whitespace, comments, field declaration order in the source
+// text — must never read as a change: descEqual compares descriptorpb forms,
+// which carry no source position, and Diff is walked by full name rather
+// than declaration order.
+func TestReformattingOnlyProducesNoChanges(t *testing.T) {
+	prevRev, curRev := diffFixture(t, "example/orders/v1/order.proto",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n\n"+
+			"// Order is a customer order.\n"+
+			"message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n",
+		"syntax = \"proto3\";\npackage example.orders.v1;\n"+
+			"message Order {\n\n  // reformatted: blank line and reordered comment\n"+
+			"  int64 eta = 2;\n  string id = 1;\n}\n")
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 0 {
+		t.Fatalf("Diff = %+v, want no changes from a pure reformat", changes)
+	}
+}

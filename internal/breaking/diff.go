@@ -315,7 +315,26 @@ func descEqual(before, after protoreflect.Descriptor) bool {
 		if !ok {
 			return false
 		}
-		return proto.Equal(protodesc.ToFieldDescriptorProto(b), protodesc.ToFieldDescriptorProto(a))
+		if !proto.Equal(protodesc.ToFieldDescriptorProto(b), protodesc.ToFieldDescriptorProto(a)) {
+			return false
+		}
+		// A map field's own FieldDescriptorProto never changes when its key
+		// or value type is retyped: it stays cardinality repeated, kind
+		// message, pointing at the same synthesised *Entry type name. The
+		// entry message and its key/value fields are never indexed as
+		// declarations (see indexMessage's IsMapEntry guard — nobody wrote
+		// them), so a retype has to be compared here, as part of the field
+		// itself, or it is invisible everywhere and reported against no
+		// subject at all.
+		if b.IsMap() && a.IsMap() {
+			if !proto.Equal(protodesc.ToFieldDescriptorProto(b.MapKey()), protodesc.ToFieldDescriptorProto(a.MapKey())) {
+				return false
+			}
+			if !proto.Equal(protodesc.ToFieldDescriptorProto(b.MapValue()), protodesc.ToFieldDescriptorProto(a.MapValue())) {
+				return false
+			}
+		}
+		return true
 	case protoreflect.OneofDescriptor:
 		a, ok := after.(protoreflect.OneofDescriptor)
 		if !ok {
