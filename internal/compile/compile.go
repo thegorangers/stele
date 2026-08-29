@@ -37,14 +37,20 @@ import (
 // between runs, and must not, would otherwise be invisible until a diff of
 // generated code showed it.
 //
-// SourceCodeInfo is retained for every file compiled. It is not the library
-// default, and its absence does not fail anything: it costs every comment in
-// the generated code, and shows up only when somebody reads the output.
-// Whether to strip it from files that are imports rather than targets is a
-// decision for whoever builds the request to a plugin, and this package
+// SourceCodeInfo is retained for every file compiled, by default. It is not
+// the library default, and its absence does not fail anything: it costs every
+// comment in the generated code, and shows up only when somebody reads the
+// output. Whether to strip it from files that are imports rather than targets
+// is a decision for whoever builds the request to a plugin, and this package
 // deliberately does not make it here — dropping information early cannot be
-// undone downstream.
-func Compile(ctx context.Context, g *resolve.Graph, targets []string) (linker.Files, error) {
+// undone downstream. A caller that will never report a position from these
+// files — the older side of a breaking-change comparison, say — can ask for
+// it to be dropped with WithoutSourceInfo; the default is unchanged.
+func Compile(ctx context.Context, g *resolve.Graph, targets []string, opts ...Option) (linker.Files, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if g == nil {
 		return nil, errors.New("compile: no resolution graph")
 	}
@@ -63,11 +69,15 @@ func Compile(ctx context.Context, g *resolve.Graph, targets []string) (linker.Fi
 		}
 	}
 
+	sourceInfo := protocompile.SourceInfoStandard
+	if o.dropSourceInfo {
+		sourceInfo = protocompile.SourceInfoNone
+	}
 	c := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(graphResolver(g)),
-		// Retaining source info is the whole reason this field is set: the
-		// library default is SourceInfoNone.
-		SourceInfoMode: protocompile.SourceInfoStandard,
+		// Retaining source info is the whole reason this field is set by
+		// default: the library default is SourceInfoNone.
+		SourceInfoMode: sourceInfo,
 	}
 	files, err := c.Compile(ctx, want...)
 	if err != nil {
@@ -76,6 +86,23 @@ func Compile(ctx context.Context, g *resolve.Graph, targets []string) (linker.Fi
 		return nil, fmt.Errorf("compile: %w", err)
 	}
 	return files, nil
+}
+
+// options holds the settings Option functions configure.
+type options struct {
+	dropSourceInfo bool
+}
+
+// Option configures one Compile call.
+type Option func(*options)
+
+// WithoutSourceInfo drops source information from the compiled files when
+// drop is true. A caller that will never report a position — the older side
+// of a breaking-change comparison — pays for every comment in every file
+// otherwise. The default (opts omitted, or drop false) is unchanged: dropping
+// information early cannot be undone downstream, so it is never the default.
+func WithoutSourceInfo(drop bool) Option {
+	return func(o *options) { o.dropSourceInfo = drop }
 }
 
 // graphResolver opens files through the graph and nothing else.

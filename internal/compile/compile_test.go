@@ -128,6 +128,34 @@ func TestCompile_RetainsSourceInfo(t *testing.T) {
 	}
 }
 
+// TestCompile_WithoutSourceInfoDropsIt pins the other half of the default: a
+// caller that opts out gets SourceCodeInfo dropped, without touching what
+// every other caller gets by default.
+func TestCompile_WithoutSourceInfoDropsIt(t *testing.T) {
+	g := graphWithExternalImport(t, orderProto)
+
+	files, err := compile.Compile(context.Background(), g, []string{"example/v1/order.proto"},
+		compile.WithoutSourceInfo(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd := protodesc.ToFileDescriptorProto(files[0])
+	if si := fd.GetSourceCodeInfo(); si != nil && len(si.GetLocation()) > 0 {
+		t.Fatalf("SourceCodeInfo present after WithoutSourceInfo(true): %v", si)
+	}
+
+	// The default, with no option at all, must be unaffected by the option's
+	// existence.
+	def, err := compile.Compile(context.Background(), g, []string{"example/v1/order.proto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dfd := protodesc.ToFileDescriptorProto(def[0])
+	if si := dfd.GetSourceCodeInfo(); si == nil || len(si.GetLocation()) == 0 {
+		t.Fatal("default Compile call lost SourceCodeInfo")
+	}
+}
+
 // TestCompile_ErrorNamesFileAndLine pins that a broken proto is reported with
 // coordinates rather than swallowed.
 func TestCompile_ErrorNamesFileAndLine(t *testing.T) {
