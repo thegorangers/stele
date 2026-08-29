@@ -22,7 +22,15 @@ Where `stele` stands and what it needs before it can be relied on.
   one an out-of-tree rule implements, eight rules each measured against 35 real
   proto files before it was chosen, `stele lint`, and a host that runs rules from
   outside this repository, pinned in the manifest exactly as a code generation
-  plugin is. No breaking-change detection, no AIP profile (milestone 6).
+  plugin is.
+- Breaking-change detection has a first slice too: `stele breaking` compares the
+  working revision against the correct previous one — merge-base on a topic
+  branch, first parent on the base branch — and reports wire and source
+  breakages in 19 rule ids, plus changes in the dependency closure this
+  repository re-exports. It is report-only: it always exits zero on a finding,
+  because there is no way yet to permit a legitimate one. The valve, and the
+  evidence a fleet needs before it can enable the check, are not built
+  (milestone 6).
 
 That is enough to migrate a repository deliberately, with a human watching. What is
 left before 1.0 is the rest of contract linting (milestone 6), and the honest
@@ -647,13 +655,61 @@ below.
 - **The breadth of AIP coverage.** Thirteen rules is thirteen rules, over 3 of
   the 29 general AIPs a descriptor can decide. The inventory that says which is
   which is in `internal/aip`; see above.
-- **Breaking-change detection.** Nothing compares this revision against a
-  previous one.
+- ~~**Breaking-change detection.**~~ First slice landed; see below.
 - ~~**A baseline.**~~ Landed; see below.
 - **Suppression at the source.** Deliberate, not an oversight. A `// stele:ignore`
   comment lives in the producer's file and travels to every consumer that vendors
   it, carrying one repository's decision into repositories that never made it.
   The manifest is where an exemption is auditable by the people it binds.
+
+#### What shipped: breaking-change detection (first slice)
+
+`stele breaking` compares the working revision against the correct previous
+one — the merge-base with the base branch on a topic branch, the base
+branch's own first parent when already on it, never the base tip, because
+comparing against a moving tip fails an unrelated branch for a neighbour's
+change that already landed. It reports two categories: wire breakage
+(already-serialised bytes stop decoding correctly) and source breakage (a
+consumer's generated code stops compiling), 19 rule ids in the reserved
+`break/` namespace, and it also compares the resolved closure reachable from
+this repository's owned modules — a producer's own files can be
+byte-identical while a bumped dependency pin still breaks their consumers.
+
+**It is report-only, and says so in every invocation.** `stele breaking`
+always exits zero when it finds something to report; only a failure to
+*compare* — a shallow clone, an unreadable manifest, a revision that cannot
+be fetched — fails the run. There is no way yet to permit a legitimate
+breaking change, and a command that failed a build with nothing to accept a
+finding with would leave a repository one option: deleting the CI job.
+
+**The blind zone is named in every report's footer, not left to be
+discovered:** `json_name` renames, `int32` widening to `int64` under
+`protojson` (a 64-bit integer serialises as a string), and `google.api.http`
+changes all pass green. Two narrower gaps are named beside it: a direct
+multi-commit push to the base branch is compared only against the last
+commit of the push, and a human's merge of the base into a topic branch
+leaves the merge commit itself uncompared until the branch lands.
+
+**What is still missing, and it is what stands between this and a check a
+fleet can turn on:**
+
+- **The valve.** `breaking.allow` — a permission for one named change, with a
+  required reason — and `breaking.moves` — a rename map applied before the
+  comparison, so a package rename does not read as removing everything inside
+  it — do not exist yet. Without them the only recovery from a legitimate
+  breaking change is to not run the check, which is the same failure mode
+  `severity: "off"` exists to avoid for lint. The non-zero exit ships together
+  with the valve, in one announced change, because failing a build with
+  nothing to accept a finding with is the thing this slice deliberately does
+  not do.
+- **The evidence.** Two kinds are still owed before a fleet enables the check
+  by default: a shadow period, running in CI in report-only mode with every
+  firing classified by hand as true or false, because "did it fire" is not
+  the question that matters — "was it right" is; and a measurement over open,
+  unmerged work, not just merged history, because a repository's history
+  arrives clean by construction and says nothing about a three-week-old
+  branch with reviewed removals still on it, which is where day-one findings
+  actually come from.
 
 #### What shipped: the baseline
 
