@@ -36,6 +36,71 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely — the categories above replace its fixed set for the reason given.
 Versions follow the policy in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+### Generated output
+
+- Nothing. `stele breaking` reads descriptors; it writes nothing `generate` or
+  `export` produce.
+
+### Added
+
+- **`stele breaking`.** Compares the working revision against the correct
+  previous one — the merge-base with `--base BRANCH` on a topic branch, the
+  first parent when already on the base branch — and reports wire and source
+  breakages in the proto contracts this repository owns, plus changes in the
+  dependency closure it re-exports. 19 rule ids, in a new reserved `break/`
+  namespace alongside `stele/` and `aip/`.
+
+  ```
+  $ stele breaking --base master
+  breaking changes compared against b43992ea4f37bdc0116ac912f543ac3d0e4d6734 (merge-base with master):
+
+  example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) example.v1.Order.total: field example.v1.Order.total changed type from int32 to int64
+      revert the type, or add a new field instead of changing an existing one's type
+
+  report-only: this run always exits zero
+  blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, google.api.http changes, or a oneof renamed with its members intact — the generated wrapper type and getter change and every Go consumer stops compiling, but no descriptor index shifts, so Diff emits nothing
+  ```
+
+  **This release is report-only: it always exits zero when it finds
+  something.** There is no mechanism yet to permit a breaking change
+  deliberately, and a command that failed a build with no way to accept a
+  finding would leave a repository one option — deleting the CI job. A
+  failure to *compare* is different and still fails the run: a shallow clone,
+  an unreadable manifest, a revision that cannot be fetched. The non-zero
+  exit arrives in a later release together with the valve that permits a
+  named change, as one announced change, not as a surprise under an
+  unrelated entry.
+
+  `--against REF` compares directly against `REF`, with no merge-base. It is
+  documented as unsuitable for a CI default: `--against origin/master` is
+  exactly the neighbour-blaming comparison a merge-base exists to avoid, one
+  flag away from the wrong thing. `--base` has no default yet and is
+  required unless `--against` is given; a later release moves it into the
+  manifest as `breaking.base`.
+
+  **Versioning.** A new command is `MINOR` on the full scale in
+  [RELEASING.md](RELEASING.md); while the major version is 0 that bumps
+  `PATCH`, not `MINOR` — this ships as `v0.3.1`.
+
+### Reports and messages
+
+- **Every `stele breaking` report ends with the blind zone**, naming three
+  breakages that pass green so that "no breaking changes" is never read as
+  more safety than the two categories checked can promise: a `json_name`
+  rename, `int32` widened to `int64` (wire-compatible, but `protojson`
+  serialises a 64-bit integer as a string), and a changed `google.api.http`
+  annotation.
+
+### Internal
+
+- **`internal/compile` gains a `WithoutSourceInfo` option.** The previous
+  revision in a comparison never supplies a position, so it does not need
+  source info; this narrows the compile the comparison's older side pays for.
+  Nothing outside `stele breaking` sets it, and no other command's output
+  changes.
+
 ## [v0.3.0] — 2026-08-28
 
 ### Generated output

@@ -76,6 +76,30 @@ func FetchInto(ctx context.Context, cacheRoot, url, ref string) (string, string,
 // makes a leaked one identifiable.
 const tempPrefix = ".tmp-"
 
+// NetworkFetch builds the fetch function every command that resolves a
+// dependency graph over the network needs: parse the dependency's address —
+// a shorthand or a full URL, against the built-in host prefixes — then fetch
+// it into cacheRoot.
+//
+// It returns an unnamed function type rather than resolve.FetchFunc so that
+// this package does not have to import resolve, which already imports this
+// one; the two signatures are identical, and Go assigns between them without
+// a conversion. This used to be written out, verbatim, at four call sites —
+// internal/lint/run.go, internal/gen/gen.go, internal/export/export.go and
+// cmd/stele/breaking.go — the exact repeated-primitive failure this
+// repository's own engineering practices name as the thing to search for
+// before writing a fourth copy of anything.
+func NetworkFetch(cacheRoot string) func(ctx context.Context, git, ref string) (string, string, error) {
+	hosts := DefaultHosts()
+	return func(ctx context.Context, git, ref string) (string, string, error) {
+		addr, err := ParseAddr(git, hosts)
+		if err != nil {
+			return "", "", err
+		}
+		return FetchInto(ctx, cacheRoot, addr.CloneURL(), ref)
+	}
+}
+
 // ResolveRef resolves a branch, tag or commit SHA to the full commit SHA it
 // names. A full SHA is taken as given: resolving it would mean a network round
 // trip that says nothing the caller does not already know, and the fetch itself

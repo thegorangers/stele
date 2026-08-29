@@ -32,12 +32,16 @@ the previous revision differs. This document specifies the producer side.
   type, or whether it streams.
 - **Source.** The bytes survive; a consumer's code stops compiling: field renames
   at a stable number, removals, removal or rename of a message, enum or enum
-  value, a changed `go_package`, moving a field into a oneof.
+  value, a changed `go_package`. Moving a field into or out of a oneof is Source
+  only when the oneof on both sides of the move is a singleton — the case a
+  generated wrapper type appears or disappears around, but nothing else on the
+  wire shifts; when either side has other members remaining, those siblings'
+  `case` values move and the change is Wire instead.
 
 ### The blind zone, stated because silence reads as safety
 
 JSON and behavioural compatibility is out of scope, and that costs real coverage.
-Three breakages pass green. They are named here and printed in every report's
+Four breakages pass green. They are named here and printed in every report's
 footer:
 
 - **`json_name` changed** — same field name, same number; every `protojson` and
@@ -45,7 +49,12 @@ footer:
 - **`int32` → `int64`** — wire-compatible, so this design calls it safe, but
   `protojson` serialises 64-bit integers as **strings**: `5` becomes `"5"`.
 - **`google.api.http` changed** — pure behaviour, invisible to both categories,
-  and in a fleet with transcoding the most likely real breakage of the three.
+  and in a fleet with transcoding the most likely real breakage of the four.
+- **A oneof renamed with its members intact** — `oneof pick {...}` becoming
+  `oneof choose {...}` changes the generated wrapper type and getter, so every
+  Go consumer stops compiling, but no descriptor index shifted: nothing about
+  what the oneof contains changed, only its own name, and this engine indexes
+  declarations, not container names, so `Diff` emits nothing at all.
 
 A report saying "no breaking changes" means none *in the two categories defined
 here*, and says so in those words.

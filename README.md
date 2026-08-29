@@ -14,6 +14,9 @@ this repository currently contains the project scaffolding.
 
 ## What it is meant to do
 
+- `stele breaking` — compare this revision's proto contracts against the
+  correct previous one and report wire and source breakages. Report-only in
+  this release: it always exits zero.
 - `stele export` — materialise a dependency's `.proto` files into a directory.
 - `stele generate` — compile `.proto` files and drive existing code generator
   plugins over the standard `CodeGeneratorRequest` protocol.
@@ -283,13 +286,20 @@ leaving to be discovered.
   saying which AIPs a descriptor cannot decide is claiming something it cannot
   do. A repository that wants more writes them, or takes somebody else's: see
   [rules from outside this repository](#rules-from-outside-this-repository).
-- **There is no breaking-change detection.** Nothing here compares this
-  revision against a previous one. It is the obvious next thing and it is not
-  in this slice.
-- **Only what this repository owns is checked.** Dependencies are compiled,
-  because an import has to link, and they are not judged. A finding about
-  somebody else's contract is one nobody here can act on, and the only recovery
-  would be to switch the whole thing off.
+- **Breaking-change detection is report-only.** `stele breaking` exists and
+  always exits zero on a finding — see
+  [breaking-change detection](#breaking-change-detection) below. There is no
+  way yet to permit a legitimate change deliberately, so a non-zero exit would
+  leave a repository one option on the day it disagreed: deleting the CI job.
+  The valve arrives in a later release, together with the non-zero exit, as one
+  announced change.
+- **`stele lint` only checks what this repository owns.** Dependencies are
+  compiled, because an import has to link, and they are not judged. A finding
+  about somebody else's contract is one nobody here can act on, and the only
+  recovery would be to switch the whole thing off. `stele breaking` is
+  different: it also compares the resolved closure this repository
+  re-exports, because a producer's action there has a consumer consequence —
+  see [breaking-change detection](#breaking-change-detection) below.
 
 ### The rules, and why so few
 
@@ -571,6 +581,131 @@ stele: lint checked 2 files with 13 rules: 0 errors, 0 warnings, 54 findings hel
 
 — and the 41st unprefixed value fails the run, by name, on the line it was
 written.
+
+## Breaking-change detection
+
+`stele breaking` compiles the working revision and the correct previous
+revision and reports what changed in the modules this repository owns that
+would break a consumer.
+
+```
+$ stele breaking --base master
+breaking changes compared against b43992ea4f37bdc0116ac912f543ac3d0e4d6734 (merge-base with master):
+
+example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) example.v1.Order.total: field example.v1.Order.total changed type from int32 to int64
+    revert the type, or add a new field instead of changing an existing one's type
+
+report-only: this run always exits zero
+blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, google.api.http changes, or a oneof renamed with its members intact — the generated wrapper type and getter change and every Go consumer stops compiling, but no descriptor index shifts, so Diff emits nothing
+```
+
+**The previous revision is chosen the way a code review chooses one, not
+handed to it.** On a topic branch it is the merge-base with the base branch;
+comparing against the base branch's moving tip instead would fail an unrelated
+branch for a neighbour's change that already merged. On the base branch itself
+it is `HEAD`'s first parent — what the branch looked like before the change
+that landed.
+
+Two changes checked:
+
+- **Wire.** Already-serialised bytes stop being read correctly: field numbers,
+  incompatible type changes, cardinality, enum value numbers, and — because in
+  gRPC a name is a path on the wire — a renamed or removed package, service or
+  method, a changed request or response type, or whether a method streams. A
+  field moving, joining or leaving a oneof is wire too, but only when the
+  oneof on either side has another member: sibling-clearing on decode
+  behaves differently, whichever direction the field moved. Between two
+  oneofs that each have only that one field, nothing observable changes on
+  the wire.
+- **Source.** The bytes survive; a consumer's generated code stops compiling:
+  field renames at a stable number, a removed field, message or enum, a
+  changed `go_package`, and a oneof move where no oneof involved has another
+  member — only the generated accessor changes.
+
+  A renamed message or enum is deliberately not its own rule: pairing
+  containers by shape would marry unrelated declarations and hide a real
+  removal behind a coincidental rename, so a rename reports as a removal plus
+  an addition instead. A field or an enum value has a number to key a pairing
+  on rather than shape, so `break/field_renamed` and `break/enum_value_renamed`
+  exist where `break/message_renamed` and `break/enum_renamed` do not.
+
+19 rule ids, in the reserved `break/` namespace: `break/enum_removed`,
+`break/enum_value_number_changed`, `break/enum_value_removed`,
+`break/enum_value_renamed`, `break/field_cardinality_changed`,
+`break/field_number_changed`, `break/field_oneof_changed`,
+`break/field_removed`, `break/field_renamed`, `break/field_type_changed`,
+`break/file_removed`, `break/go_package_changed`, `break/message_removed`,
+`break/method_removed`, `break/method_signature_changed`,
+`break/method_streaming_changed`, `break/package_removed`,
+`break/package_renamed`, `break/service_removed`.
+
+**It also compares the dependency closure this repository re-exports.** Your
+own files can be byte-identical while a bumped dependency pin still breaks
+your consumers, because they resolve your manifest transitively. The producer
+run answers "did what I re-export change", not "did what I import change".
+
+### Flags
+
+```
+Flags:
+  --dir DIR       directory holding stele.yaml (default ".")
+  --base BRANCH   the base branch this revision is compared against on a
+                  topic branch; required unless --against is given
+  --against REF   compare directly against REF, with no merge-base
+  --cache-dir DIR where fetched repositories are kept (default
+                  $XDG_CACHE_HOME/stele, else ~/.cache/stele;
+                  $STELE_CACHE_DIR is honoured too)
+```
+
+**`--against` is not a substitute for `--base` as a CI default.**
+`--against origin/master` is exactly the neighbour-blaming comparison a
+merge-base exists to avoid, one flag away from the wrong thing — a moving
+upstream ref, not the commit this branch actually diverged from. It exists for
+a deliberate manual comparison, against a release tag or a specific commit; a
+CI job needs `--base`.
+
+**`--base` has no default yet.** A later release moves it into the manifest as
+`breaking.base`; until then it is required on every invocation unless
+`--against` is given.
+
+### This release is report-only
+
+`stele breaking` **always exits zero when it finds something to report.**
+There is no mechanism yet to permit a breaking change deliberately — no
+`breaking.allow`, no rename map for a deliberate move — and a command that
+failed a build with no way to accept a finding would leave a repository one
+option: deleting the CI job. That is the failure this design exists to avoid.
+
+A failure to *compare* is different, and still fails the run: a shallow clone,
+an unreadable manifest, a revision that cannot be fetched. Only findings are
+non-fatal, in this release.
+
+### The blind zone
+
+Every report ends with a footer naming what this engine cannot see, because a
+report that said "no breaking changes" without saying so would read as safety
+it has not earned:
+
+- **`json_name` changed.** Same field name, same number; every `protojson` and
+  transcoding consumer breaks.
+- **`int32` widened to `int64`.** Wire-compatible, so it is not reported as a
+  finding — but `protojson` serialises a 64-bit integer as a **string**: `5`
+  becomes `"5"`.
+- **`google.api.http` changed.** Pure behaviour, invisible to both wire and
+  source comparison, and in a fleet with transcoding the most likely real
+  breakage of the three.
+
+Two further limits are worth a reader's attention, because they are easy to
+mistake for bugs rather than named gaps:
+
+- **A direct multi-commit push to the base branch is compared only against
+  the last commit of the push.** The first-parent rule assumes the base branch
+  moves by merge commits; a push that lands several commits at once bypasses
+  it, and only the final state is checked.
+- **A human's merge of the base branch into a topic branch leaves the merge
+  commit itself uncompared.** The tool follows the topic parent, so a conflict
+  resolution that quietly drops a field inside that merge is not caught on the
+  topic branch — the base-branch run catches it once the branch lands.
 
 ## Trust
 

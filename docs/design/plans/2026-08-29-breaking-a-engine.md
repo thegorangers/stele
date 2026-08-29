@@ -1162,9 +1162,20 @@ Build `measure` with `dynamicpb` over a synthesised one-field message: set the v
 
 **The id set, settled here and permanent.** Renames and removals are both present, and the rule that decides between them is stated because the previous plan minted contradictory ids without one: **a removal and an addition within the same parent are reported as a rename when number, type and cardinality all match and only the name differs; otherwise they are a removal and an addition.**
 
-Wire: `break/field_number_changed`, `break/field_type_changed`, `break/field_cardinality_changed`, `break/field_oneof_changed`, `break/enum_value_number_changed`, `break/package_removed`, `break/package_renamed`, `break/service_removed`, `break/service_renamed`, `break/method_removed`, `break/method_renamed`, `break/method_signature_changed`, `break/method_streaming_changed`.
+Wire, unconditionally: `break/field_number_changed`, `break/field_cardinality_changed`, `break/enum_value_number_changed`, `break/package_removed`, `break/package_renamed`, `break/service_removed`, `break/method_removed`, `break/method_signature_changed`, `break/method_streaming_changed`.
 
-Source: `break/field_removed`, `break/field_renamed`, `break/message_removed`, `break/message_renamed`, `break/enum_removed`, `break/enum_renamed`, `break/enum_value_removed`, `break/enum_value_renamed`, `break/file_removed`, `break/go_package_changed`.
+Source, unconditionally: `break/field_removed`, `break/field_renamed`, `break/message_removed`, `break/enum_removed`, `break/enum_value_removed`, `break/enum_value_renamed`, `break/file_removed`, `break/go_package_changed`.
+
+Conditional on the shapes involved, not fixed to one category: `break/field_type_changed` is Wire unless the old and new kinds are wire-compatible (`WireCompatible`, wiretypes.go), in which case it is Source. `break/field_oneof_changed` is Wire when either side of the move is a oneof with more than one member — the other members' `case` values on the wire shift — and Source otherwise, including a move into or out of a singleton oneof (`oneofChangeCategory`, rules.go).
+
+**Four rename ids were dropped during implementation and must not be re-added:**
+`break/message_renamed`, `break/enum_renamed`, `break/service_renamed`,
+`break/method_renamed`. A field and an enum value have a number to key a pairing
+on; a message, enum, service or method has no identity beyond its name, and shape
+is not one — two empty messages share a shape, so deleting one empty response and
+adding another was reported as a rename and the removal vanished from the report.
+A wrongly paired rename hides a removal, which is a missed breakage. To a consumer
+a renamed message is a removal plus an addition anyway.
 
 `break/file_removed` fires **only when the file's declarations survive elsewhere** — a file whose contents are gone reports the declaration removals, and reporting both would double-count. It exists because a consumer imports a *path*, so a file split or move breaks the import even when every full name survives.
 

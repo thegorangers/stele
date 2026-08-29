@@ -19,6 +19,7 @@ Usage:
   stele <command> [flags]
 
 Commands:
+  breaking    report proto contract changes that would break a consumer
   export      write proto files into a directory tree, laid out by import path
   generate    run code generation plugins over this repository's protos
   lint        check this repository's proto contracts against rules
@@ -55,6 +56,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "-h", "--help", "help":
 		fmt.Fprint(stdout, usage)
 		return errHelp
+	case "breaking":
+		return runBreaking(ctx, args[1:], stdout, stderr)
 	case "export":
 		return runExport(ctx, args[1:], stdout, stderr)
 	case "generate":

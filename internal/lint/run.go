@@ -424,7 +424,7 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 		if len(cfg.Deps) > 0 && opts.CacheRoot == "" {
 			return nil, errors.New("lint: the manifest declares dependencies, and this run was given no cache root")
 		}
-		fetch = networkFetch(opts.CacheRoot)
+		fetch = source.NetworkFetch(opts.CacheRoot)
 	}
 	graph, err := pin.Resolve(ctx, pin.Options{
 		Dir:      dir,
@@ -639,13 +639,3 @@ func owned(g *resolve.Graph, dir string) ([]string, map[string]string) {
 // networkFetch fetches repositories into a cache root. It is the same
 // resolution generate and export use; nothing about linting changes where a
 // dependency comes from.
-func networkFetch(cacheRoot string) resolve.FetchFunc {
-	hosts := source.DefaultHosts()
-	return func(ctx context.Context, git, ref string) (string, string, error) {
-		addr, err := source.ParseAddr(git, hosts)
-		if err != nil {
-			return "", "", err
-		}
-		return source.FetchInto(ctx, cacheRoot, addr.CloneURL(), ref)
-	}
-}
