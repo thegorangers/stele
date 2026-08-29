@@ -336,22 +336,12 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 			})
 		}
 
-		beforeOneof := effectiveOneof(before)
-		afterOneof := effectiveOneof(after)
+		beforeOneofDesc := effectiveOneofDescriptor(before)
+		afterOneofDesc := effectiveOneofDescriptor(after)
+		beforeOneof := oneofDescName(beforeOneofDesc)
+		afterOneof := oneofDescName(afterOneofDesc)
 		if beforeOneof != afterOneof {
-			// Wire encoding never depends on oneof membership by itself —
-			// the tag on the wire is the same whether or not a field
-			// belongs to a oneof. Joining or leaving a oneof only changes
-			// generated code (the accessor pattern), so that is Source.
-			// Moving between two DISTINCT oneofs is different: whichever of
-			// the two fields is set on the wire now clears the other field
-			// in its new group on decode, a behavioural change a peer can
-			// observe without recompiling anything, so that direction is
-			// Wire.
-			cat := Source
-			if beforeOneof != "" && afterOneof != "" {
-				cat = Wire
-			}
+			cat := oneofChangeCategory(beforeOneofDesc, afterOneofDesc)
 			beforeLabel, afterLabel := beforeOneof, afterOneof
 			if beforeLabel == "" {
 				beforeLabel = "none"
@@ -374,16 +364,65 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 	return findings
 }
 
-// effectiveOneof reports the name of the real (non-synthetic) oneof a field
-// belongs to, or "" if it belongs to none. A proto3 optional field's
+// effectiveOneofDescriptor reports the real (non-synthetic) oneof a field
+// belongs to, or nil if it belongs to none. A proto3 optional field's
 // compiler-synthesised oneof is not a real declaration the author wrote, so
 // it is not part of what field_oneof_changed reacts to.
-func effectiveOneof(f protoreflect.FieldDescriptor) string {
+func effectiveOneofDescriptor(f protoreflect.FieldDescriptor) protoreflect.OneofDescriptor {
 	o := f.ContainingOneof()
 	if o == nil || o.IsSynthetic() {
+		return nil
+	}
+	return o
+}
+
+// effectiveOneof reports the name of the real (non-synthetic) oneof a field
+// belongs to, or "" if it belongs to none.
+func effectiveOneof(f protoreflect.FieldDescriptor) string {
+	return oneofDescName(effectiveOneofDescriptor(f))
+}
+
+func oneofDescName(o protoreflect.OneofDescriptor) string {
+	if o == nil {
 		return ""
 	}
 	return string(o.Name())
+}
+
+// oneofChangeCategory decides break/field_oneof_changed's Category from the
+// field's oneof membership before and after, per the design's discriminator:
+// not "was there a real oneof on either side" but "did sibling-clearing
+// semantics change on the wire".
+//
+//   - Moving between two DISTINCT real oneofs is always Wire: whichever of
+//     the two fields is set on the wire now clears a different sibling on
+//     decode than it used to — a behavioural change a peer observes without
+//     recompiling anything.
+//   - Joining or leaving a oneof that has OTHER members is Wire for the same
+//     reason: before, a decoder receiving two of that oneof's fields on the
+//     wire (from an old-schema peer, or a malformed/adversarial message)
+//     keeps both; after, it keeps only the last one.
+//   - Joining or leaving a SINGLETON oneof (this field is the only member of
+//     the oneof on the side that has one) is Source: nothing about what a
+//     decoder keeps changes, because there was never a sibling to clear;
+//     only the generated accessor's shape changes.
+func oneofChangeCategory(before, after protoreflect.OneofDescriptor) Category {
+	switch {
+	case before != nil && after != nil:
+		return Wire
+	case before != nil:
+		if before.Fields().Len() > 1 {
+			return Wire
+		}
+		return Source
+	case after != nil:
+		if after.Fields().Len() > 1 {
+			return Wire
+		}
+		return Source
+	default:
+		return Source // unreachable: caller only invokes this when the two differ
+	}
 }
 
 // fieldShapeEqual is the rename rule for fields: same number, kind,
@@ -662,17 +701,26 @@ func classifyPackages(prev, cur Revision) (findings []Finding, swallowed map[pro
 	}
 	sort.Slice(removedPkgs, func(i, j int) bool { return removedPkgs[i] < removedPkgs[j] })
 
+	// candidateCurPkgs is every package new in cur (not in prevPkgs at all),
+	// sorted: ranging a map directly would let the winning candidate — and
+	// so the package name named in the message — vary run to run whenever
+	// more than one candidate matches.
+	var candidateCurPkgs []protoreflect.FullName
+	for q := range curPkgs {
+		if _, existedBefore := prevPkgs[q]; !existedBefore {
+			candidateCurPkgs = append(candidateCurPkgs, q)
+		}
+	}
+	sort.Slice(candidateCurPkgs, func(i, j int) bool { return candidateCurPkgs[i] < candidateCurPkgs[j] })
+
 	for _, p := range removedPkgs {
 		before := prevPkgs[p]
 		var renamedTo protoreflect.FullName
-		for q, after := range curPkgs {
+		for _, q := range candidateCurPkgs {
 			if usedCur[q] {
 				continue
 			}
-			if _, existedBefore := prevPkgs[q]; existedBefore {
-				continue // q is not new in cur
-			}
-			if sameNameSet(before, after) {
+			if sameNameSet(before, curPkgs[q]) {
 				renamedTo = q
 				usedCur[q] = true
 				break
@@ -740,20 +788,25 @@ func sameNameSet(a, b []protoreflect.Name) bool {
 // ---- files ----
 
 // classifyFiles fires break/file_removed whenever a removed file's path is
-// gone AND at least one message, enum or service that used to live in that
-// file survives elsewhere in cur (under the same full name, moved or
-// otherwise) — because a consumer imports a PATH, and that import breaks
-// regardless of how many of the file's declarations moved rather than
-// vanished.
+// gone AND EITHER the file declared no message/enum/service at all (an
+// aggregator file of pure imports, an options-only file, a file of nothing
+// but top-level extend blocks — there is nothing for a declaration-level
+// finding to have already reported, so there is no double-count to avoid)
+// OR at least one message, enum or service that used to live in the file
+// survives elsewhere in cur (under the same full name, moved or otherwise)
+// — because a consumer imports a PATH, and that import breaks regardless of
+// how many of the file's declarations moved rather than vanished, or
+// whether it had any declarations to begin with.
 //
-// It fires for none of the file's contents ONLY when every declaration that
-// used to be in the file is also gone: that all-gone case is already fully
-// covered by the declaration-level break/message_removed, break/enum_removed
-// and break/service_removed findings, and reporting break/file_removed on
-// top of them would double-count the same fact. A file holding both a
-// declaration that moved and one that was deleted outright still fires:
-// the moved declaration is the "at least one survives" that matters here,
-// and the deleted one is reported separately by its own removal finding.
+// It fires for neither of those ONLY when the file declared at least one
+// message/enum/service AND every one of them is also gone: that all-gone
+// case is already fully covered by the declaration-level
+// break/message_removed, break/enum_removed and break/service_removed
+// findings, and reporting break/file_removed on top of them would
+// double-count the same fact. A file holding both a declaration that moved
+// and one that was deleted outright still fires: the moved declaration is
+// the "at least one survives" that matters here, and the deleted one is
+// reported separately by its own removal finding.
 func classifyFiles(changes []Change, prev Revision) []Finding {
 	// removedFullNames is every message/enum/service full name Diff
 	// reported Removed, regardless of why — the same fact declSwallowed in
@@ -789,14 +842,14 @@ func classifyFiles(changes []Change, prev Revision) []Finding {
 			continue
 		}
 		declared := declarationFullNames(fd)
-		survives := false
+		survives := len(declared) == 0 // no declarations at all: nothing to double-count
 		for _, name := range declared {
 			if !removedFullNames[string(name)] {
 				survives = true
 				break
 			}
 		}
-		if len(declared) > 0 && survives {
+		if survives {
 			findings = append(findings, Finding{
 				Rule:     "break/file_removed",
 				Category: Source,

@@ -54,22 +54,26 @@ func classifyFixture(t *testing.T, prevFiles, curFiles map[string]string) []Find
 	return Classify(changes, prevRev, curRev)
 }
 
-// rulePair is a (rule id, category) pair, the unit assertFires and
-// assertClean compare on. Asserting rule ids alone lets a miscategorised
-// finding (Wire reported as Source, or vice versa) hide behind a green
-// test: Category is half of what a permanent id means, so every assertion
-// in this file checks both.
+// rulePair is a (rule id, category, change) triple, the unit assertFires
+// and assertClean compare on. Asserting rule ids alone lets a
+// miscategorised finding (Wire reported as Source, or vice versa) hide
+// behind a green test — Category is half of what a permanent id means —
+// and asserting rule+category alone still lets the Change discriminant
+// drift silently, which is exactly what a later plan's permissions match
+// on: a spelling change in "%d -> %d" that nothing here pins is invisible
+// to this suite. So every assertion in this file checks all three.
 type rulePair struct {
-	rule string
-	cat  Category
+	rule   string
+	cat    Category
+	change string
 }
 
-// rulePairs reports the sorted, de-duplicated set of (rule, category) pairs
-// a set of findings carries.
+// rulePairs reports the sorted, de-duplicated set of (rule, category,
+// change) triples a set of findings carries.
 func rulePairs(findings []Finding) []rulePair {
 	seen := make(map[rulePair]bool)
 	for _, f := range findings {
-		seen[rulePair{f.Rule, f.Category}] = true
+		seen[rulePair{f.Rule, f.Category, f.Change}] = true
 	}
 	out := make([]rulePair, 0, len(seen))
 	for p := range seen {
@@ -79,15 +83,19 @@ func rulePairs(findings []Finding) []rulePair {
 		if out[i].rule != out[j].rule {
 			return out[i].rule < out[j].rule
 		}
-		return out[i].cat < out[j].cat
+		if out[i].cat != out[j].cat {
+			return out[i].cat < out[j].cat
+		}
+		return out[i].change < out[j].change
 	})
 	return out
 }
 
 // assertFires checks that exactly want fired, in full, and that nothing
 // else did: a case that only asserts presence cannot tell a correctly
-// narrow, correctly categorised rule apart from one that also fires on
-// everything else, or fires with the wrong category.
+// narrow, correctly categorised, correctly discriminated rule apart from
+// one that also fires on everything else, fires with the wrong category,
+// or carries the wrong Change spelling.
 func assertFires(t *testing.T, findings []Finding, want []rulePair) {
 	t.Helper()
 	got := rulePairs(findings)
@@ -96,10 +104,13 @@ func assertFires(t *testing.T, findings []Finding, want []rulePair) {
 		if wantSorted[i].rule != wantSorted[j].rule {
 			return wantSorted[i].rule < wantSorted[j].rule
 		}
-		return wantSorted[i].cat < wantSorted[j].cat
+		if wantSorted[i].cat != wantSorted[j].cat {
+			return wantSorted[i].cat < wantSorted[j].cat
+		}
+		return wantSorted[i].change < wantSorted[j].change
 	})
 	if !equalPairs(got, wantSorted) {
-		t.Fatalf("(rule, category) pairs fired = %v, want exactly %v", got, wantSorted)
+		t.Fatalf("(rule, category, change) triples fired = %v, want exactly %v", got, wantSorted)
 	}
 }
 
@@ -108,7 +119,7 @@ func assertFires(t *testing.T, findings []Finding, want []rulePair) {
 func assertClean(t *testing.T, findings []Finding) {
 	t.Helper()
 	if got := rulePairs(findings); len(got) != 0 {
-		t.Fatalf("(rule, category) pairs fired = %v, want none", got)
+		t.Fatalf("(rule, category, change) triples fired = %v, want none", got)
 	}
 }
 
@@ -136,7 +147,7 @@ var cases = []struct {
 		"field_removed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
-		[]rulePair{{"break/field_removed", Source}},
+		[]rulePair{{"break/field_removed", Source, ""}},
 	},
 	{
 		"field_added",
@@ -150,13 +161,13 @@ var cases = []struct {
 		"field_renamed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 promised_at = 2;\n}\n"},
-		[]rulePair{{"break/field_renamed", Source}},
+		[]rulePair{{"break/field_renamed", Source, ""}},
 	},
 	{
 		"field_not_renamed_type_differs",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  string promised_at = 3;\n}\n"},
-		[]rulePair{{"break/field_removed", Source}}, // eta removed, promised_at is a new field: shape (number, kind) differs
+		[]rulePair{{"break/field_removed", Source, ""}}, // eta removed, promised_at is a new field: shape (number, kind) differs
 	},
 	// I1: a field entering a oneof is never paired into a rename, even when
 	// it also changes name in the same commit — oneof membership is part of
@@ -166,7 +177,7 @@ var cases = []struct {
 		"field_not_renamed_oneof_membership_differs",
 		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string b = 1;\n  }\n}\n"},
-		[]rulePair{{"break/field_removed", Source}},
+		[]rulePair{{"break/field_removed", Source, ""}},
 	},
 
 	// -- field_type_changed --
@@ -174,7 +185,7 @@ var cases = []struct {
 		"field_type_int32_to_string",
 		map[string]string{"a.proto": hdr + "message Order {\n  int32 code = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string code = 1;\n}\n"},
-		[]rulePair{{"break/field_type_changed", Wire}},
+		[]rulePair{{"break/field_type_changed", Wire, "int32 -> string"}},
 	},
 	// R4: int32 -> int64 is wire-compatible (WireCompatible reports true),
 	// but the generated accessor's Go type still changes underneath every
@@ -185,7 +196,7 @@ var cases = []struct {
 		"field_type_int32_to_int64",
 		map[string]string{"a.proto": hdr + "message Order {\n  int32 code = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  int64 code = 1;\n}\n"},
-		[]rulePair{{"break/field_type_changed", Source}},
+		[]rulePair{{"break/field_type_changed", Source, "int32 -> int64"}},
 	},
 	{
 		"field_type_unchanged",
@@ -199,7 +210,7 @@ var cases = []struct {
 		"field_number_changed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 2;\n}\n"},
-		[]rulePair{{"break/field_number_changed", Wire}},
+		[]rulePair{{"break/field_number_changed", Wire, "1 -> 2"}},
 	},
 	{
 		"field_number_unchanged_reordered",
@@ -213,7 +224,7 @@ var cases = []struct {
 		"field_cardinality_changed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string tag = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  repeated string tag = 1;\n}\n"},
-		[]rulePair{{"break/field_cardinality_changed", Wire}},
+		[]rulePair{{"break/field_cardinality_changed", Wire, "optional -> repeated"}},
 	},
 	{
 		"field_cardinality_unchanged",
@@ -223,24 +234,46 @@ var cases = []struct {
 	},
 
 	// -- field_oneof_changed --
-	// C3: moving a field INTO a oneof changes nothing on the wire (the tag
-	// is the same either way) but changes the generated accessor, so it is
-	// Source.
+	// R7: the discriminator is not "was there a real oneof on either side"
+	// but "did sibling-clearing semantics change on the wire". Joining or
+	// leaving a SINGLETON oneof changes nothing a decoder keeps — there was
+	// never a sibling to clear — so that is Source. Joining or leaving a
+	// oneof that has OTHER members, or moving between two distinct real
+	// oneofs, changes which sibling a decoder clears on receipt: a peer
+	// observes that without recompiling anything, so those are Wire.
 	{
-		"field_oneof_into_is_source",
+		"field_oneof_join_singleton_is_source",
 		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n  string b = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string a = 1;\n  }\n  string b = 2;\n}\n"},
-		[]rulePair{{"break/field_oneof_changed", Source}},
+		[]rulePair{{"break/field_oneof_changed", Source, "none -> choice"}},
 	},
-	// Moving a field FROM one real oneof to a DIFFERENT real oneof is Wire:
-	// a peer that sets the field now clears a different sibling on decode
-	// than it used to, a behavioural change nobody needed to recompile to
-	// observe.
+	{
+		"field_oneof_join_populated_is_wire",
+		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n  oneof choice {\n    string c = 3;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string c = 3;\n    string a = 1;\n  }\n}\n"},
+		[]rulePair{{"break/field_oneof_changed", Wire, "none -> choice"}},
+	},
+	{
+		"field_oneof_leave_singleton_is_source",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string a = 1;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n}\n"},
+		[]rulePair{{"break/field_oneof_changed", Source, "choice -> none"}},
+	},
+	{
+		"field_oneof_leave_populated_is_wire",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string a = 1;\n    string c = 3;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  string a = 1;\n  oneof choice {\n    string c = 3;\n  }\n}\n"},
+		[]rulePair{{"break/field_oneof_changed", Wire, "choice -> none"}},
+	},
+	// Moving a field FROM one real oneof to a DIFFERENT real oneof is
+	// always Wire, regardless of either oneof's population: whichever of
+	// the two fields is set on the wire now clears a different sibling
+	// group on decode than it used to.
 	{
 		"field_oneof_between_is_wire",
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n    string keep_x = 3;\n  }\n  oneof y {\n    string b = 2;\n  }\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string keep_x = 3;\n  }\n  oneof y {\n    string b = 2;\n    string a = 1;\n  }\n}\n"},
-		[]rulePair{{"break/field_oneof_changed", Wire}},
+		[]rulePair{{"break/field_oneof_changed", Wire, "x -> y"}},
 	},
 	{
 		"field_oneof_unchanged",
@@ -258,13 +291,13 @@ var cases = []struct {
 		"message_removed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\nmessage Keep {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Keep {\n  string id = 1;\n}\n"},
-		[]rulePair{{"break/message_removed", Source}},
+		[]rulePair{{"break/message_removed", Source, ""}},
 	},
 	{
 		"message_removed_even_with_matching_shape",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Purchase {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
-		[]rulePair{{"break/message_removed", Source}},
+		[]rulePair{{"break/message_removed", Source, ""}},
 	},
 	{
 		"message_kept",
@@ -279,7 +312,7 @@ var cases = []struct {
 		"enum_removed",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\nmessage Keep {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "message Keep {\n  string id = 1;\n}\n"},
-		[]rulePair{{"break/enum_removed", Source}},
+		[]rulePair{{"break/enum_removed", Source, ""}},
 	},
 	{
 		"enum_kept",
@@ -293,7 +326,7 @@ var cases = []struct {
 		"enum_value_removed",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n}\n"},
-		[]rulePair{{"break/enum_value_removed", Source}},
+		[]rulePair{{"break/enum_value_removed", Source, ""}},
 	},
 	{
 		"enum_value_added",
@@ -305,13 +338,19 @@ var cases = []struct {
 		"enum_value_renamed",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_DONE = 1;\n}\n"},
-		[]rulePair{{"break/enum_value_renamed", Source}},
+		[]rulePair{{"break/enum_value_renamed", Source, ""}},
 	},
 	{
 		"enum_value_number_changed",
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 2;\n  STATUS_RESERVED_1 = 1;\n}\n"},
-		[]rulePair{{"break/enum_value_number_changed", Wire}},
+		[]rulePair{{"break/enum_value_number_changed", Wire, "1 -> 2"}},
+	},
+	{
+		"enum_value_number_unchanged_reordered",
+		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_OK = 1;\n  STATUS_DONE = 2;\n}\n"},
+		map[string]string{"a.proto": hdr + "enum Status {\n  STATUS_UNSPECIFIED = 0;\n  STATUS_DONE = 2;\n  STATUS_OK = 1;\n}\n"},
+		nil,
 	},
 
 	// -- service_removed --
@@ -324,7 +363,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\n",
 		},
-		[]rulePair{{"break/service_removed", Wire}},
+		[]rulePair{{"break/service_removed", Wire, ""}},
 	},
 	{
 		"service_kept",
@@ -347,7 +386,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc List(Req) returns (Resp);\n}\n",
 		},
-		[]rulePair{{"break/method_removed", Wire}},
+		[]rulePair{{"break/method_removed", Wire, ""}},
 	},
 	{
 		"method_added",
@@ -367,7 +406,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nmessage Resp2 {}\nservice Orders {\n  rpc Get(Req) returns (Resp2);\n}\n",
 		},
-		[]rulePair{{"break/method_signature_changed", Wire}},
+		[]rulePair{{"break/method_signature_changed", Wire, "example.orders.v1.Req/example.orders.v1.Resp -> example.orders.v1.Req/example.orders.v1.Resp2"}},
 	},
 	{
 		"method_signature_unchanged",
@@ -387,7 +426,7 @@ var cases = []struct {
 		map[string]string{
 			"a.proto": hdr + "message Req {}\nmessage Resp {}\nservice Orders {\n  rpc Get(Req) returns (stream Resp);\n}\n",
 		},
-		[]rulePair{{"break/method_streaming_changed", Wire}},
+		[]rulePair{{"break/method_streaming_changed", Wire, "unary -> server-streaming"}},
 	},
 	{
 		"method_streaming_unchanged",
@@ -410,13 +449,13 @@ var cases = []struct {
 		map[string]string{
 			"b.proto": "syntax = \"proto3\";\npackage example.other.v1;\nmessage Keep {\n  string id = 1;\n}\n",
 		},
-		[]rulePair{{"break/package_removed", Wire}},
+		[]rulePair{{"break/package_removed", Wire, ""}},
 	},
 	{
 		"package_renamed",
 		map[string]string{"a.proto": hdr + "message Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": "syntax = \"proto3\";\npackage example.orders.v2;\nmessage Order {\n  string id = 1;\n}\n"},
-		[]rulePair{{"break/package_renamed", Wire}},
+		[]rulePair{{"break/package_renamed", Wire, ""}},
 	},
 	// The negative half of the rename rule for packages: the old package
 	// survives untouched, so an unrelated new package appearing alongside
@@ -443,7 +482,7 @@ var cases = []struct {
 		map[string]string{
 			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\nmessage Order {\n  string id = 1;\n}\n",
 		},
-		[]rulePair{{"break/file_removed", Source}},
+		[]rulePair{{"break/file_removed", Source, ""}},
 	},
 	// I2: partial survival still breaks the import of the old path. Gone is
 	// deleted outright (reported by its own message_removed); Moved
@@ -458,7 +497,7 @@ var cases = []struct {
 		map[string]string{
 			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\nmessage Moved {\n  string id = 1;\n}\n",
 		},
-		[]rulePair{{"break/file_removed", Source}, {"break/message_removed", Source}},
+		[]rulePair{{"break/file_removed", Source, ""}, {"break/message_removed", Source, ""}},
 	},
 	{
 		"file_removed_declarations_gone_too",
@@ -469,7 +508,23 @@ var cases = []struct {
 		map[string]string{
 			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\n",
 		},
-		[]rulePair{{"break/message_removed", Source}},
+		[]rulePair{{"break/message_removed", Source, ""}},
+	},
+	// (b): a file with no message/enum/service at all — only syntax,
+	// package and an option — has nothing a declaration-level finding could
+	// already have reported, so there is no double-count to avoid: it must
+	// fire on its own the same as any other removed file, because a
+	// consumer still imports its PATH.
+	{
+		"file_removed_no_declarations",
+		map[string]string{
+			"a.proto": hdr + "option go_package = \"example.com/orders/v1;ordersv1\";\n",
+			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\n",
+		},
+		map[string]string{
+			"b.proto": hdr + "message Keep {\n  string id = 1;\n}\n",
+		},
+		[]rulePair{{"break/file_removed", Source, ""}},
 	},
 
 	// -- go_package_changed --
@@ -477,7 +532,7 @@ var cases = []struct {
 		"go_package_changed",
 		map[string]string{"a.proto": hdr + "option go_package = \"example.com/orders/v1;ordersv1\";\nmessage Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "option go_package = \"example.com/orders/v2;ordersv2\";\nmessage Order {\n  string id = 1;\n}\n"},
-		[]rulePair{{"break/go_package_changed", Source}},
+		[]rulePair{{"break/go_package_changed", Source, "example.com/orders/v1;ordersv1 -> example.com/orders/v2;ordersv2"}},
 	},
 	{
 		"go_package_unchanged",
