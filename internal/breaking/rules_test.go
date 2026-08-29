@@ -288,7 +288,15 @@ var cases = []struct {
 		"field_oneof_between_singletons_is_source",
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n  }\n  oneof w {\n    string p = 5;\n  }\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof w {\n    string p = 5;\n  }\n  oneof y {\n    string a = 1;\n  }\n}\n"},
-		[]rulePair{{"break/field_oneof_changed", Source, "x -> y"}},
+		// x and y are both singletons holding field 1: that member set is
+		// identical, so break/oneof_renamed correctly pairs them as a
+		// rename in addition to the per-field break/field_oneof_changed —
+		// the two rules see the same underlying fact from two angles, and
+		// nothing here makes that ambiguous with an unrelated w.
+		[]rulePair{
+			{"break/field_oneof_changed", Source, "x -> y"},
+			{"break/oneof_renamed", Source, "x -> y"},
+		},
 	},
 	{
 		"field_oneof_unchanged",
@@ -553,6 +561,48 @@ var cases = []struct {
 		"go_package_unchanged",
 		map[string]string{"a.proto": hdr + "option go_package = \"example.com/orders/v1;ordersv1\";\nmessage Order {\n  string id = 1;\n}\n"},
 		map[string]string{"a.proto": hdr + "option go_package = \"example.com/orders/v1;ordersv1\";\nmessage Order {\n  string id = 1;\n  int64 eta = 2;\n}\n"},
+		nil,
+	},
+
+	// -- oneof_renamed --
+	{
+		"oneof_renamed",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof pick {\n    string a = 1;\n    string b = 2;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof choose {\n    string a = 1;\n    string b = 2;\n  }\n}\n"},
+		[]rulePair{{"break/oneof_renamed", Source, "pick -> choose"}},
+	},
+	// Renaming the oneof AND changing its member set in the same commit is
+	// not a rename: the field set is the whole basis for pairing, so
+	// break/oneof_renamed must not fire. b, which leaves the oneof
+	// entirely, still gets its own break/field_oneof_changed regardless
+	// (field a's OneofIndex stays 0 on both sides here, so Diff does not
+	// even see it as Modified — the same "bytes are identical" fact that
+	// makes an unpaired oneof rename invisible to field-level rules in the
+	// first place, which is exactly why the oneof-level rename rule has to
+	// exist).
+	{
+		"oneof_renamed_with_membership_change_is_not_a_rename",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof pick {\n    string a = 1;\n    string b = 2;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  string b = 2;\n  oneof choose {\n    string a = 1;\n    string c = 3;\n  }\n}\n"},
+		[]rulePair{
+			{"break/field_oneof_changed", Wire, "pick -> none"},
+		},
+	},
+	// Two oneofs in one message, one renamed and one untouched: only the
+	// renamed one is reported, and it is paired with the right one (by
+	// field-number set, not by declaration order).
+	{
+		"oneof_renamed_among_siblings",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof pick {\n    string a = 1;\n  }\n  oneof steady {\n    string s = 9;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof choose {\n    string a = 1;\n  }\n  oneof steady {\n    string s = 9;\n  }\n}\n"},
+		[]rulePair{{"break/oneof_renamed", Source, "pick -> choose"}},
+	},
+	// Reordering a oneof's fields (in source, and in the wire-irrelevant
+	// declaration order) without renaming the oneof itself is legal.
+	{
+		"oneof_fields_reordered_is_legal",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof pick {\n    string a = 1;\n    string b = 2;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof pick {\n    string b = 2;\n    string a = 1;\n  }\n}\n"},
 		nil,
 	},
 }

@@ -46,10 +46,7 @@ type Info struct {
 // footer. A report saying "no breaking changes" without this reads as "safe
 // to change anything", and these three pass green by design.
 const blindZone = `blind zone: this engine does not check json_name renames, ` +
-	`int32 widening to int64 under protojson, google.api.http changes, ` +
-	`or a oneof renamed with its members intact — the generated wrapper type ` +
-	`and getter change and every Go consumer stops compiling, but no ` +
-	`descriptor index shifts, so Diff emits nothing`
+	`int32 widening to int64 under protojson, or google.api.http changes`
 
 // reportOnlyNotice says the run cannot fail a build, so a reader does not
 // have to infer that from the exit status.

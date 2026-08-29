@@ -119,6 +119,7 @@ func Classify(changes []Change, prev, cur Revision) []Finding {
 	}
 
 	findings = append(findings, classifyFields(byKindParent, changes, skipMember)...)
+	findings = append(findings, classifyOneofs(byKindParent, skipMember)...)
 	findings = append(findings, classifyEnumValues(byKindParent, changes, skipMember)...)
 	findings = append(findings, classifyMessages(byKindParent, skipContainer)...)
 	findings = append(findings, classifyEnums(byKindParent, skipContainer)...)
@@ -148,10 +149,11 @@ const (
 	declEnum
 	declService
 	declMethod
+	declOneof
 )
 
 func kindOf(d protoreflect.Descriptor) declKind {
-	switch d.(type) {
+	switch v := d.(type) {
 	case protoreflect.FieldDescriptor:
 		return declField
 	case protoreflect.EnumValueDescriptor:
@@ -164,6 +166,16 @@ func kindOf(d protoreflect.Descriptor) declKind {
 		return declService
 	case protoreflect.MethodDescriptor:
 		return declMethod
+	case protoreflect.OneofDescriptor:
+		if v.IsSynthetic() {
+			// A proto3 `optional` field's compiler-synthesised oneof is
+			// not a declaration the author wrote; it must never be
+			// grouped, paired or reported as break/oneof_renamed. See
+			// effectiveOneofDescriptor's comment for the same rule
+			// applied to field_oneof_changed.
+			return declOther
+		}
+		return declOneof
 	}
 	return declOther
 }
@@ -447,6 +459,105 @@ func fieldShapeEqual(before, after protoreflect.Descriptor) bool {
 	}
 	return b.Number() == a.Number() && b.Kind() == a.Kind() && b.Cardinality() == a.Cardinality() &&
 		effectiveOneof(b) == effectiveOneof(a)
+}
+
+// ---- oneofs ----
+
+// classifyOneofs pairs a removed oneof with an added oneof in the same
+// message as a rename, and reports break/oneof_renamed for the pair. A
+// oneof's name is not encoded on the wire — only each member field's
+// oneof_index, a small integer, is — so the bytes a renamed oneof produces
+// are identical before and after. What breaks is generated code: protoc-gen-go
+// derives the wrapper type (M_Pick -> M_Choose) and the getter (GetPick)
+// from the oneof's name, so every consumer using either identifier stops
+// compiling. That is exactly Source: the wire stays readable, only
+// generated code and the identifiers it exports change.
+//
+// This reintroduces exactly the kind of pairing that classifyMessages,
+// classifyEnums, classifyServices and classifyMethods deliberately do NOT
+// do — see the comment on Classify. Those four container kinds were pairing
+// by "shape", and shape is not identity for them: two empty messages, two
+// enums with no values, two services with no methods are indistinguishable,
+// so pairing by shape there can marry two unrelated declarations and hide a
+// real removal underneath a false rename.
+//
+// A oneof does not have that problem, because a oneof's "shape" here is
+// specifically defined as the SET of field numbers its members occupy, and
+// that set is an unambiguous identity, not a resemblance. A field belongs
+// to at most one oneof in its message — protobuf's oneof_index on
+// FieldDescriptorProto is a single value, never a set — so any two oneofs
+// declared in the same message have disjoint field-number sets by
+// construction. An exact match between a removed oneof's member numbers and
+// an added oneof's member numbers therefore cannot be confused with a
+// second candidate: no other oneof sharing that message could share even
+// one of those numbers. That is the one thing the dropped container
+// pairings never had.
+//
+// If the member set differs at all — a field joined, left, or the oneof was
+// otherwise restructured alongside the rename — this deliberately does NOT
+// fire. break/field_oneof_changed already reports the field-level truth for
+// whichever fields actually moved; firing a oneof rename on top of that
+// would tell two different stories about the same restructuring.
+func classifyOneofs(byKindParent map[parentKey]*grouped, skip func(protoreflect.FullName) bool) []Finding {
+	var findings []Finding
+
+	for key, g := range byKindParent {
+		if key.kind != declOneof {
+			continue
+		}
+		if skip(key.parent) {
+			continue
+		}
+		pairs, _, _ := pairRenames(g, oneofFieldSetEqual)
+		for _, p := range pairs {
+			before, _ := p.rem.Before.(protoreflect.OneofDescriptor)
+			after, _ := p.add.After.(protoreflect.OneofDescriptor)
+			findings = append(findings, Finding{
+				Rule:     "break/oneof_renamed",
+				Category: Source,
+				Subject:  p.add.Subject,
+				Path:     p.add.Path,
+				Pos:      p.add.Pos,
+				Message:  "oneof " + p.rem.Subject + " was renamed to " + p.add.Subject,
+				Change:   oneofDescName(before) + " -> " + oneofDescName(after),
+				Fix:      "revert the oneof's name, or add a new oneof instead of renaming an existing one — the generated wrapper type and getter are derived from its name and every caller using them stops compiling",
+			})
+		}
+	}
+
+	return findings
+}
+
+// oneofFieldNumbers returns the set of field numbers o's members occupy.
+func oneofFieldNumbers(o protoreflect.OneofDescriptor) map[protoreflect.FieldNumber]bool {
+	fields := o.Fields()
+	set := make(map[protoreflect.FieldNumber]bool, fields.Len())
+	for i := 0; i < fields.Len(); i++ {
+		set[fields.Get(i).Number()] = true
+	}
+	return set
+}
+
+// oneofFieldSetEqual is the rename rule for oneofs: identical member
+// field-number sets. See classifyOneofs for why that is a sound rename
+// pairing where the dropped container pairings were not.
+func oneofFieldSetEqual(before, after protoreflect.Descriptor) bool {
+	b, ok1 := before.(protoreflect.OneofDescriptor)
+	a, ok2 := after.(protoreflect.OneofDescriptor)
+	if !ok1 || !ok2 {
+		return false
+	}
+	bs := oneofFieldNumbers(b)
+	as := oneofFieldNumbers(a)
+	if len(bs) != len(as) {
+		return false
+	}
+	for n := range bs {
+		if !as[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // ---- enum values ----

@@ -26,7 +26,7 @@ Where `stele` stands and what it needs before it can be relied on.
 - Breaking-change detection has a first slice too: `stele breaking` compares the
   working revision against the correct previous one — merge-base on a topic
   branch, first parent on the base branch — and reports wire and source
-  breakages in 19 rule ids, plus changes in the dependency closure this
+  breakages in 20 rule ids, plus changes in the dependency closure this
   repository re-exports. It is report-only: it always exits zero on a finding,
   because there is no way yet to permit a legitimate one. The valve, and the
   evidence a fleet needs before it can enable the check, are not built
@@ -670,7 +670,7 @@ branch's own first parent when already on it, never the base tip, because
 comparing against a moving tip fails an unrelated branch for a neighbour's
 change that already landed. It reports two categories: wire breakage
 (already-serialised bytes stop decoding correctly) and source breakage (a
-consumer's generated code stops compiling), 19 rule ids in the reserved
+consumer's generated code stops compiling), 20 rule ids in the reserved
 `break/` namespace, and it also compares the resolved closure reachable from
 this repository's owned modules — a producer's own files can be
 byte-identical while a bumped dependency pin still breaks their consumers.

@@ -49,7 +49,7 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   previous one — the merge-base with `--base BRANCH` on a topic branch, the
   first parent when already on the base branch — and reports wire and source
   breakages in the proto contracts this repository owns, plus changes in the
-  dependency closure it re-exports. 19 rule ids, in a new reserved `break/`
+  dependency closure it re-exports. 20 rule ids, in a new reserved `break/`
   namespace alongside `stele/` and `aip/`.
 
   ```
@@ -60,7 +60,7 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
       revert the type, or add a new field instead of changing an existing one's type
 
   report-only: this run always exits zero
-  blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, google.api.http changes, or a oneof renamed with its members intact — the generated wrapper type and getter change and every Go consumer stops compiling, but no descriptor index shifts, so Diff emits nothing
+  blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, or google.api.http changes
   ```
 
   **This release is report-only: it always exits zero when it finds
@@ -83,6 +83,21 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   **Versioning.** A new command is `MINOR` on the full scale in
   [RELEASING.md](RELEASING.md); while the major version is 0 that bumps
   `PATCH`, not `MINOR` — this ships as `v0.3.1`.
+
+- **`break/oneof_renamed`.** A oneof's name is not on the wire — only each
+  member's `oneof_index` is — so renaming `oneof pick {...}` to
+  `oneof choose {...}` with its members untouched used to report nothing at
+  all: no descriptor index shifts, and this engine indexes declarations, not
+  container names. The generated wrapper type (`M_Pick` → `M_Choose`) and
+  getter (`GetPick`) are renamed regardless, so every Go consumer using
+  either stops compiling. This closes a case that was previously named in
+  the blind-zone footer as "a oneof renamed with its members intact"; it no
+  longer is. Category: Source. Pairs a removed oneof with an added one in
+  the same message when, and only when, their member field-number sets are
+  identical — a field belongs to at most one oneof, so that set is disjoint
+  from every sibling oneof's in the same message, making the match exact
+  rather than a shape guess. A oneof whose member set also changed is left
+  to `break/field_oneof_changed`, per field.
 
 ### Reports and messages
 
