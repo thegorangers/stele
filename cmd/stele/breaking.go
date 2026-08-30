@@ -20,8 +20,7 @@ import (
 const breakingUsage = `stele breaking reports what changed in this repository's proto contracts that
 would break a consumer.
 
-A finding standing at error fails the run; so does a rule that failed to
-run at all, whatever severity it was configured at. A repository accepts a
+A finding standing at error fails the run. A repository accepts a
 breaking change on purpose in one of two ways: lower the rule with
 breaking.rules, or permit the specific change with breaking.allow. A
 warning never fails the run, and neither does a stale or dormant
