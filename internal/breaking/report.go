@@ -64,6 +64,21 @@ type Info struct {
 	// about the manifest, not a re-statement of the comparison), but a
 	// reader still needs to know it looked at something rather than
 	// nothing.
+	//
+	// What the number counts, stated because the second coherence gap the
+	// re-review raised was exactly this being ambiguous: it is taken after
+	// ApplySeverity and before Permit — the count of findings this
+	// manifest's rules (severity and ignore) produced, not the count a
+	// merge run would fail on. A finding a permission approves is still in
+	// this number and is never itself rendered. That is deliberate, not an
+	// oversight: --audit's question is "what did this repository's rules
+	// find", the same set AuditLowered and the stale/dormant split are
+	// computed from (see cmd/stele/breaking.go's runBreakingAudit), and
+	// running Permit first would make the count depend on which findings
+	// happened to be pre-approved — the very thing the stale/dormant/
+	// mismatched split exists to report on separately. A reader who wants
+	// "how many of these would still fail a merge" already has that number
+	// from an ordinary run; this one answers a different question.
 	Findings int
 }
 

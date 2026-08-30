@@ -1843,6 +1843,159 @@ func TestBreakingPruneDoesNotTouchCommentAboveDormantPermission(t *testing.T) {
 // breaking.allow must remove the allow: key itself, not leave it bare —
 // a bare key would hold the next comment written under it the same way a
 // stale comment above a deleted entry would.
+// breakingRetypeStatus commits a change of Order.status from string to
+// int32 to dir's current branch — the fixture that produces a
+// break/field_type_changed finding with change "string -> int32", the same
+// fixture TestBreakingMismatchedChangePermissionLeavesFindingAndReportsStale
+// uses at the ordinary-run layer.
+func breakingRetypeStatus(t *testing.T, dir string) {
+	t.Helper()
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+  int32 status = 2;
+}
+`, "retype status")
+}
+
+// TestBreakingAuditMismatchedChangePermissionIsNotStaleAndDoesNotFail is
+// item 1's --audit half: a permission naming the right rule and subject
+// but the wrong change matches no finding by exact comparison, but it is
+// not stale — the finding it should have matched still stands, under a
+// different spelling of change. Before the fix, StaleAllowIndices counted
+// it as stale, so --audit both printed the "not stale" note (PermitNotes
+// already knew this case) and then failed the run anyway, contradicting
+// its own output.
+func TestBreakingAuditMismatchedChangePermissionIsNotStaleAndDoesNotFail(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  allow:\n    - rule: break/field_type_changed\n"+
+		"      subject: example.v1.Order.status\n      change: string -> bytes\n"+
+		"      reason: was already approved for a different change\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRetypeStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--audit"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a mismatched-change permission must not fail --audit: it is not stale: %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "is stale") {
+		t.Errorf("a mismatched-change permission must never be worded as stale:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "check the spelling of change") ||
+		!strings.Contains(out.String(), `it approves change "string -> bytes"`) ||
+		!strings.Contains(out.String(), `the finding is change "string -> int32"`) {
+		t.Errorf("--audit must name the mismatch and both spellings of change:\n%s", out.String())
+	}
+}
+
+// TestBreakingPruneDoesNotRemoveMismatchedChangePermission is item 1's
+// --prune half, and the one that matters most: before the fix, --prune
+// deleted a mismatched-change permission — the permission and the reason a
+// human wrote for it — which is exactly the wrong remedy for a typo. The
+// file must come out byte-identical.
+func TestBreakingPruneDoesNotRemoveMismatchedChangePermission(t *testing.T) {
+	dir := breakingRepo(t)
+	manifest := breakingManifest +
+		"breaking:\n" +
+		"  allow:\n" +
+		"    - rule: break/field_type_changed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      change: string -> bytes\n" +
+		"      reason: was already approved for a different change\n"
+	breakingWrite(t, dir, "stele.yaml", manifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRetypeStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--prune"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("--prune must succeed: %v\n%s", err, out.String())
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "stele.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != manifest {
+		t.Errorf("--prune must not remove a mismatched-change permission or its reason:\ngot:\n%s\nwant (unchanged):\n%s", got, manifest)
+	}
+}
+
+// TestBreakingAuditAndPruneDistinguishMismatchedFromGenuinelySpent is the
+// negative pairing item 1 asks for: one manifest carries a mismatched-change
+// permission alongside a genuinely spent one (a permission naming a rule
+// and subject with no live finding at all). --audit must fail — the
+// genuinely spent one is still stale — and --prune must remove only that
+// one, leaving the mismatched entry untouched.
+func TestBreakingAuditAndPruneDistinguishMismatchedFromGenuinelySpent(t *testing.T) {
+	dir := breakingRepo(t)
+	manifest := breakingManifest +
+		"breaking:\n" +
+		"  allow:\n" +
+		"    - rule: break/field_type_changed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      change: string -> bytes\n" +
+		"      reason: was already approved for a different change\n" +
+		"    - rule: break/field_removed\n" +
+		"      subject: example.v1.Order.nonexistent\n" +
+		"      reason: this change is long behind the base\n"
+	breakingWrite(t, dir, "stele.yaml", manifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRetypeStatus(t, dir)
+
+	var auditOut, auditErr strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--audit"},
+		&auditOut, &auditErr)
+	if err == nil {
+		t.Fatalf("the genuinely spent permission must still fail --audit:\n%s", auditOut.String())
+	}
+	if !strings.Contains(auditOut.String(), "example.v1.Order.nonexistent") ||
+		!strings.Contains(auditOut.String(), "is stale") {
+		t.Errorf("--audit must name the genuinely spent permission as stale:\n%s", auditOut.String())
+	}
+	for _, line := range strings.Split(auditOut.String(), "\n") {
+		if strings.Contains(line, "example.v1.Order.status") && strings.Contains(line, "is stale") {
+			t.Errorf("the mismatched-change permission must not be worded as stale:\n%s", auditOut.String())
+		}
+	}
+
+	var pruneOut, pruneErr strings.Builder
+	err = run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--prune"},
+		&pruneOut, &pruneErr)
+	if err != nil {
+		t.Fatalf("--prune must succeed: %v\n%s", err, pruneOut.String())
+	}
+
+	want := breakingManifest +
+		"breaking:\n" +
+		"  allow:\n" +
+		"    - rule: break/field_type_changed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      change: string -> bytes\n" +
+		"      reason: was already approved for a different change\n"
+
+	got, err := os.ReadFile(filepath.Join(dir, "stele.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("--prune must remove only the genuinely spent permission, leaving the mismatched one untouched:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestBreakingPruneOfLastEntryRemovesAllowKey(t *testing.T) {
 	dir := breakingRepo(t)
 	manifest := breakingManifest +

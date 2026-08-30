@@ -285,13 +285,17 @@ var errBreakingFindings = errors.New("breaking: at least one finding stands at e
 
 // runBreakingAudit implements --audit and --prune. Both start from the same
 // place: which of mf.Breaking.Allow matched nothing among findings, split
-// into stale (spent — the change it approved is behind the base) and
-// dormant (its rule is off, not spent). --audit reports both, plus every
+// three ways: stale (spent — the change it approved is behind the base),
+// dormant (its rule is off, not spent), and mismatched (its rule and
+// subject match a live finding, but its change is spelled differently —
+// not spent, not stale, misspelled). --audit reports all three, plus every
 // rule this manifest has lowered, counting an ignore list that covers
 // every path where the rule actually fired this run as lowered even while
 // severity stays at error — the ignore-mechanism gap the design calls out
-// by name. --prune deletes the stale entries, never the dormant ones, and
-// nothing else.
+// by name. --prune deletes the stale entries only — never the dormant ones,
+// never the mismatched ones, which name a live finding under the wrong
+// spelling and would be destroyed, along with the reason a human wrote for
+// them, by exactly the remedy a stale permission calls for.
 //
 // findings is post-ApplySeverity — the same set a merge run would see, and
 // what StaleAllowIndices and permission matching compare against. rawFindings
@@ -306,11 +310,23 @@ var errBreakingFindings = errors.New("breaking: at least one finding stands at e
 func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFindings []breaking.Finding, prev breaking.Previous, prune bool, stdout io.Writer) error {
 	idx := breaking.StaleAllowIndices(findings, mf.Breaking)
 
-	var staleSpent, staleDormant []config.Permission
+	// idx is "matched nothing", which is necessary but not sufficient for
+	// stale: a permission naming the right rule and subject but the wrong
+	// change also matches nothing by indexOfMatch's exact test, and it is
+	// not stale — it is misspelled, and the finding it should have matched
+	// still stands. That third case is split out here (staleMismatched) so
+	// neither --audit's exit status nor --prune's deletion ever treats it
+	// as stale; only PermitNotes' message differs for it, and PermitNotes
+	// is given every bucket so it can print that message.
+	var staleSpent, staleDormant, staleMismatched []config.Permission
 	for _, i := range idx {
 		p := mf.Breaking.Allow[i]
 		if breaking.IsDormant(mf.Breaking, p) {
 			staleDormant = append(staleDormant, p)
+			continue
+		}
+		if _, ok := breaking.MismatchedChange(findings, p); ok {
+			staleMismatched = append(staleMismatched, p)
 			continue
 		}
 		staleSpent = append(staleSpent, p)
@@ -318,7 +334,8 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFinding
 
 	var notes []string
 	notes = append(notes, breaking.AuditLowered(mf.Breaking, rawFindings)...)
-	notes = append(notes, breaking.PermitNotes(mf.Breaking, append(append([]config.Permission{}, staleSpent...), staleDormant...), findings)...)
+	allStale := append(append(append([]config.Permission{}, staleSpent...), staleDormant...), staleMismatched...)
+	notes = append(notes, breaking.PermitNotes(mf.Breaking, allStale, findings)...)
 
 	fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
 		Outcome:  breaking.Audited,

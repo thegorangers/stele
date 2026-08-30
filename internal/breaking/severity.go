@@ -118,6 +118,16 @@ func LoweredNotes(cfg *config.Breaking) []string {
 // regardless of the ignore list, and its absence from the ignore list
 // proves nothing about whether the mechanism did anything.
 //
+// An ignore list that covers only some of a rule's hits is named too, on
+// its own line, distinct from "lowered": an ordinary run (LoweredNotes)
+// announces every ignore list with its reason regardless of how much of
+// the rule it silences, and an audit that said less than the run it is
+// auditing would be exactly the gap this function exists to close. Naming
+// a partial ignore is not the same claim as "lowered" — the rule still
+// produced findings this run, on the paths it was not told to ignore — so
+// it gets its own wording rather than being folded into "lowered" or
+// dropped.
+//
 // findings is the full set Classify/ClassifyClosure produced, before
 // ApplySeverity has dropped anything an ignore list or severity: off
 // removes — the run always has this in hand by the time --audit's full
@@ -138,6 +148,10 @@ func AuditLowered(cfg *config.Breaking, findings []Finding) []string {
 			notes = append(notes, fmt.Sprintf(
 				"stele: breaking: the rule %q is lowered: its ignore list covers every path where it fired this run",
 				r.ID))
+		case len(r.Ignore) > 0:
+			notes = append(notes, fmt.Sprintf(
+				"stele: breaking: the rule %q ignores %s: %s",
+				r.ID, strings.Join(r.Ignore, ", "), r.Reason))
 		}
 	}
 	return notes

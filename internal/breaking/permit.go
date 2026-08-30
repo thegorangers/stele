@@ -73,7 +73,17 @@ func matchedAllow(findings []Finding, cfg *config.Breaking) []bool {
 // --audit and --prune, which need to name or delete a specific manifest
 // entry rather than compare copied fields. A caller distinguishing stale
 // from dormant still has to consult cfg.Rules, the way PermitNotes and
-// IsDormant do.
+// IsDormant do; a caller distinguishing stale from mismatched still has to
+// consult MismatchedChange, the way PermitNotes does. "Matched nothing" is
+// necessary but not sufficient for stale: a permission for the right rule
+// and subject but a typo'd change also matches no finding by
+// indexOfMatch's exact test, and is index-eligible here on that ground
+// alone. Neither IsDormant nor MismatchedChange is folded into this
+// function, because both --audit and --prune need the raw "matched
+// nothing" set as well as the finer split — see runBreakingAudit in
+// cmd/stele/breaking.go for where the split is made and why it matters for
+// --prune in particular: a mismatched permission must never be pruned, it
+// is not spent, it is misspelled.
 func StaleAllowIndices(findings []Finding, cfg *config.Breaking) []int {
 	if cfg == nil || len(cfg.Allow) == 0 {
 		return nil
@@ -165,7 +175,7 @@ func PermitNotes(cfg *config.Breaking, stale []config.Permission, findings []Fin
 				p.Rule, p.Subject, p.Rule))
 			continue
 		}
-		if live, ok := mismatchedChange(findings, p); ok {
+		if live, ok := MismatchedChange(findings, p); ok {
 			notes = append(notes, fmt.Sprintf(
 				"stele: breaking: the permission for %s on %s does not match the live finding there: "+
 					"it approves change %q, the finding is change %q — check the spelling of change, "+
@@ -181,11 +191,11 @@ func PermitNotes(cfg *config.Breaking, stale []config.Permission, findings []Fin
 	return notes
 }
 
-// mismatchedChange reports whether findings carries a live finding for the
+// MismatchedChange reports whether findings carries a live finding for the
 // same (rule, subject) as p but a different change — the typo case
 // PermitNotes gives its own message. It returns the live finding's change
 // string, so the caller can print both spellings.
-func mismatchedChange(findings []Finding, p config.Permission) (string, bool) {
+func MismatchedChange(findings []Finding, p config.Permission) (string, bool) {
 	for _, f := range findings {
 		if f.Rule == p.Rule && f.Subject == p.Subject && f.Change != p.Change {
 			return f.Change, true

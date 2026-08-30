@@ -76,6 +76,32 @@ func TestOwningNoProtosIsNotRenderedAsClean(t *testing.T) {
 	}
 }
 
+// TestAuditedIsNotRenderedAsClean pins the F1 fix: --audit renders no
+// findings (Render(nil, ...)), so if the Audited case ever falls through to
+// the default Compared branch, the output reads exactly like a clean
+// comparison — "no breaking changes compared against <sha>" — while a
+// finding stood and was never mentioned. That is the bug this test exists
+// to make impossible to reintroduce silently: it fails if Audited is ever
+// merged into Compared's rendering (for example by a case label falling
+// through), because a clean-comparison sentence and an audit sentence must
+// never both satisfy this assertion.
+func TestAuditedIsNotRenderedAsClean(t *testing.T) {
+	out := Render(nil, Info{Outcome: Audited, Previous: "abc1234", Reason: "merge-base with main", Findings: 3})
+	if strings.Contains(out, "no breaking changes") {
+		t.Error("an audit report must not read as a clean comparison — it renders no findings at all, " +
+			"so this wording would silently claim a finding never happened")
+	}
+	if !strings.Contains(out, "audit:") {
+		t.Error(`an audit report must say what it is: the output does not contain "audit:"`)
+	}
+	if !strings.Contains(out, "3 finding(s) judged") {
+		t.Error(`an audit report must say how many findings it judged: "3 finding(s) judged" is missing`)
+	}
+	if !strings.Contains(out, "abc1234") || !strings.Contains(out, "merge-base with main") {
+		t.Error("an audit report must still name what it compared against and why")
+	}
+}
+
 // A report containing a closure finding and an owned finding shows the
 // distinction between them.
 func TestClosureFindingIsVisuallyDistinctFromOwned(t *testing.T) {

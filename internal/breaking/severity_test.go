@@ -137,3 +137,85 @@ func TestApplySeverity_DoesNotChangeExitStatusContract(t *testing.T) {
 	// command (runBreaking) that decides never to fail on findings, and
 	// that is asserted in cmd/stele's TestBreakingErrorSeverityStillExitsZero.
 }
+
+// TestAuditLowered_IgnoreCoveringEveryHitIsLowered is AuditLowered's
+// positive case: a rule standing at error whose ignore list happens to
+// cover every path where it fired this run is, in every sense a reader
+// cares about, switched off — and --audit must say so even though severity
+// still reads "error".
+func TestAuditLowered_IgnoreCoveringEveryHitIsLowered(t *testing.T) {
+	cfg := &config.Breaking{Rules: []config.BreakingRule{
+		{ID: breaking.RuleFieldRemoved, Ignore: []string{"api/legacy/v1"}, Reason: "pre-release, no consumers"},
+	}}
+	findings := []breaking.Finding{removedFinding("api/legacy/v1/order.proto")}
+	notes := breaking.AuditLowered(cfg, findings)
+	found := false
+	for _, n := range notes {
+		if strings.Contains(n, breaking.RuleFieldRemoved) && strings.Contains(n, "lowered") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a rule whose ignore list covers every path it fired on must be reported lowered: %v", notes)
+	}
+}
+
+// TestAuditLowered_RuleWithNoHitAtAllIsNotLowered is the carve-out
+// ignoresEveryHit's doc comment describes and the mutant this task names
+// specifically inverts: a rule that produced no finding at all this run —
+// its ignore list never had anything to prove itself against — must not be
+// reported as having "switched everything off". Before this test existed,
+// flipping ignoresEveryHit's initial hit value from false to true made
+// every idle, ignored rule announce that its ignore list covers every path
+// where it fired, for a rule that fired nowhere, and the suite stayed
+// green. (The rule's ignore list is still named on its own, unconditional,
+// non-"lowered" line — see TestAuditLowered_PartialIgnoreIsNamedButNotLowered
+// — so this test asserts the specific wording is absent, not that the rule
+// goes unmentioned.)
+func TestAuditLowered_RuleWithNoHitAtAllIsNotLowered(t *testing.T) {
+	cfg := &config.Breaking{Rules: []config.BreakingRule{
+		{ID: breaking.RuleFieldRemoved, Ignore: []string{"api/legacy/v1"}, Reason: "pre-release, no consumers"},
+	}}
+	// No findings at all this run: the rule never fired anywhere.
+	notes := breaking.AuditLowered(cfg, nil)
+	for _, n := range notes {
+		if strings.Contains(n, breaking.RuleFieldRemoved) && strings.Contains(n, "is lowered") {
+			t.Errorf("a rule with no finding at all this run must not be reported lowered: %v", notes)
+		}
+	}
+}
+
+// TestAuditLowered_PartialIgnoreIsNamedButNotLowered closes the first
+// coherence gap the re-review raised: an ordinary run (LoweredNotes)
+// announces every ignore list with its reason, whatever fraction of the
+// rule it silences; --audit, before this, said nothing at all about an
+// ignore list that covered only some of a rule's hits, making the report
+// whose job is "what has this repository switched off" less informative
+// than the ordinary one. AuditLowered now names a partial ignore too, with
+// its own wording distinct from "lowered": the rule still produced a
+// finding this run, on the path its ignore list does not cover.
+func TestAuditLowered_PartialIgnoreIsNamedButNotLowered(t *testing.T) {
+	cfg := &config.Breaking{Rules: []config.BreakingRule{
+		{ID: breaking.RuleFieldRemoved, Ignore: []string{"api/legacy/v1"}, Reason: "pre-release, no consumers"},
+	}}
+	findings := []breaking.Finding{
+		removedFinding("api/legacy/v1/order.proto"), // covered by the ignore list
+		removedFinding("api/orders/v1/order.proto"), // not covered: the rule still fired here
+	}
+	notes := breaking.AuditLowered(cfg, findings)
+	var named, calledLowered bool
+	for _, n := range notes {
+		if strings.Contains(n, breaking.RuleFieldRemoved) {
+			named = true
+			if strings.Contains(n, "is lowered") {
+				calledLowered = true
+			}
+		}
+	}
+	if !named {
+		t.Errorf("a rule with a partial ignore list must still be named in the audit, on the same terms an ordinary run names it: %v", notes)
+	}
+	if calledLowered {
+		t.Errorf("a partial ignore silences some findings, not all: it must not be worded as lowered: %v", notes)
+	}
+}
