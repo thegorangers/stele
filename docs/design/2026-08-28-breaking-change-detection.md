@@ -323,7 +323,20 @@ The vocabulary is `error | warning | off`, and it is deliberately the one
 mistakes to make, and the question is the same: what does this repository do
 about this rule.
 
-The run's exit status is non-zero exactly when a finding stands at `error`.
+**Lowering a rule requires a `reason`, on the same terms a permission does.**
+Without this the mechanism is inverted: approving one change would be gated on a
+stated reason while switching the rule off *for every future change, for ever*
+would be free. The larger concession is the one that needs the sentence.
+
+**Every lowered rule is named in the report, on every run.** This is the shape
+`unpinned: true` already has for plugins — not usable by accident, and said out
+loud rather than left in a file somebody has to go and read. A repository may
+protect nothing; it may not do so quietly.
+
+The run's exit status is non-zero when a finding stands at `error` — and also
+when a rule failed to run at all, whatever severity it was configured at, because
+a rule that never reached a finding has said nothing about this repository.
+`severity: off` silences a rule's findings, not its failures.
 
 **An earlier revision refused per-rule configuration**, arguing that "breaks
 consumers, but only a warning" is `allow_failure: true` with more steps. That
@@ -336,10 +349,28 @@ Partial protection is worth more than none, and the same document argues exactly
 this for `lint.rules` a few sections away; refusing it here was an inconsistency,
 not a principle.
 
-**`warning` is load-bearing, not a courtesy.** It is what makes adoption possible:
-a fleet enables the check, holds at `warning` the rules it is not ready for, and
-reddens only on what it chose to keep. Without it, the day a fleet switches this
-on is either a red fleet or nothing at all.
+**Two honest qualifications, because this decision was taken ahead of its
+measurement.** Everything else here was measured before it was chosen; this was
+not, and the measurement that would inform it — the shadow period and the count
+over open work, in Evidence below — is scheduled after. So:
+
+- The day-one cost of *not* having `warning` is smaller than it first looks. A
+  breaking finding is not a stock of pre-existing debt the way a lint finding is:
+  it exists only because somebody is breaking a contract now. What reddens on
+  the first day is unmerged branches, which is a transient the shadow period
+  already absorbs. `warning` is a permanent mechanism, and the problem it is
+  most often justified by is temporary.
+- The producer configures a risk the *consumer* bears. A lint finding is about
+  your file and costs you; a breaking finding says somebody else's build stops
+  working. That asymmetry is the one real argument against per-rule severity,
+  and it is not answered here — it is accepted, in exchange for the alternative
+  being an invisible switch in CI. Naming it is the least this document owes.
+
+A candidate that would resolve it, recorded rather than adopted: whether a
+repository has consumers is a fact the fleet's locks record, not a claim its
+manifest makes. Defaults derived from who pins whom would tighten by themselves
+the day a first consumer arrives. That needs a measurement this project has not
+made, and it belongs with the others.
 
 **Permission for one specific change** is the finer tool, for a repository that
 keeps a rule at `error` and has approved one exception to it:
@@ -371,39 +402,49 @@ every branch that merged the base in would inherit the line, find nothing, and g
 red for somebody else's change — the neighbour-blaming failure arriving by another
 door.
 
-**The posture is measurable, and that is the whole of what replaces refusal.**
-`stele breaking --audit` reports stale permissions and moves, and it reports **how
-many rules this repository has switched off**. It does not forbid and does not
-argue; it makes visible, across a fleet, what is actually being protected. Nothing
-else in this design asks a repository to justify its configuration — but a fleet
-that cannot say what it guards is not guarding anything, and the difference
-between those two states should cost one line to observe. `--prune` deletes stale
+**The posture is reported, which is less than measured and should not be dressed
+as more.** `stele breaking --audit` reports stale permissions and moves, and it
+reports what this repository has lowered — counting both `severity` and a rule
+whose `ignore` list covers everything it would otherwise check, because an audit
+that can be zeroed by a mechanism it does not count is worse than none.
+
+It is a report about **one repository**, read by the people who wrote the lines it
+is about. This design has no aggregator and does not pretend to one: an earlier
+revision claimed a component it did not have and was caught doing it. And it is
+blind in the direction that matters most — a repository that would have deleted
+the CI job does not run this either. `--prune` deletes stale
 entries and leaves a reviewable diff. Note the limit: the manifest records no
 dates, so `--audit` reports *stale*, not *long-lived*.
 
-## An unresolved question: repositories with no consumers yet
+## Repositories with no consumers yet: answered, and what it cost
 
-Per-rule severity, above, is most of the answer: a repository can hold the rules
-it is not ready for at `warning` and keep the ones it means.
+Per-rule severity answers this. A service in early development — contract
+present, no consumers, several field renames a day — writes three reviewed lines
+with a stated reason, and they are named in every report until it removes them.
+The section is kept because the reasoning that was used to refuse that answer is
+worth not re-deriving.
 
-What it does not answer is a service in early development — contract present, no consumers,
-several field renames a day — with a choice between thirty permissions a week and
-deleting the CI job, which moves the off switch into CI, the *invisible* place,
-which is the opposite of the argument that made lint's severity configurable.
+The refusal ran: severity is not configurable, so such a service faces a choice
+between thirty permissions a week and deleting the CI job — which moves the off
+switch into CI, the *invisible* place, and is the opposite of the argument that
+made lint's severity configurable. The second half of that sentence is what
+eventually overturned the first.
 
-A previous revision answered this by exempting prerelease packages
+A previous revision answered it differently, by exempting prerelease packages
 (`v1alpha1`, `v1beta2`) and claiming agreement with the AIP ledger this tool
 maintains. **The claim was false**: the ledger records AIP-181 as `undecidable`
 because "a stability level is a claim about a release process, not about a file",
 and AIP-180 and AIP-185 likewise. The ledger is right — a package named beta with
 a hundred consumers is exactly its point. The exemption was also inert where it
-mattered, since on the graduation commit every declaration still lives in the
-prerelease package and every finding about it would be exempt.
+mattered: on the graduation commit every declaration still lives in the
+prerelease package, so every finding about it would be exempt. It is withdrawn
+and is not coming back.
 
-The exemption is withdrawn and nothing replaces it. **This is an open question,
-and enabling the check on a repository in early development is not recommended
-until it is answered.** A candidate worth measuring first: whether a repository
-has consumers is a fact, not a claim — the fleet's locks say who pins whom.
+What remains genuinely open is not this question but the one under it: a
+repository's own claim about itself is the weakest evidence available, and
+whether it has consumers is a **fact** the fleet's locks record. Defaults derived
+from who pins whom would need no claim and would tighten by themselves the day a
+first consumer arrives. That is a measurement this project has not made.
 
 ## Failure behaviour
 
