@@ -110,10 +110,13 @@ func stringLitValue(raw string) (string, error) {
 }
 
 // fixtureFacts is what the (rule, category, change) fixtures in
-// rules_test.go's cases table say about each rule: every distinct Category
-// it fires with, and whether it ever fires with a non-empty Change.
+// rules_test.go's cases table say about each rule: whether it ever fires
+// with a non-empty Change. There is no per-rule Category here — see
+// RuleInfo's doc comment: two rules fire under either Category depending on
+// the specific change, so "the" category is a per-finding fact
+// (Finding.Category, asserted exactly by TestClassify against these same
+// fixtures), not a per-rule one the registry could hold.
 type fixtureFacts struct {
-	categories  map[Category]bool
 	sawChange   bool
 	sawNoChange bool
 }
@@ -121,18 +124,17 @@ type fixtureFacts struct {
 // fixtureFactsByRule reads cases (the fixture table rules_test.go already
 // maintains and asserts against in TestClassify) and reduces it to what
 // each rule id is observed to stamp. This is the source of truth for
-// Category and HasDiscriminant: it is what the engine's own tests already
-// pin, not a second, independently maintained list.
+// HasDiscriminant: it is what the engine's own tests already pin, not a
+// second, independently maintained list.
 func fixtureFactsByRule() map[string]*fixtureFacts {
 	out := make(map[string]*fixtureFacts)
 	for _, c := range cases {
 		for _, p := range c.want {
 			f := out[p.rule]
 			if f == nil {
-				f = &fixtureFacts{categories: make(map[Category]bool)}
+				f = &fixtureFacts{}
 				out[p.rule] = f
 			}
-			f.categories[p.cat] = true
 			if p.change == "" {
 				f.sawNoChange = true
 			} else {
@@ -141,17 +143,6 @@ func fixtureFactsByRule() map[string]*fixtureFacts {
 		}
 	}
 	return out
-}
-
-// worstCategory picks Wire over Source when a rule's fixtures show both:
-// Wire is the more severe fact (an old and new binary disagree on the
-// bytes), so a rule that can ever be Wire is registered as Wire rather than
-// averaging the two away.
-func worstCategory(cats map[Category]bool) Category {
-	if cats[Wire] {
-		return Wire
-	}
-	return Source
 }
 
 func TestRulesRegistryMatchesEngine(t *testing.T) {
@@ -193,7 +184,7 @@ func TestRulesRegistryMatchesEngine(t *testing.T) {
 	facts := fixtureFactsByRule()
 	if len(facts) != len(emitted) {
 		t.Fatalf("fixture table covers %d rules, rules.go emits %d; the fixture table in rules_test.go must "+
-			"assert a firing case for every rule for this test to say anything about Category or HasDiscriminant",
+			"assert a firing case for every rule for this test to say anything about HasDiscriminant",
 			len(facts), len(emitted))
 	}
 
@@ -201,10 +192,6 @@ func TestRulesRegistryMatchesEngine(t *testing.T) {
 		info, ok := registered[id]
 		if !ok {
 			continue // already reported above
-		}
-		wantCat := worstCategory(f.categories)
-		if info.Category != wantCat {
-			t.Errorf("%s: registry says Category=%v, fixtures fire it as %v", id, info.Category, wantCat)
 		}
 		if f.sawChange && f.sawNoChange {
 			t.Errorf("%s: fixtures fire it both with and without Change; HasDiscriminant cannot be derived from an inconsistent rule", id)

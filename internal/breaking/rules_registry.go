@@ -35,12 +35,6 @@ const (
 type RuleInfo struct {
 	// ID is the permanent rule id, "break/<name>".
 	ID string
-	// Category is the worst Category this rule is ever stamped with. Two
-	// rules (field_type_changed, field_oneof_changed) fire as either Wire
-	// or Source depending on the specific change; Category records Wire
-	// for those, because a manifest permission keyed on Source alone must
-	// not silently also permit the Wire-breaking case.
-	Category Category
 	// HasDiscriminant is true when this rule's findings always carry a
 	// non-empty Change (the pair of kinds for a type change, the
 	// direction for a cardinality change, and so on), and false when they
@@ -54,30 +48,39 @@ type RuleInfo struct {
 // registry is the hand-maintained ledger of every break/ rule this tool
 // emits. TestRulesRegistryMatchesEngine ties it to reality: it parses
 // rules.go for the true set of emitted ids and fails if this list is
-// missing one or names one that does not exist, and it checks Category and
+// missing one or names one that does not exist, and it checks
 // HasDiscriminant against the (rule, category, change) fixtures in
 // rules_test.go, which record what the engine actually stamps.
+//
+// There is deliberately no Category field here. Two of these rules
+// (field_type_changed, field_oneof_changed) do not have a single category —
+// their findings do, varying by the specific change — so a per-rule
+// Category would have to be documented as "the worst case this rule is
+// ever stamped with" for those two, which is a field admitting it cannot
+// answer the question it's named after. The only reader of a category is
+// report.go, and it already reads Finding.Category, the per-finding value,
+// which is correct.
 var registry = []RuleInfo{
-	{RuleFieldRenamed, Source, false},
-	{RuleFieldRemoved, Source, false},
-	{RuleFieldNumberChanged, Wire, true},
-	{RuleFieldTypeChanged, Wire, true},
-	{RuleFieldCardinalityChanged, Wire, true},
-	{RuleFieldOneofChanged, Wire, true},
-	{RuleOneofRenamed, Source, true},
-	{RuleEnumValueRenamed, Source, false},
-	{RuleEnumValueRemoved, Source, false},
-	{RuleEnumValueNumberChanged, Wire, true},
-	{RuleMessageRemoved, Source, false},
-	{RuleEnumRemoved, Source, false},
-	{RuleServiceRemoved, Wire, false},
-	{RuleMethodRemoved, Wire, false},
-	{RuleMethodSignatureChanged, Wire, true},
-	{RuleMethodStreamingChanged, Wire, true},
-	{RulePackageRenamed, Wire, false},
-	{RulePackageRemoved, Wire, false},
-	{RuleFileRemoved, Source, false},
-	{RuleGoPackageChanged, Source, true},
+	{RuleFieldRenamed, false},
+	{RuleFieldRemoved, false},
+	{RuleFieldNumberChanged, true},
+	{RuleFieldTypeChanged, true},
+	{RuleFieldCardinalityChanged, true},
+	{RuleFieldOneofChanged, true},
+	{RuleOneofRenamed, true},
+	{RuleEnumValueRenamed, false},
+	{RuleEnumValueRemoved, false},
+	{RuleEnumValueNumberChanged, true},
+	{RuleMessageRemoved, false},
+	{RuleEnumRemoved, false},
+	{RuleServiceRemoved, false},
+	{RuleMethodRemoved, false},
+	{RuleMethodSignatureChanged, true},
+	{RuleMethodStreamingChanged, true},
+	{RulePackageRenamed, false},
+	{RulePackageRemoved, false},
+	{RuleFileRemoved, false},
+	{RuleGoPackageChanged, true},
 }
 
 // Rules returns the canonical break/ rule set, sorted by id.
