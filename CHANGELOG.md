@@ -131,6 +131,25 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   unchanged; a dormant permission is never pruned. The two cannot be
   combined.
 
+- **`stele breaking --report-only`.** Findings are still classified and
+  rendered at their real severity, but none of them fail the run; a
+  failure to *compare* — a shallow clone, an absent base branch, an
+  unreadable manifest, a dead pin — still does, because that is not a
+  finding, and a shadow period needs it surfaced immediately rather than
+  swallowed for two weeks the way `allow_failure: true` on the CI job
+  would swallow it. Every report says the run is report-only, on every
+  outcome including a clean comparison and the tree-shortcut skip, so a
+  reader never has to infer the mode from an exit status. Meant for
+  running the command in CI for a period before a repository gates on it:
+  every firing is then read and classified by hand as true or false — the
+  evidence a historical replay of merged history cannot give. Command-line
+  only: there is no `breaking.report_only` in `stele.yaml`, and there
+  deliberately never will be — a shadow period is a property of one run,
+  not a posture a repository holds, and a manifest key would outlive it
+  and become the one-line "protect nothing" switch a block-level severity
+  default was rejected for being. Cannot be combined with `--audit` or
+  `--prune`.
+
 - **`break/oneof_renamed`.** A oneof's name is not on the wire — only each
   member's `oneof_index` is — so renaming `oneof pick {...}` to
   `oneof choose {...}` with its members untouched used to report nothing at

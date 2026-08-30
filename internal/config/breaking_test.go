@@ -88,6 +88,16 @@ func TestLoad_BreakingInvalid(t *testing.T) {
 			want: "bogus",
 		},
 		{
+			// report_only is command-line only (stele breaking
+			// --report-only): a shadow period is a property of one run, not
+			// a posture this repository holds, and a manifest key would
+			// outlive it and become the one-line "protect nothing" switch
+			// the design rejected. See cmd/stele/breaking.go's flag doc.
+			name: "report_only is refused, it is command-line only",
+			yaml: "version: 1\nmodules:\n  - path: api\nbreaking:\n  base: master\n  report_only: true\n",
+			want: "report_only",
+		},
+		{
 			name: "unknown key in a rules entry",
 			yaml: "version: 1\nmodules:\n  - path: api\nbreaking:\n  rules:\n    - id: break/message_removed\n      level: warning\n",
 			want: "level",

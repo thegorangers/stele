@@ -59,6 +59,16 @@ type Info struct {
 	// quietly. Printed on every run, whether or not the lowered rule ever
 	// fired.
 	Notes []string
+	// ReportOnly says this run was invoked with --report-only: findings are
+	// still classified and rendered at their real severity, but nothing
+	// about them fails the run. Render prints reportOnlyNotice on every
+	// outcome when this is set, including a clean comparison and the tree
+	// shortcut, because the point of a shadow period is that a reader must
+	// not have to infer the mode from an exit status — the same reasoning
+	// plan A's reportOnlyNotice carried before it was removed. A failure to
+	// compare is unaffected by this field; it is not a finding and was
+	// never softened by report-only mode.
+	ReportOnly bool
 	// Findings is the number of findings the run judged, used only by the
 	// Audited outcome: --audit renders no findings themselves (an audit is
 	// about the manifest, not a re-statement of the comparison), but a
@@ -87,6 +97,13 @@ type Info struct {
 // to change anything", and these three pass green by design.
 const blindZone = `blind zone: this engine does not check json_name renames, ` +
 	`int32 widening to int64 under protojson, or google.api.http changes`
+
+// reportOnlyNotice says this run cannot fail on a finding, so a reader does
+// not have to infer that from the exit status. It does not claim the run
+// always exits zero — a failure to compare still fails it — because that
+// distinction is the whole argument for the flag over allow_failure on the
+// CI job (see --report-only's documentation in cmd/stele/breaking.go).
+const reportOnlyNotice = "report-only: findings never fail this run; a failure to compare still does"
 
 // Render renders findings and the outcome of the run that produced them as
 // human-facing text.
@@ -142,6 +159,10 @@ func Render(findings []Finding, info Info) string {
 	}
 
 	b.WriteString("\n")
+	if info.ReportOnly {
+		b.WriteString(reportOnlyNotice)
+		b.WriteString("\n")
+	}
 	b.WriteString(blindZone)
 	b.WriteString("\n")
 
