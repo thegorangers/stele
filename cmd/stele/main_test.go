@@ -1236,9 +1236,11 @@ message Order {
 
 // TestBreakingMismatchedChangePermissionLeavesFindingAndReportsStale pins
 // the negative half of the same wiring: a permission whose change differs
-// from the finding's must not remove it, and the permission itself comes
-// back named as stale — spent, worth deleting — because its rule stands at
-// error and a finding of it could have matched.
+// from the finding's must not remove it, and the permission itself is
+// reported against the live finding it almost matches — a mistyped
+// change, not a spent permission — because the finding standing at error
+// shares its rule and subject with the permission and differs only in
+// change.
 func TestBreakingMismatchedChangePermissionLeavesFindingAndReportsStale(t *testing.T) {
 	dir := breakingRepo(t)
 	breakingWrite(t, dir, "stele.yaml", breakingManifest+
@@ -1270,11 +1272,17 @@ message Order {
 	if !strings.Contains(out.String(), "string -> int32") {
 		t.Errorf("the rendered finding must carry the discriminant, spelled as a permission must spell it:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "is stale") {
-		t.Errorf("the unmatched permission must be reported stale:\n%s", out.String())
+	if strings.Contains(out.String(), "is stale") {
+		t.Errorf("this permission matches a live finding's rule and subject: it must not be called stale, "+
+			"that tells the reader to delete the wrong thing:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "is dormant") {
 		t.Errorf("this permission's rule is at error, not off: it must not be called dormant:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "check the spelling of change") ||
+		!strings.Contains(out.String(), `it approves change "string -> bytes"`) ||
+		!strings.Contains(out.String(), `the finding is change "string -> int32"`) {
+		t.Errorf("both spellings of change must be named so the reader can fix the typo:\n%s", out.String())
 	}
 }
 
@@ -1616,19 +1624,29 @@ func TestBreakingAuditDormantPermissionDoesNotFail(t *testing.T) {
 }
 
 // TestBreakingAuditIgnoreCoveringEverythingCountsAsLowered: a rule whose
-// ignore list covers every path this repository owns is lowered in every
-// sense that matters, even while its severity still reads "error". An
-// audit that a mechanism it does not count (ignore) can zero to nothing is
-// worse than no audit.
+// ignore list covers every path where it actually fired this run is
+// lowered in every sense that matters, even while its severity still
+// reads "error". An audit that a mechanism it does not count (ignore) can
+// zero to nothing is worse than no audit. The scenario removes a field
+// from the one package the ignore list names, so the rule has something
+// to fire on and the ignore list is what silences it — not an absence of
+// anything to find.
 func TestBreakingAuditIgnoreCoveringEverythingCountsAsLowered(t *testing.T) {
 	dir := breakingRepo(t)
 	breakingWrite(t, dir, "stele.yaml", breakingManifest+
-		"breaking:\n  rules:\n    - id: break/field_removed\n      ignore: [example]\n")
+		"breaking:\n  rules:\n    - id: break/field_removed\n      ignore: [example/v1]\n"+
+		"      reason: example/v1 is pre-release and has no consumers yet\n")
 	breakingWrite(t, dir, "stele.lock", breakingLock)
 	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
 
 	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
-	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
 
 	var out, errOut strings.Builder
 	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--audit"}, &out, &errOut)
@@ -1636,7 +1654,7 @@ func TestBreakingAuditIgnoreCoveringEverythingCountsAsLowered(t *testing.T) {
 		t.Fatalf("nothing here is stale: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "break/field_removed") || !strings.Contains(out.String(), "lowered") {
-		t.Errorf("an ignore list covering every owned path must be counted as lowered:\n%s", out.String())
+		t.Errorf("an ignore list covering every path a rule fired on must be counted as lowered:\n%s", out.String())
 	}
 }
 

@@ -95,6 +95,30 @@ func TestPermit_SubjectMismatchDoesNotMatch(t *testing.T) {
 	}
 }
 
+// F3 regression: an unmatched permission whose (rule, subject) matches a
+// live finding, but whose change differs, is a mistyped change — not a
+// spent permission. PermitNotes must say so, naming both spellings, and
+// must never call it stale.
+func TestPermitNotes_MismatchedChangeNamesBothSpellings(t *testing.T) {
+	f := typeChangedFinding("example.orders.v1.Order.total", "int32 -> int64")
+	p := config.Permission{
+		Rule: breaking.RuleFieldTypeChanged, Subject: "example.orders.v1.Order.total",
+		Change: "int32 -> int65", Reason: "widening on purpose",
+	}
+	cfg := &config.Breaking{Allow: []config.Permission{p}}
+	notes := breaking.PermitNotes(cfg, []config.Permission{p}, []breaking.Finding{f})
+	if len(notes) != 1 {
+		t.Fatalf("notes = %+v, want exactly one", notes)
+	}
+	note := notes[0]
+	if strings.Contains(note, "is stale") {
+		t.Errorf("a permission matching a live finding's rule and subject must not be called stale: %s", note)
+	}
+	if !strings.Contains(note, `"int32 -> int65"`) || !strings.Contains(note, `"int32 -> int64"`) {
+		t.Errorf("both spellings must be named: %s", note)
+	}
+}
+
 // negative: a permission does not match the same rule on the same field
 // name in a different message (a different subject entirely, sharing only
 // the leaf field name).
