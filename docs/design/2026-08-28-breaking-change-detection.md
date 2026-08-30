@@ -307,8 +307,42 @@ there is no shape comparison. The consequences are stated:
 
 ## The valve
 
-**Permission is for one specific change**, in the manifest, where the people it
-binds review it:
+**Every rule is on, at error severity, until the manifest says otherwise.**
+Protection arrives by itself; switching a rule off is a line in a diff, reviewed
+by the people it binds.
+
+    breaking:
+      rules:
+        - id: break/field_type_changed
+          severity: off
+        - id: break/field_renamed
+          severity: warning
+
+The vocabulary is `error | warning | off`, and it is deliberately the one
+`lint.rules` already uses. Two spellings of one question would be two sets of
+mistakes to make, and the question is the same: what does this repository do
+about this rule.
+
+The run's exit status is non-zero exactly when a finding stands at `error`.
+
+**An earlier revision refused per-rule configuration**, arguing that "breaks
+consumers, but only a warning" is `allow_failure: true` with more steps. That
+argument does not survive contact with the alternative. The choice a repository
+actually faces is not between full protection and configured protection — it is
+between configured protection and **deleting the CI job**, which is the invisible
+off switch this project's lint design already identified and rejected. A
+repository that two rules out of twenty inconvenience will switch off all twenty.
+Partial protection is worth more than none, and the same document argues exactly
+this for `lint.rules` a few sections away; refusing it here was an inconsistency,
+not a principle.
+
+**`warning` is load-bearing, not a courtesy.** It is what makes adoption possible:
+a fleet enables the check, holds at `warning` the rules it is not ready for, and
+reddens only on what it chose to keep. Without it, the day a fleet switches this
+on is either a red fleet or nothing at all.
+
+**Permission for one specific change** is the finer tool, for a repository that
+keeps a rule at `error` and has approved one exception to it:
 
     breaking:
       allow:
@@ -318,43 +352,41 @@ binds review it:
           reason: widening; no consumer stores this in a 32-bit field
 
 `reason` is required: a permission with no stated reason cannot be told from a
-workaround six months later.
+workaround six months later. Without this layer, a repository needing one
+exception has to switch the whole rule off, which is a far larger concession than
+the change it wanted to make.
 
 **`change` is the discriminant, and it is not universal.** Where a rule has an
 attribute beyond its subject — the pair of types, the destination oneof, the
 direction of a cardinality change — `change` is required, and a permission without
-it is refused rather than treated as matching anything. Earlier drafts stated a
-universal rule and then showed an example without the field, which is the blanket
-permission the mechanism exists to forbid. **Removals have no discriminant**: the
-subject is the whole of the change, and `change` is refused there. Each rule's
-discriminant spelling is part of the public contract on the terms `RELEASING.md`
-sets for rule ids, because it lands in somebody's manifest.
+it is refused rather than treated as matching anything. **Removals have no
+discriminant**: the subject is the whole of the change, and `change` is refused
+there. Each rule's discriminant spelling is part of the public contract on the
+terms `RELEASING.md` sets for rule ids, because it lands in somebody's manifest.
 
-**A stale permission is reported and is not fatal.** An earlier revision made it an
-error, arguing that a stale permission is a standing licence while a stale
-baseline entry is a paid debt. That does not survive: to use a stale permission for
+**A stale permission is reported and is not fatal.** To use a stale permission for
 a removed field the field must first be **resurrected** under the same full name
-and removed again, while a stale baseline entry absorbs a recurrence on a *live*
-declaration from one bad edit. By risk the baseline is the more dangerous object,
-and the argument gave two structurally identical things opposite verdicts on the
-strength of what they were called.
+and removed again. Making it fatal would also break the design's own premise:
+every branch that merged the base in would inherit the line, find nothing, and go
+red for somebody else's change — the neighbour-blaming failure arriving by another
+door.
 
-Making it fatal also broke the design's own premise: every branch that merged the
-base in would inherit the line, find nothing, and go red for somebody else's
-change — the neighbour-blaming failure arriving by another door.
-
-**"No permanent licences" is enforced off the merge path.** `stele breaking
---audit` reports stale permissions and moves and is meant for a scheduled job that
-reddens alone and blocks nobody; `--prune` deletes stale entries and leaves a
-reviewable diff. Note the limit: the manifest records no dates, so `--audit` can
-report *stale*, not *long-lived*, and no claim about age is made.
+**The posture is measurable, and that is the whole of what replaces refusal.**
+`stele breaking --audit` reports stale permissions and moves, and it reports **how
+many rules this repository has switched off**. It does not forbid and does not
+argue; it makes visible, across a fleet, what is actually being protected. Nothing
+else in this design asks a repository to justify its configuration — but a fleet
+that cannot say what it guards is not guarding anything, and the difference
+between those two states should cost one line to observe. `--prune` deletes stale
+entries and leaves a reviewable diff. Note the limit: the manifest records no
+dates, so `--audit` reports *stale*, not *long-lived*.
 
 ## An unresolved question: repositories with no consumers yet
 
-Severity is not configurable, deliberately: "breaks consumers, but only a warning"
-is `allow_failure: true` with more steps.
+Per-rule severity, above, is most of the answer: a repository can hold the rules
+it is not ready for at `warning` and keep the ones it means.
 
-That leaves a service in early development — contract present, no consumers,
+What it does not answer is a service in early development — contract present, no consumers,
 several field renames a day — with a choice between thirty permissions a week and
 deleting the CI job, which moves the off switch into CI, the *invisible* place,
 which is the opposite of the argument that made lint's severity configurable.
