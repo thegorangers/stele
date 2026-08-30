@@ -293,7 +293,6 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings []breaking.
 	idx := breaking.StaleAllowIndices(findings, mf.Breaking)
 
 	var staleSpent, staleDormant []config.Permission
-	var pruneIdx []int
 	for _, i := range idx {
 		p := mf.Breaking.Allow[i]
 		if breaking.IsDormant(mf.Breaking, p) {
@@ -301,7 +300,6 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings []breaking.
 			continue
 		}
 		staleSpent = append(staleSpent, p)
-		pruneIdx = append(pruneIdx, i)
 	}
 
 	var notes []string
@@ -316,10 +314,13 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings []breaking.
 	}))
 
 	if prune {
-		if err := breaking.Prune(manifestPath, pruneIdx); err != nil {
+		// Prune matches staleSpent against the manifest's own current text
+		// by (rule, subject, change), not by position — see its own doc
+		// comment for why that matters even within one invocation.
+		if err := breaking.Prune(manifestPath, staleSpent); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "stele: breaking: --prune removed %d stale permission(s); dormant permissions were left in place\n", len(pruneIdx))
+		fmt.Fprintf(stdout, "stele: breaking: --prune removed %d stale permission(s); dormant permissions were left in place\n", len(staleSpent))
 		return nil
 	}
 

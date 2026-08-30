@@ -6,24 +6,36 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/thegorangers/stele/internal/atomicfile"
+	"github.com/thegorangers/stele/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
-// Prune deletes the entries of breaking.allow named by idx (indices into
-// the same slice config.Load decoded, in the same order — the indices
-// StaleAllowIndices returns) from the manifest at manifestPath, and leaves
-// every other byte of the file exactly as it was.
+// Prune deletes the entries of breaking.allow named by stale — matched
+// against the manifest's own current text by (rule, subject, change), not
+// by position — and leaves every other byte of the file exactly as it was.
 //
-// That last clause is the whole point and the reason this is line-range
-// surgery rather than a re-emit. internal/config/migrate/emit.go generates
-// a manifest from a struct with a fresh encoder; it never reads an existing
-// file and does not round-trip, and re-emitting a parsed yaml.Node loses
-// quoting style, blank lines and indentation — a diff nobody wrote and
-// nobody can review. So Prune parses the raw file a second time, purely to
-// read yaml.Node.Line off the nodes it is about to delete, and then removes
-// exactly those source lines from the raw bytes. The struct config.Load
-// decoded is never consulted here beyond the indices the caller already
-// worked out from it.
+// Matching by identity rather than index is deliberate: stale is computed
+// once, from the configuration the caller already loaded, and Prune reads
+// the file a second time to get at yaml.Node.Line (see below). Anything can
+// have edited allow[] between those two reads within the same invocation —
+// nothing stops it — and an index computed against the first read would
+// then name a different entry, or none, in the second. Matching by the
+// fields that identify a permission means a file that moved under the
+// command deletes the right entry or none at all, never a different one.
+// A permission that matches more than one entry (an exact duplicate) has
+// every match deleted; config.ValidateConfig does not forbid duplicates,
+// and leaving one behind would not be "leaving it alone", it would be
+// guessing which copy the caller meant.
+//
+// The line-range surgery itself is the reason this exists rather than a
+// re-emit. internal/config/migrate/emit.go generates a manifest from a
+// struct with a fresh encoder; it never reads an existing file and does not
+// round-trip, and re-emitting a parsed yaml.Node loses quoting style, blank
+// lines and indentation — a diff nobody wrote and nobody can review. So
+// Prune parses the raw file a second time, purely to read yaml.Node.Line
+// off the entries it is about to delete, and then removes exactly those
+// source lines from the raw bytes.
 //
 // Two more things travel with a deleted entry rather than being left
 // behind: the comment lines immediately above it (its yaml.Node.HeadComment
@@ -33,8 +45,30 @@ import (
 // allow: key itself (a bare key with nothing under it is not what "nothing
 // here" should look like, and it would swallow the very next comment
 // written under it the same way).
-func Prune(manifestPath string, idx []int) error {
-	if len(idx) == 0 {
+//
+// One case is a known limit, not a bug: a comment written directly under
+// allow: before the first entry reads as that entry's HeadComment to the
+// YAML parser, and Prune treats it as belonging to that entry — it goes
+// with the entry if the entry is pruned. Whether such a comment describes
+// the first entry specifically or the whole list is genuinely ambiguous in
+// YAML; inventing a rule for "this comment belongs to the block, not the
+// entry" would be a heuristic nobody reading the file could predict, so
+// this is left as the one reading a human also has no unambiguous way to
+// resolve.
+//
+// The write goes through internal/atomicfile, on the same terms as every
+// other file this tool writes something it cares about: a plain write
+// truncates before it replaces, and a process killed mid-write leaves a
+// manifest cut off on an entry boundary — which parses cleanly as a
+// shorter, silently weaker allow[] list, exactly the failure mode
+// atomicfile exists to close off. The trade-off atomicfile brings with it
+// applies here too and is worth naming: its rename-based swap replaces a
+// symlinked manifest with a plain file at the same path, where a direct
+// write would have followed the link and updated whatever it pointed at.
+// A manifest is not expected to be a symlink, and the atomicity this buys
+// against a truncated, silently shorter allow[] list is worth that trade.
+func Prune(manifestPath string, stale []config.Permission) error {
+	if len(stale) == 0 {
 		return nil
 	}
 
@@ -60,11 +94,27 @@ func Prune(manifestPath string, idx []int) error {
 	if allowNode == nil || allowNode.Kind != yaml.SequenceNode {
 		return fmt.Errorf("%s: has no breaking.allow list to prune", manifestPath)
 	}
-	for _, i := range idx {
-		if i < 0 || i >= len(allowNode.Content) {
-			return fmt.Errorf("%s: allow[%d]: no such permission to prune", manifestPath, i)
+
+	// idx is worked out fresh against this parse, by matching each stale
+	// permission's identity against every current entry — never by
+	// carrying over a position from the caller's own, possibly stale,
+	// read. See the doc comment above for why.
+	matched := make(map[int]bool)
+	for _, p := range stale {
+		for i, item := range allowNode.Content {
+			if permissionIdentity(item) == identity(p) {
+				matched[i] = true
+			}
 		}
 	}
+	if len(matched) == 0 {
+		return nil
+	}
+	idx := make([]int, 0, len(matched))
+	for i := range matched {
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
 
 	// allLines is every Line the whole document's node tree carries,
 	// sorted and de-duplicated. It is how the end of each deleted block is
@@ -133,11 +183,38 @@ func Prune(manifestPath string, idx []int) error {
 		out.WriteString(line)
 	}
 
-	info, err := os.Stat(manifestPath)
-	if err != nil {
-		return err
+	return atomicfile.Write(manifestPath, []byte(out.String()))
+}
+
+// permKey is the (rule, subject, change) triple Prune matches on — deliber-
+// ately not reason, which is prose a reviewer may reword without the
+// permission itself changing identity.
+type permKey struct{ rule, subject, change string }
+
+func identity(p config.Permission) permKey {
+	return permKey{rule: p.Rule, subject: p.Subject, change: p.Change}
+}
+
+// permissionIdentity reads the (rule, subject, change) triple straight off
+// a parsed allow[] entry's own mapping node, independent of whatever the
+// caller's earlier decode produced.
+func permissionIdentity(n *yaml.Node) permKey {
+	var k permKey
+	if n == nil || n.Kind != yaml.MappingNode {
+		return k
 	}
-	return os.WriteFile(manifestPath, []byte(out.String()), info.Mode())
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		key, val := n.Content[i].Value, n.Content[i+1].Value
+		switch key {
+		case "rule":
+			k.rule = val
+		case "subject":
+			k.subject = val
+		case "change":
+			k.change = val
+		}
+	}
+	return k
 }
 
 // mapEntry returns the key and value nodes for key in mapping node m, or
