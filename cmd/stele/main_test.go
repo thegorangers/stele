@@ -1206,7 +1206,7 @@ func TestBreakingMatchingPermissionRemovesFinding(t *testing.T) {
 	dir := breakingRepo(t)
 	breakingWrite(t, dir, "stele.yaml", breakingManifest+
 		"breaking:\n  allow:\n    - rule: break/field_removed\n"+
-			"      subject: example.v1.Order.status\n      reason: dropped in the v2 rollout\n")
+		"      subject: example.v1.Order.status\n      reason: dropped in the v2 rollout\n")
 	breakingWrite(t, dir, "stele.lock", breakingLock)
 	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
 
@@ -1241,8 +1241,8 @@ func TestBreakingMismatchedChangePermissionLeavesFindingAndReportsStale(t *testi
 	dir := breakingRepo(t)
 	breakingWrite(t, dir, "stele.yaml", breakingManifest+
 		"breaking:\n  allow:\n    - rule: break/field_type_changed\n"+
-			"      subject: example.v1.Order.status\n      change: string -> bytes\n"+
-			"      reason: was already approved for a different change\n")
+		"      subject: example.v1.Order.status\n      change: string -> bytes\n"+
+		"      reason: was already approved for a different change\n")
 	breakingWrite(t, dir, "stele.lock", breakingLock)
 	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
 
@@ -1285,8 +1285,8 @@ func TestBreakingDormantPermissionOnOffRuleIsNotCalledStale(t *testing.T) {
 	dir := breakingRepo(t)
 	breakingWrite(t, dir, "stele.yaml", breakingManifest+
 		"breaking:\n  rules:\n    - id: break/field_removed\n      severity: off\n      reason: known and accepted\n"+
-			"  allow:\n    - rule: break/field_removed\n"+
-			"      subject: example.v1.Order.status\n      reason: kept for when the rule is raised again\n")
+		"  allow:\n    - rule: break/field_removed\n"+
+		"      subject: example.v1.Order.status\n      reason: kept for when the rule is raised again\n")
 	breakingWrite(t, dir, "stele.lock", breakingLock)
 	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
 
