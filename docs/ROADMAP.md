@@ -27,10 +27,11 @@ Where `stele` stands and what it needs before it can be relied on.
   working revision against the correct previous one — merge-base on a topic
   branch, first parent on the base branch — and reports wire and source
   breakages in 20 rule ids, plus changes in the dependency closure this
-  repository re-exports. It is report-only: it always exits zero on a finding,
-  because there is no way yet to permit a legitimate one. The valve, and the
-  evidence a fleet needs before it can enable the check, are not built
-  (milestone 6).
+  repository re-exports. It now has a valve: every rule is on at `error` until
+  `stele.yaml` lowers it with a stated reason, `breaking.allow` permits one
+  specific change, and a finding standing at `error` fails the run. A rename
+  map for a deliberate package move (`breaking.moves`), and the evidence a
+  fleet needs before it can enable the check by default, are not built.
 
 That is enough to migrate a repository deliberately, with a human watching. What is
 left before 1.0 is the rest of contract linting (milestone 6), and the honest
@@ -675,12 +676,14 @@ consumer's generated code stops compiling), 20 rule ids in the reserved
 this repository's owned modules — a producer's own files can be
 byte-identical while a bumped dependency pin still breaks their consumers.
 
-**It is report-only, and says so in every invocation.** `stele breaking`
-always exits zero when it finds something to report; only a failure to
+**It has a valve.** Every rule is on at `error` until `stele.yaml` lowers it,
+which requires a stated `reason` and is named in the report on every run;
+`breaking.allow` permits one specific change, named with the rule, the
+subject and, where the rule carries one, the discriminant, again with a
+required reason. A finding standing at `error` fails the run; a `warning`
+never does, and neither does a stale or dormant permission. A failure to
 *compare* — a shallow clone, an unreadable manifest, a revision that cannot
-be fetched — fails the run. There is no way yet to permit a legitimate
-breaking change, and a command that failed a build with nothing to accept a
-finding with would leave a repository one option: deleting the CI job.
+be fetched — fails the run for its own reason, regardless of severity.
 
 **The blind zone is named in every report's footer, not left to be
 discovered:** `json_name` renames, `int32` widening to `int64` under
@@ -693,15 +696,11 @@ leaves the merge commit itself uncompared until the branch lands.
 **What is still missing, and it is what stands between this and a check a
 fleet can turn on:**
 
-- **The valve.** `breaking.allow` — a permission for one named change, with a
-  required reason — and `breaking.moves` — a rename map applied before the
-  comparison, so a package rename does not read as removing everything inside
-  it — do not exist yet. Without them the only recovery from a legitimate
-  breaking change is to not run the check, which is the same failure mode
-  `severity: "off"` exists to avoid for lint. The non-zero exit ships together
-  with the valve, in one announced change, because failing a build with
-  nothing to accept a finding with is the thing this slice deliberately does
-  not do.
+- **The rename map.** `breaking.moves` — an identity map applied before the
+  comparison, so a deliberate package rename does not read as removing
+  everything inside it — does not exist yet. A repository facing one holds
+  the affected rules at `warning`, or permits each removal individually,
+  until it lands.
 - **The evidence.** Two kinds are still owed before a fleet enables the check
   by default: a shadow period, running in CI in report-only mode with every
   firing classified by hand as true or false, because "did it fire" is not

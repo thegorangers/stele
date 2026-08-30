@@ -56,33 +56,77 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   $ stele breaking --base master
   breaking changes compared against b43992ea4f37bdc0116ac912f543ac3d0e4d6734 (merge-base with master):
 
-  example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) example.v1.Order.total: field example.v1.Order.total changed type from int32 to int64
+  example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) example.v1.Order.total: field example.v1.Order.total changed type from int32 to int64 (change: int32 -> int64)
       revert the type, or add a new field instead of changing an existing one's type
 
-  report-only: this run always exits zero
   blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, or google.api.http changes
   ```
 
-  **This release is report-only: it always exits zero when it finds
-  something.** There is no mechanism yet to permit a breaking change
-  deliberately, and a command that failed a build with no way to accept a
-  finding would leave a repository one option — deleting the CI job. A
-  failure to *compare* is different and still fails the run: a shallow clone,
-  an unreadable manifest, a revision that cannot be fetched. The non-zero
-  exit arrives in a later release together with the valve that permits a
-  named change, as one announced change, not as a surprise under an
-  unrelated entry.
+  A failure to *compare* fails the run for its own reason regardless of any
+  finding's severity: a shallow clone, an unreadable manifest, a revision that
+  cannot be fetched.
 
   `--against REF` compares directly against `REF`, with no merge-base. It is
   documented as unsuitable for a CI default: `--against origin/master` is
   exactly the neighbour-blaming comparison a merge-base exists to avoid, one
-  flag away from the wrong thing. `--base` has no default yet and is
-  required unless `--against` is given; a later release moves it into the
-  manifest as `breaking.base`.
+  flag away from the wrong thing. `--base` overrides `breaking.base` in the
+  manifest when both are given; one of `--base`, `breaking.base` or
+  `--against` is required.
 
   **Versioning.** A new command is `MINOR` on the full scale in
   [RELEASING.md](RELEASING.md); while the major version is 0 that bumps
   `PATCH`, not `MINOR` — this ships as `v0.3.1`.
+
+- **The valve.** `stele.yaml` gains a `breaking:` block:
+
+  ```yaml
+  breaking:
+    base: master
+    rules:
+      - id: break/field_type_changed
+        severity: off
+        reason: consumers pin us at fixed points; a type change never lands unnoticed
+      - id: break/field_renamed
+        severity: warning
+        reason: source-only, on a probationary period while adoption completes
+        ignore:
+          - api/example/internal
+    allow:
+      - rule: break/field_type_changed
+        subject: example.orders.v1.Order.total
+        change: int32 -> int64
+        reason: widening; no consumer stores this in a 32-bit field
+  ```
+
+  Every rule is on at `error` until this block says otherwise.
+  `breaking.rules[].severity` takes `error | warning | off`, the vocabulary
+  `lint.rules` already uses, and lowering a rule below `error` requires a
+  `reason`: without it, approving one change would be gated on a stated
+  reason while switching a rule off for ever would be free.
+  `breaking.rules[].ignore` excludes import paths from that rule alone.
+  `breaking.allow` permits one specific change against a rule that
+  otherwise stands, naming the rule, the `subject`, and — where the rule
+  carries one — `change`, the discriminant beyond the subject, spelled
+  exactly as the report prints it so a finding's own line can be pasted in.
+  `reason` is required on a permission too. Every lowered rule is named in
+  the report, on every run, with its severity and reason: a repository may
+  protect nothing; it may not do so quietly. `breaking.base` supplies the
+  base branch; `--base` overrides it.
+
+  A permission matching nothing among today's findings is **stale** — the
+  change it approved is behind the base — or **dormant** — its rule is
+  `off`. The two are worded differently in the report, because they call
+  for different actions: a stale permission can be deleted, a dormant one
+  is kept in case the rule is raised again.
+
+- **`stele breaking --audit` and `--prune`.** `--audit` reports this
+  repository's stale permissions and what it has lowered, instead of
+  comparing for a merge, and exits non-zero only on a stale permission —
+  never on what has been lowered, which is a decision, not a defect.
+  `--prune` deletes stale permissions from the manifest, taking each
+  entry's comments with it, and leaves every other byte of the file
+  unchanged; a dormant permission is never pruned. The two cannot be
+  combined.
 
 - **`break/oneof_renamed`.** A oneof's name is not on the wire — only each
   member's `oneof_index` is — so renaming `oneof pick {...}` to
@@ -98,6 +142,43 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   from every sibling oneof's in the same message, making the match exact
   rather than a shape guess. A oneof whose member set also changed is left
   to `break/field_oneof_changed`, per field.
+
+### Refused input
+
+- **`stele breaking` now exits non-zero when a finding stands at `error`.**
+  The previous release always exited zero on a finding — that is how it
+  shipped, deliberately, so the valve above and this exit-status change
+  would land together as one announced change rather than two. Under
+  [RELEASING.md](RELEASING.md) a command's exit status for an input that
+  already worked is part of the contract, and this bumps the minor while
+  the major version is 0. **A CI job that passed under the previous release
+  can now fail**, on the first breaking change it finds at `error`
+  severity — which, with no `breaking:` block written, is every rule.
+
+  To keep such a build passing without reviewing anything, lower the
+  rule(s) that are firing, with a reason:
+
+  ```yaml
+  breaking:
+    rules:
+      - id: break/field_type_changed
+        severity: warning
+        reason: <why this is acceptable for now>
+  ```
+
+  or permit the one change that is firing:
+
+  ```yaml
+  breaking:
+    allow:
+      - rule: break/field_type_changed
+        subject: example.orders.v1.Order.total
+        change: int32 -> int64
+        reason: <why this specific change is fine>
+  ```
+
+  A warning never fails the run, and neither does a stale or dormant
+  permission.
 
 ### Fixed
 

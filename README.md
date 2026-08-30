@@ -15,8 +15,8 @@ this repository currently contains the project scaffolding.
 ## What it is meant to do
 
 - `stele breaking` — compare this revision's proto contracts against the
-  correct previous one and report wire and source breakages. Report-only in
-  this release: it always exits zero.
+  correct previous one and report wire and source breakages. A finding
+  standing at `error` fails the run.
 - `stele export` — materialise a dependency's `.proto` files into a directory.
 - `stele generate` — compile `.proto` files and drive existing code generator
   plugins over the standard `CodeGeneratorRequest` protocol.
@@ -286,13 +286,13 @@ leaving to be discovered.
   saying which AIPs a descriptor cannot decide is claiming something it cannot
   do. A repository that wants more writes them, or takes somebody else's: see
   [rules from outside this repository](#rules-from-outside-this-repository).
-- **Breaking-change detection is report-only.** `stele breaking` exists and
-  always exits zero on a finding — see
-  [breaking-change detection](#breaking-change-detection) below. There is no
-  way yet to permit a legitimate change deliberately, so a non-zero exit would
-  leave a repository one option on the day it disagreed: deleting the CI job.
-  The valve arrives in a later release, together with the non-zero exit, as one
-  announced change.
+- **There is no rename map yet.** A deliberate package, message or enum rename
+  reads as a removal plus an addition — see
+  [breaking-change detection](#breaking-change-detection) below — and there is
+  no mechanism to declare the move and have it cost nothing. A repository
+  renaming a package today holds the affected rules at `warning` for the
+  duration of the move, or permits each removal individually; the rename map
+  is a later addition, not this one.
 - **`stele lint` only checks what this repository owns.** Dependencies are
   compiled, because an import has to link, and they are not judged. A finding
   about somebody else's contract is one nobody here can act on, and the only
@@ -592,12 +592,17 @@ would break a consumer.
 $ stele breaking --base master
 breaking changes compared against b43992ea4f37bdc0116ac912f543ac3d0e4d6734 (merge-base with master):
 
-example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) example.v1.Order.total: field example.v1.Order.total changed type from int32 to int64
+example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) example.v1.Order.total: field example.v1.Order.total changed type from int32 to int64 (change: int32 -> int64)
     revert the type, or add a new field instead of changing an existing one's type
 
-report-only: this run always exits zero
 blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, or google.api.http changes
 ```
+
+The run above exits non-zero: the finding stands at `error`, which is what
+every rule is until `stele.yaml` says otherwise. `(change: int32 -> int64)` is
+the discriminant — see [permissions](#permissions) below — printed exactly as
+`breaking.allow` expects it, so a line from a report can be pasted into a
+manifest unedited.
 
 **The previous revision is chosen the way a code review chooses one, not
 handed to it.** On a topic branch it is the merge-base with the base branch;
@@ -650,17 +655,104 @@ own files can be byte-identical while a bumped dependency pin still breaks
 your consumers, because they resolve your manifest transitively. The producer
 run answers "did what I re-export change", not "did what I import change".
 
+### The valve
+
+**Every rule is on, at `error`, until `stele.yaml` says otherwise.** A finding
+standing at `error` fails the run; a `warning` never does, and neither does a
+stale or dormant permission — see below. A failure to *compare* is different
+again and always fails the run: a shallow clone, an unreadable manifest, a
+revision that cannot be fetched.
+
+```yaml
+breaking:
+  base: master
+  rules:
+    - id: break/field_type_changed
+      severity: off
+      reason: consumers pin us at fixed points; a type change never lands unnoticed
+    - id: break/field_renamed
+      severity: warning
+      reason: source-only, on a probationary period while adoption completes
+      ignore:
+        - api/example/internal
+  allow:
+    - rule: break/field_type_changed
+      subject: example.orders.v1.Order.total
+      change: int32 -> int64
+      reason: widening; no consumer stores this in a 32-bit field
+```
+
+`breaking.base` supplies the base branch a topic-branch revision is compared
+against; `--base` on the command line overrides it. `severity` takes
+`error | warning | off` — the same vocabulary `lint.rules` already uses, on
+purpose: two spellings of one question would be two sets of mistakes to make.
+`ignore` excludes import paths from that rule alone, the same shape
+`lint.rules` carries.
+
+**Lowering a rule below `error` requires a `reason`.** Without it the
+mechanism is inverted: approving one specific change is gated on a stated
+reason, while switching a rule off for every future change, for ever, would be
+free. And **every lowered rule is named in the report, on every run** — not
+left in a file somebody has to go and read:
+
+```
+stele: breaking: the rule "break/field_type_changed" is off: consumers pin us at fixed points; a type change never lands unnoticed
+stele: breaking: the rule "break/field_renamed" is warning: source-only, on a probationary period while adoption completes
+```
+
+A repository may protect nothing; it may not do so quietly.
+
+### Permissions
+
+`breaking.allow` permits one specific change against a rule that otherwise
+stands, without switching the whole rule off. Each entry names the `rule`, the
+`subject` — the full name of the declaration that changed — and, where the
+rule carries one, `change`: the discriminant beyond the subject, spelled
+exactly as the report prints it, such as `int32 -> int64`. A removal has no
+discriminant beyond its subject, and `change` is refused on a permission
+against a removal rule. `reason` is required on every entry: a permission with
+no stated reason cannot be told from a workaround found six months later.
+
+A permission matching nothing among today's findings is either:
+
+- **stale** — the change it approved is behind the base; it can be removed, or
+- **dormant** — its rule is `off`, so it isn't needed to pass anything right
+  now, but raising the rule back to `error` makes it needed again, so it is
+  kept.
+
+The two are worded differently in the report on purpose, because they call for
+different actions:
+
+```
+$ stele breaking --base master --audit
+stele: breaking: the permission for break/field_type_changed on example.orders.v1.Order.total is stale: it matched nothing; the change it approved is behind the base, so it can be removed
+```
+
+`stele breaking --audit` reports stale permissions and what this repository
+has lowered, instead of comparing for a merge; it exits non-zero only when it
+finds a stale permission, never for what this repository has chosen to lower
+— that is a decision, not a defect. `stele breaking --prune` deletes stale
+permissions from the manifest, taking each entry's comments with it, and
+leaves every other byte of the file unchanged; a dormant permission is never
+pruned. `--audit` and `--prune` cannot be combined.
+
 ### Flags
 
 ```
 Flags:
   --dir DIR       directory holding stele.yaml (default ".")
   --base BRANCH   the base branch this revision is compared against on a
-                  topic branch; required unless --against is given
+                  topic branch. Overrides breaking.base in the manifest when
+                  both are given; one of --base, breaking.base or --against
+                  is required.
   --against REF   compare directly against REF, with no merge-base
   --cache-dir DIR where fetched repositories are kept (default
                   $XDG_CACHE_HOME/stele, else ~/.cache/stele;
                   $STELE_CACHE_DIR is honoured too)
+  --audit         report this repository's stale and lowered permissions
+                  instead of comparing for a merge
+  --prune         delete this repository's stale permissions from the
+                  manifest and nothing else
 ```
 
 **`--against` is not a substitute for `--base` as a CI default.**
@@ -668,23 +760,11 @@ Flags:
 merge-base exists to avoid, one flag away from the wrong thing — a moving
 upstream ref, not the commit this branch actually diverged from. It exists for
 a deliberate manual comparison, against a release tag or a specific commit; a
-CI job needs `--base`.
+CI job needs `--base` or `breaking.base`.
 
-**`--base` has no default yet.** A later release moves it into the manifest as
-`breaking.base`; until then it is required on every invocation unless
-`--against` is given.
-
-### This release is report-only
-
-`stele breaking` **always exits zero when it finds something to report.**
-There is no mechanism yet to permit a breaking change deliberately — no
-`breaking.allow`, no rename map for a deliberate move — and a command that
-failed a build with no way to accept a finding would leave a repository one
-option: deleting the CI job. That is the failure this design exists to avoid.
-
-A failure to *compare* is different, and still fails the run: a shallow clone,
-an unreadable manifest, a revision that cannot be fetched. Only findings are
-non-fatal, in this release.
+**`--base` wins when both `--base` and `breaking.base` are given**: a flag
+passed explicitly on this invocation is a more specific instruction than a
+manifest default every invocation shares.
 
 ### The blind zone
 
