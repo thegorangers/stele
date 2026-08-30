@@ -306,6 +306,38 @@ var cases = []struct {
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof choice {\n    string a = 1;\n    string c = 3;\n  }\n}\n"},
 		nil,
 	},
+	// The defect this exists to close: two singleton oneofs swap names while
+	// every field stays in the same textual position. a's raw oneof_index
+	// (0, the position of the first-declared oneof) is identical before and
+	// after — before, position 0 is named x; after, position 0 is named p —
+	// and likewise b's index (1) is identical both times. A comparison of
+	// the raw FieldDescriptorProto alone therefore sees zero difference for
+	// either field: GetX() silently starts returning what used to be GetP(),
+	// and nothing reports it. Comparing the RESOLVED oneof name (what
+	// descEqual now does) is the only thing that notices. Neither x nor p
+	// is added or removed as a declaration (both names exist, unchanged, on
+	// both sides), so classifyOneofs pairs nothing here and break/
+	// oneof_renamed never fires — this is purely two field-level facts.
+	{
+		"field_oneof_names_swapped",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n  }\n  oneof p {\n    string b = 2;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof p {\n    string a = 1;\n  }\n  oneof x {\n    string b = 2;\n  }\n}\n"},
+		[]rulePair{
+			{"break/field_oneof_changed", Source, "x -> p"},
+			{"break/field_oneof_changed", Source, "p -> x"},
+		},
+	},
+	// The case a careless fix breaks: the oneof declarations reorder (x and
+	// p swap position, so both fields' raw oneof_index changes) but every
+	// field stays in its own, unrenamed group. The resolved name a and b
+	// each belong to is unchanged, so nothing should fire even though the
+	// raw FieldDescriptorProto now differs.
+	{
+		"field_oneof_declarations_reordered_is_legal",
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof x {\n    string a = 1;\n  }\n  oneof p {\n    string b = 2;\n  }\n}\n"},
+		map[string]string{"a.proto": hdr + "message Order {\n  oneof p {\n    string b = 2;\n  }\n  oneof x {\n    string a = 1;\n  }\n}\n"},
+		nil,
+	},
 
 	// -- message_removed --
 	// There is no break/message_renamed: a message has no number to key a
@@ -576,17 +608,21 @@ var cases = []struct {
 	// Renaming the oneof AND changing its member set in the same commit is
 	// not a rename: the field set is the whole basis for pairing, so
 	// break/oneof_renamed must not fire. b, which leaves the oneof
-	// entirely, still gets its own break/field_oneof_changed regardless
-	// (field a's OneofIndex stays 0 on both sides here, so Diff does not
-	// even see it as Modified — the same "bytes are identical" fact that
-	// makes an unpaired oneof rename invisible to field-level rules in the
-	// first place, which is exactly why the oneof-level rename rule has to
-	// exist).
+	// entirely, gets its own break/field_oneof_changed regardless. So does
+	// a, which stays in the same textual group but is now a member of a
+	// genuinely different declaration — M.pick before, M.choose after —
+	// because descEqual's FieldDescriptor case compares the RESOLVED oneof
+	// name, not the raw oneof_index (which is 0 on both sides here and so
+	// would report nothing on its own: the same "bytes are identical" fact
+	// that used to make an unpaired oneof rename invisible to field-level
+	// rules, and exactly why the oneof-level rename rule has to exist for
+	// the case where the member set DOES match).
 	{
 		"oneof_renamed_with_membership_change_is_not_a_rename",
 		map[string]string{"a.proto": hdr + "message Order {\n  oneof pick {\n    string a = 1;\n    string b = 2;\n  }\n}\n"},
 		map[string]string{"a.proto": hdr + "message Order {\n  string b = 2;\n  oneof choose {\n    string a = 1;\n    string c = 3;\n  }\n}\n"},
 		[]rulePair{
+			{"break/field_oneof_changed", Wire, "pick -> choose"},
 			{"break/field_oneof_changed", Wire, "pick -> none"},
 		},
 	},
