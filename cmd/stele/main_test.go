@@ -866,6 +866,74 @@ func TestBreakingNothingToCompareExitsZero(t *testing.T) {
 	}
 }
 
+// TestBreakingBogusRuleIDNamesWorkingTreePath: the breaking block is
+// validated once, from the working manifest, before any revision is
+// materialised — never from a temporary copy of a revision. The message
+// must name the path the user can actually open and edit.
+func TestBreakingBogusRuleIDNamesWorkingTreePath(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  rules:\n    - id: break/no_such_rule\n      severity: error\n")
+	breakingCommit(t, dir, "README.md", "notes", "add a bogus breaking rule id")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a bogus rule id must fail the run, not exit zero")
+	}
+	wantPath := filepath.Join(dir, "stele.yaml")
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Errorf("the failure does not name the working tree's manifest path %q: %v", wantPath, err)
+	}
+	if strings.Contains(err.Error(), "stele-breaking-") {
+		t.Errorf("the failure names a materialised temporary path instead of the working tree's: %v", err)
+	}
+	if !strings.Contains(err.Error(), "break/no_such_rule") {
+		t.Errorf("the failure does not name the offending rule id: %v", err)
+	}
+}
+
+// TestBreakingPreviousRevisionConfigIsIgnored pins which side's breaking
+// block configures the run: the working tree's, and only the working
+// tree's. The base revision here lowers break/field_removed to off with a
+// reason; the working tree's manifest carries no breaking block at all. If
+// the previous revision's configuration governed the run, this would be
+// exactly the shape that silently suppressed the finding below. It must
+// not: the finding is reported regardless, because nothing but the working
+// manifest is ever consulted for it.
+func TestBreakingPreviousRevisionConfigIsIgnored(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  rules:\n    - id: break/field_removed\n      severity: off\n      reason: was noisy while the field was still churning\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a finding must not fail the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("the base revision's own severity:off did not stay in the past; "+
+			"the finding is missing from a run whose working manifest carries no breaking block at all:\n%s", out.String())
+	}
+}
+
 // TestBreakingShallowCloneFailsAndNamesShallowness: a failure to compare is
 // still a failure, unlike a finding. A shallow clone cannot support
 // merge-base or ancestry queries, and the run must fail loudly rather than

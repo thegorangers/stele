@@ -115,9 +115,24 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		}
 	}
 
-	mf, err := config.Load(filepath.Join(*dir, lint.ManifestName))
+	manifestPath := filepath.Join(*dir, lint.ManifestName)
+	mf, err := config.Load(manifestPath)
 	if err != nil {
 		return err
+	}
+	// The breaking block is validated against the rule registry here, once,
+	// from the working manifest, and nowhere else. breaking.Load below reads
+	// a manifest for each side of the comparison, including the previous
+	// revision's, and deliberately does not validate what it reads: the
+	// valve is what this repository says about itself now, not what it said
+	// at the previous revision. Letting the previous revision's block
+	// configure the run would mean a permission merged yesterday silently
+	// governing today's report, and a rule switched off in history going on
+	// suppressing findings after somebody switched it back on — and it would
+	// also mean a revision from before this block existed could fail to
+	// load a manifest that was perfectly fine when it was written.
+	if err := breaking.ValidateConfig(mf.Breaking); err != nil {
+		return fmt.Errorf("%s: %w", manifestPath, err)
 	}
 	paths := make([]string, 0, len(mf.Modules)+1)
 	for _, m := range mf.Modules {

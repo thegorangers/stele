@@ -80,9 +80,11 @@ func Load(ctx context.Context, r *gitrepo.Repo, sha string, fetch resolve.FetchF
 	if err != nil {
 		return Revision{}, err
 	}
-	if err := ValidateConfig(mf.Breaking); err != nil {
-		return Revision{}, fmt.Errorf("%s: %w", manifestPath, err)
-	}
+	// mf.Breaking is deliberately not validated here. Loading a revision is
+	// about descriptors, not configuration, and a revision from before the
+	// breaking block existed — or one that predates a rule this tool later
+	// added — must still load. The working manifest is the only one whose
+	// breaking block is ever checked; see cmd/stele/breaking.go.
 
 	lockPath := filepath.Join(dir, lint.LockName)
 	if _, err := os.Stat(lockPath); errors.Is(err, fs.ErrNotExist) {
