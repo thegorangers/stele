@@ -99,6 +99,25 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   rather than a shape guess. A oneof whose member set also changed is left
   to `break/field_oneof_changed`, per field.
 
+### Fixed
+
+- **`break/field_oneof_changed` now catches a field silently changing oneof
+  identity when its raw `oneof_index` does not move.** A field's identity in
+  a comparison used to rest on `FieldDescriptorProto`, which carries
+  `oneof_index` — a position into the message's `oneof_decl` list, not the
+  oneof's name. Swapping two oneofs' names (`oneof x { string a = 1; }
+  oneof p { string b = 2; }` becoming `oneof p { string a = 1; } oneof x
+  { string b = 2; }`) leaves both `a` and `b` at the same `oneof_index`
+  they always had, so the comparison saw zero changes: `GetX()` started
+  returning what used to be `GetP()`, silently, for every Go consumer. The
+  fix compares the RESOLVED, non-synthetic oneof name instead — the same
+  identity `break/field_renamed` and `break/oneof_renamed` already use — so
+  the swap is now two `break/field_oneof_changed` findings (`x -> p`,
+  `p -> x`). No new rule id: the rule was always right, it was never given
+  the input. Reordering oneof declarations without renaming any of them
+  still reports nothing, because the resolved names are unchanged even
+  though `oneof_index` shifts.
+
 ### Reports and messages
 
 - **Every `stele breaking` report ends with the blind zone**, naming three

@@ -318,6 +318,21 @@ func descEqual(before, after protoreflect.Descriptor) bool {
 		if !proto.Equal(protodesc.ToFieldDescriptorProto(b), protodesc.ToFieldDescriptorProto(a)) {
 			return false
 		}
+		// The raw FieldDescriptorProto compared above carries oneof_index, a
+		// positional integer into the message's oneof_decl list — not the
+		// oneof's identity. Swapping the names of two oneofs (or otherwise
+		// reordering oneof_decl while every field stays in its own group)
+		// leaves each field's oneof_index byte-identical, so that comparison
+		// alone is blind to a field silently changing which oneof it
+		// belongs to. Comparing the RESOLVED name of the real, non-synthetic
+		// containing oneof closes that: it is the same identity
+		// classifyFields and fieldShapeEqual already use (effectiveOneof, in
+		// rules.go), so a field's identity is defined consistently
+		// everywhere, not by two different spellings of "what oneof is
+		// this".
+		if effectiveOneof(b) != effectiveOneof(a) {
+			return false
+		}
 		// A map field's own FieldDescriptorProto never changes when its key
 		// or value type is retyped: it stays cardinality repeated, kind
 		// message, pointing at the same synthesised *Entry type name. The
