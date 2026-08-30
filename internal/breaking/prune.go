@@ -158,6 +158,44 @@ func Prune(manifestPath string, stale []config.Permission) error {
 		}
 	}
 
+	// A flow-style entry — allow: [{rule: ..., subject: ...}, {rule: ...,
+	// subject: ...}] — shares its Line with its siblings: the whole list
+	// sits on one source line, so item.Line for a stale entry is also the
+	// Line of every live entry beside it. Deleting by line range there does
+	// not delete one entry, it deletes the line, taking every permission on
+	// it along with the one being pruned. Line-range surgery only has a
+	// meaning to delete when a target's range holds nothing but that
+	// target, so this is checked before anything is marked for deletion,
+	// and refused rather than guessed at: --prune edits block-style lists
+	// only.
+	if len(idx) != len(allowNode.Content) {
+		survivors := make(map[int]bool, len(allowNode.Content)-len(idx))
+		for i := range allowNode.Content {
+			if !matched[i] {
+				survivors[i] = true
+			}
+		}
+		for _, i := range idx {
+			item := allowNode.Content[i]
+			start := item.Line - commentLines(item.HeadComment)
+			end := maxLine(item)
+			for j := range survivors {
+				sibling := allowNode.Content[j]
+				var sibLines []int
+				collectLines(sibling, &sibLines)
+				for _, l := range sibLines {
+					if l >= start && l <= end {
+						return fmt.Errorf("%s: breaking.allow[%d] shares its source line with a "+
+							"permission that is not being pruned; this looks like a flow-style list "+
+							"([{rule: ..., subject: ...}, ...]) — --prune edits block-style lists only, "+
+							"one entry beginning its own line, and refuses to guess at flow-style surgery",
+							manifestPath, i)
+					}
+				}
+			}
+		}
+	}
+
 	if len(idx) == len(allowNode.Content) {
 		// Every entry is going: the key itself goes rather than being left
 		// bare. If allow was the only thing this breaking: block carried,

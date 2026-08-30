@@ -3,6 +3,7 @@ package breaking
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/thegorangers/stele/internal/config"
@@ -85,5 +86,51 @@ func TestPruneMatchesByIdentityNotPosition(t *testing.T) {
 	}
 	if string(got) != want {
 		t.Errorf("Prune must delete the entry that matches the stale permission's identity, not whatever now sits at its old index:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestPruneRefusesFlowStyleList is the regression test for F2: a flow-style
+// allow list — [{...}, {...}] on one source line — has no line range that
+// belongs to one entry alone. Deleting the stale entry's line range would
+// delete the whole allow: line, taking the live permission beside it with
+// it. Prune must refuse rather than guess.
+func TestPruneRefusesFlowStyleList(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stele.yaml")
+
+	original := "version: 1\n" +
+		"modules:\n" +
+		"  - path: api\n" +
+		"breaking:\n" +
+		"  allow: [{rule: break/field_removed, subject: example.v1.Order.status, " +
+		"reason: dropped in the v2 rollout}, {rule: break/field_type_changed, " +
+		"subject: example.v1.Order.total, change: int32 -> int64, reason: widening}]\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := config.Permission{
+		Rule:    "break/field_removed",
+		Subject: "example.v1.Order.status",
+		Reason:  "dropped in the v2 rollout",
+	}
+
+	err := Prune(path, []config.Permission{stale})
+	if err == nil {
+		t.Fatal("Prune must refuse a flow-style allow list, not guess at the surgery")
+	}
+	if !strings.Contains(err.Error(), "flow-style") {
+		t.Errorf("the refusal must name flow style so the reader knows why: %v", err)
+	}
+	if !strings.Contains(err.Error(), "block-style") {
+		t.Errorf("the refusal must say --prune edits block-style lists only: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Errorf("a refused prune must leave the file untouched:\ngot:\n%s\nwant (unchanged):\n%s", got, original)
 	}
 }
