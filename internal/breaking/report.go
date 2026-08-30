@@ -40,6 +40,16 @@ type Info struct {
 	// Reason explains Outcome — why there was nothing to compare, why the
 	// comparison was skipped, and so on.
 	Reason string
+	// Notes are things about this run that qualify everything below them
+	// but are not findings — at present, every rule the working manifest
+	// lowered below error, named with its severity and its reason (see
+	// LoweredNotes). They are printed above everything else for the same
+	// reason internal/lint/run.go's unpinnedNotes are: a reader who meets
+	// them afterwards has already read the findings as the whole answer,
+	// and a repository that protects nothing must not be able to say so
+	// quietly. Printed on every run, whether or not the lowered rule ever
+	// fired.
+	Notes []string
 }
 
 // blindZone lists what this engine cannot see, printed in every report's
@@ -56,6 +66,11 @@ const reportOnlyNotice = "report-only: this run always exits zero"
 // human-facing text.
 func Render(findings []Finding, info Info) string {
 	var b strings.Builder
+
+	for _, n := range info.Notes {
+		b.WriteString(n)
+		b.WriteString("\n")
+	}
 
 	switch info.Outcome {
 	case NothingToCompare:
@@ -127,7 +142,7 @@ func renderFinding(f Finding) string {
 
 	rf := rule.Finding{
 		Rule:     f.Rule,
-		Severity: rule.SeverityError,
+		Severity: f.Severity,
 		Path:     f.Path,
 		Pos:      f.Pos,
 		Subject:  f.Subject,

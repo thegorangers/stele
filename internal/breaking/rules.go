@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/thegorangers/stele/internal/lint"
+	"github.com/thegorangers/stele/rule"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -58,6 +59,13 @@ type Finding struct {
 	// taking the pin bump, or by taking it deliberately — and the report
 	// task needs to render that distinction without parsing prose.
 	Closure bool
+	// Severity is what this finding costs, resolved from the working
+	// tree's breaking block by ApplySeverity. It is the zero value
+	// (SeverityError) until ApplySeverity stamps it; Classify and
+	// ClassifyClosure never set it, for the same reason a rule never sets
+	// its own severity in rule.Finding — it is a property of what this
+	// repository says about itself, not of the change that was found.
+	Severity rule.Severity
 }
 
 // Classify turns Diff's neutral changes into findings, each carrying a

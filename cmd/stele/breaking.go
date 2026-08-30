@@ -183,11 +183,15 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	changes := breaking.Diff(prevRev, cur)
 	findings := breaking.Classify(changes, prevRev, cur)
 	findings = append(findings, breaking.ClassifyClosure(prevRev, cur)...)
+	// Severity is resolved against the working manifest only, mf.Breaking —
+	// never prevRev's or cur's, for the reason given above ValidateConfig.
+	findings = breaking.ApplySeverity(findings, mf.Breaking)
 
 	fmt.Fprint(stdout, breaking.Render(findings, breaking.Info{
 		Outcome:  breaking.Compared,
 		Previous: prev.SHA,
 		Reason:   prev.Reason,
+		Notes:    breaking.LoweredNotes(mf.Breaking),
 	}))
 	// This release is report-only: findings never fail the run. Only the
 	// errors returned above — a failure to compare — do.

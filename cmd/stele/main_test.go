@@ -1049,3 +1049,98 @@ message Owned {
 		t.Errorf("the closure finding does not name the removed field example.Dep.extra:\n%s", out.String())
 	}
 }
+
+// TestBreakingWarningSeverityStillExitsZeroAndIsMarked: the valve lowers a
+// rule to warning; the finding is still reported, and it is still safe.
+func TestBreakingWarningSeverityStillExitsZeroAndIsMarked(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  rules:\n    - id: break/field_removed\n      severity: warning\n      reason: still churning\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a warning-severity finding must not fail the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("the finding is missing:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), ": warning: break/field_removed:") {
+		t.Errorf("the finding is not marked as a warning:\n%s", out.String())
+	}
+	// Every lowered rule is named in the report, on every run.
+	if !strings.Contains(out.String(), "break/field_removed") || !strings.Contains(out.String(), "still churning") {
+		t.Errorf("the report does not announce the lowered rule and its reason:\n%s", out.String())
+	}
+}
+
+// TestBreakingOffSeverityProducesNoFindingAtAll: off is an unasked
+// question, not a suppressed answer — it must not appear anywhere in the
+// findings, only in the announcement of what this repository lowered.
+func TestBreakingOffSeverityProducesNoFindingAtAll(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  rules:\n    - id: break/field_removed\n      severity: off\n      reason: known and accepted\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("off must not fail the run: %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("an off rule must produce no finding at all:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "break/field_removed") || !strings.Contains(out.String(), "known and accepted") {
+		t.Errorf("the report must still announce the rule this repository turned off:\n%s", out.String())
+	}
+}
+
+// TestBreakingErrorSeverityStillExitsZero pins Plan A's guarantee for this
+// task: the exit status does not change here, whatever severity a finding
+// carries. Task 5 changes this.
+func TestBreakingErrorSeverityStillExitsZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("an error-severity finding must still exit zero today: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), ": error: break/field_removed:") {
+		t.Errorf("the finding is not marked as an error:\n%s", out.String())
+	}
+}

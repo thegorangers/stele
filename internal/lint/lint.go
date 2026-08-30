@@ -170,8 +170,14 @@ func contains(ids []string, id string) bool {
 	return false
 }
 
-// ignores reports whether path is covered by one of the entries.
-func ignores(entries []string, path string) bool {
+// Ignores reports whether path is covered by one of the entries.
+//
+// Exported so internal/breaking can apply the same import-path-prefix
+// predicate a rule's ignore list uses here, rather than carrying a second
+// copy of it: the two packages agree by construction on what "this rule is
+// not applied to this path" means, which a duplicated predicate could
+// silently stop doing the moment one of them changed.
+func Ignores(entries []string, path string) bool {
 	for _, e := range entries {
 		e = strings.TrimSuffix(e, "/")
 		if e == "" {
@@ -325,7 +331,7 @@ func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 	}
 	for _, fd := range files {
 		path := string(fd.Path())
-		if ignores(e.cfg.Ignore, path) {
+		if Ignores(e.cfg.Ignore, path) {
 			res.Files--
 			continue
 		}
@@ -335,7 +341,7 @@ func (e *Engine) Check(files []protoreflect.FileDescriptor) Result {
 				continue
 			}
 			rc, configured := e.cfg.Rules[r.ID()]
-			if configured && (rc.Severity == SeverityOff || ignores(rc.Ignore, path)) {
+			if configured && (rc.Severity == SeverityOff || Ignores(rc.Ignore, path)) {
 				continue
 			}
 			sev := rc.Severity
