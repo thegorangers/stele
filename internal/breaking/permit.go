@@ -32,17 +32,15 @@ func Permit(findings []Finding, cfg *config.Breaking) (kept []Finding, stale []c
 		return findings, nil
 	}
 
-	matched := make([]bool, len(cfg.Allow))
+	matched := matchedAllow(findings, cfg)
 	kept = make([]Finding, 0, len(findings))
 
 	for _, f := range findings {
-		i := indexOfMatch(cfg.Allow, f)
-		if i == -1 {
+		if indexOfMatch(cfg.Allow, f) == -1 {
 			kept = append(kept, f)
-			continue
 		}
-		matched[i] = true
-		// The finding leaves the run entirely: not reported, not counted.
+		// A matched finding leaves the run entirely: not reported, not
+		// counted.
 	}
 
 	for i, p := range cfg.Allow {
@@ -52,6 +50,58 @@ func Permit(findings []Finding, cfg *config.Breaking) (kept []Finding, stale []c
 	}
 
 	return kept, stale
+}
+
+// matchedAllow reports, for each entry of cfg.Allow in order, whether some
+// finding matched it. It is the computation Permit's stale list and
+// StaleAllowIndices both need, factored out because --audit and --prune
+// need the indices themselves, not copies of the values: --prune has to
+// find the line in the manifest a stale entry came from, and a copy
+// carries nothing to find it by.
+func matchedAllow(findings []Finding, cfg *config.Breaking) []bool {
+	matched := make([]bool, len(cfg.Allow))
+	for _, f := range findings {
+		if i := indexOfMatch(cfg.Allow, f); i != -1 {
+			matched[i] = true
+		}
+	}
+	return matched
+}
+
+// StaleAllowIndices returns the indices into cfg.Allow that matched no
+// finding — the same test Permit's stale return applies, restated for
+// --audit and --prune, which need to name or delete a specific manifest
+// entry rather than compare copied fields. A caller distinguishing stale
+// from dormant still has to consult cfg.Rules, the way PermitNotes and
+// IsDormant do.
+func StaleAllowIndices(findings []Finding, cfg *config.Breaking) []int {
+	if cfg == nil || len(cfg.Allow) == 0 {
+		return nil
+	}
+	matched := matchedAllow(findings, cfg)
+	var idx []int
+	for i, m := range matched {
+		if !m {
+			idx = append(idx, i)
+		}
+	}
+	return idx
+}
+
+// IsDormant reports whether p is dormant rather than spent: its rule was
+// set to off in this same manifest, so "matched nothing" says nothing
+// about whether the change it approved is still there. See PermitNotes for
+// the full distinction.
+func IsDormant(cfg *config.Breaking, p config.Permission) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, r := range cfg.Rules {
+		if r.ID == p.Rule {
+			return r.Severity == rule.SeverityNameOff
+		}
+	}
+	return false
 }
 
 // indexOfMatch returns the index of the first permission in allow that

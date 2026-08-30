@@ -87,3 +87,54 @@ func LoweredNotes(cfg *config.Breaking) []string {
 	}
 	return notes
 }
+
+// AuditLowered is LoweredNotes' superset for `stele breaking --audit`: a
+// rule counts as lowered when its severity is below error, exactly as
+// LoweredNotes already reports, or — even while it stands at error — when
+// its ignore list covers every path in owned, so that no finding of it can
+// ever be produced. Both are the same fact from a reader's point of view:
+// this repository has, in effect, switched the rule off. An audit that a
+// mechanism it does not count (ignore) can zero to nothing is worse than
+// no audit at all — which is why --audit asks this question and the
+// ordinary run does not: LoweredNotes prints on every run, cheaply, before
+// a comparison is even known to be possible, and owned is not always in
+// hand at that point; --audit always runs the full comparison, so owned
+// always is.
+//
+// owned is the set of import paths the working revision owns — the paths a
+// rule would check absent its own ignore list — normally Revision.Owned
+// from the current side of the comparison.
+func AuditLowered(cfg *config.Breaking, owned []string) []string {
+	if cfg == nil {
+		return nil
+	}
+	var notes []string
+	for _, r := range cfg.Rules {
+		switch {
+		case r.Severity != "" && r.Severity != rule.SeverityNameError:
+			notes = append(notes, fmt.Sprintf(
+				"stele: breaking: the rule %q is %s: %s", r.ID, r.Severity, r.Reason))
+		case len(r.Ignore) > 0 && ignoresEverything(r.Ignore, owned):
+			notes = append(notes, fmt.Sprintf(
+				"stele: breaking: the rule %q is lowered: its ignore list covers every path it would check",
+				r.ID))
+		}
+	}
+	return notes
+}
+
+// ignoresEverything reports whether ignore covers every one of paths. An
+// empty paths — nothing owned to check — is deliberately not "everything":
+// a rule cannot be said to have silenced itself over a repository that
+// owns no protos for it to check in the first place.
+func ignoresEverything(ignore, paths []string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	for _, p := range paths {
+		if !lint.Ignores(ignore, p) {
+			return false
+		}
+	}
+	return true
+}

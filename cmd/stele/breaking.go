@@ -51,6 +51,18 @@ Flags:
   --cache-dir DIR where fetched repositories are kept (default
                   $XDG_CACHE_HOME/stele, else ~/.cache/stele;
                   $STELE_CACHE_DIR is honoured too)
+  --audit         report this repository's stale and lowered permissions
+                  instead of comparing for a merge. Exits non-zero only when
+                  it finds a stale permission — a fact about a file that
+                  needs an edit — and never for what this repository has
+                  lowered, which is a decision, not a defect. This reports
+                  about this repository alone; there is no fleet-wide
+                  aggregator behind it. Cannot be combined with --prune.
+  --prune         delete this repository's stale permissions from the
+                  manifest and nothing else, leaving every other byte of
+                  the file unchanged. A dormant permission — one whose rule
+                  is off — is never pruned: raising the rule back to error
+                  makes it needed again. Cannot be combined with --audit.
 `
 
 func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -63,6 +75,8 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		base     = fs.String("base", "", "the base branch to compare against on a topic branch")
 		against  = fs.String("against", "", "compare directly against this revision, no merge-base")
 		cacheDir = fs.String("cache-dir", "", "where fetched repositories are kept")
+		audit    = fs.Bool("audit", false, "report stale and lowered permissions instead of comparing for a merge")
+		prune    = fs.Bool("prune", false, "delete stale permissions from the manifest and nothing else")
 		help     = fs.Bool("help", false, "show this help")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -78,6 +92,9 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	if rest := fs.Args(); len(rest) > 0 {
 		return fmt.Errorf("unexpected argument %q; stele breaking takes flags only\n\n%s", rest[0], breakingUsage)
+	}
+	if *audit && *prune {
+		return fmt.Errorf("stele breaking: --audit and --prune cannot be combined\n\n%s", breakingUsage)
 	}
 
 	r, err := gitrepo.Open(*dir)
@@ -159,11 +176,18 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	paths = append(paths, lint.LockName)
 
+	// --audit and --prune need the full comparison even when the trees
+	// are unchanged: a stale permission is defined by what still matches
+	// among today's findings, and an unchanged tree does not mean there
+	// are none — it means, if anything, that every permission naming a
+	// removed field is stale, which is exactly the fact these flags exist
+	// to report. Taking the shortcut here would make --audit blind on
+	// most runs, the same 84.7%-of-commits case the comment above notes.
 	unchanged, err := breaking.TreesUnchanged(r, prev, paths)
 	if err != nil {
 		return err
 	}
-	if unchanged {
+	if unchanged && !*audit && !*prune {
 		fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
 			Outcome:  breaking.Unchanged,
 			Previous: prev.SHA,
@@ -207,6 +231,11 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	// Severity is resolved against the working manifest only, mf.Breaking —
 	// never prevRev's or cur's, for the reason given above ValidateConfig.
 	findings = breaking.ApplySeverity(findings, mf.Breaking)
+
+	if *audit || *prune {
+		return runBreakingAudit(mf, manifestPath, findings, cur, prev, *prune, stdout)
+	}
+
 	// Permit runs after ApplySeverity: see its own doc comment for why the
 	// order matters (a permission naming a rule this manifest set to off
 	// must come out dormant, not silently matched against findings that
@@ -244,3 +273,68 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 // deliberately empty of detail: the report already printed to stdout names
 // every finding, and repeating that here would just be noise on stderr.
 var errBreakingFindings = errors.New("stele breaking: at least one finding stands at error")
+
+// runBreakingAudit implements --audit and --prune. Both start from the same
+// place: which of mf.Breaking.Allow matched nothing among findings, split
+// into stale (spent — the change it approved is behind the base) and
+// dormant (its rule is off, not spent). --audit reports both, plus every
+// rule this manifest has lowered, counting an ignore list that covers
+// every path a rule would check as lowered even while severity stays at
+// error — the ignore-mechanism gap the design calls out by name. --prune
+// deletes the stale entries, never the dormant ones, and nothing else.
+//
+// findings here is not used to decide anything about --prune or --audit's
+// own exit status beyond producing the stale/dormant split: the valve
+// itself (a finding standing at error failing the run) belongs to the
+// ordinary path in runBreaking and is deliberately not reached here — an
+// audit that could fail a merge on a finding would not be the valve this
+// design asked for.
+func runBreakingAudit(mf *config.File, manifestPath string, findings []breaking.Finding, cur breaking.Revision, prev breaking.Previous, prune bool, stdout io.Writer) error {
+	idx := breaking.StaleAllowIndices(findings, mf.Breaking)
+
+	var staleSpent, staleDormant []config.Permission
+	var pruneIdx []int
+	for _, i := range idx {
+		p := mf.Breaking.Allow[i]
+		if breaking.IsDormant(mf.Breaking, p) {
+			staleDormant = append(staleDormant, p)
+			continue
+		}
+		staleSpent = append(staleSpent, p)
+		pruneIdx = append(pruneIdx, i)
+	}
+
+	var notes []string
+	notes = append(notes, breaking.AuditLowered(mf.Breaking, cur.Owned)...)
+	notes = append(notes, breaking.PermitNotes(mf.Breaking, append(append([]config.Permission{}, staleSpent...), staleDormant...))...)
+
+	fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
+		Outcome:  breaking.Compared,
+		Previous: prev.SHA,
+		Reason:   prev.Reason,
+		Notes:    notes,
+	}))
+
+	if prune {
+		if err := breaking.Prune(manifestPath, pruneIdx); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "stele: breaking: --prune removed %d stale permission(s); dormant permissions were left in place\n", len(pruneIdx))
+		return nil
+	}
+
+	// The audit valve: a stale permission is a fact about a file that
+	// needs an edit, and --audit exists to fail on exactly that — never
+	// on what this repository has lowered, which is a decision that
+	// needed nobody's approval to make and needs none here to keep.
+	if len(staleSpent) > 0 {
+		return errAuditStale
+	}
+	return nil
+}
+
+// errAuditStale is returned by --audit when it finds at least one stale
+// (spent, not dormant) permission. Its message is deliberately empty of
+// detail: the report already printed to stdout names every stale
+// permission, and repeating that here would just be noise on stderr.
+var errAuditStale = errors.New("stele breaking --audit: at least one permission is stale")
