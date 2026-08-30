@@ -74,3 +74,24 @@ func (r *Repo) BaseRef(branch string) (sha string, fresh bool, err error) {
 	}
 	return "", false, fetchErr
 }
+
+// RemoteQualifiedBase reports whether base is remote-qualified — prefixed
+// with this repository's remote name and a slash, such as
+// "origin/master" — rather than the bare branch name BaseRef expects. That
+// is the obvious mistake to make: it is exactly what "git branch -r"
+// prints, and passed as-is it sends BaseRef fetching refs/heads/origin/
+// master, which does not exist, surfacing a confusing git error instead of
+// naming the mistake. Only fires when the repository has exactly one
+// remote — with none or several, Remote's own error is the one to report,
+// and this is silent rather than compounding it.
+func (r *Repo) RemoteQualifiedBase(base string) (branch string, ok bool) {
+	remote, err := r.Remote()
+	if err != nil {
+		return "", false
+	}
+	prefix := remote + "/"
+	if strings.HasPrefix(base, prefix) && len(base) > len(prefix) {
+		return base[len(prefix):], true
+	}
+	return "", false
+}

@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	iofs "io/fs"
+	"os"
 	"path/filepath"
 
 	"github.com/thegorangers/stele/internal/breaking"
@@ -113,6 +115,29 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	manifestPath := filepath.Join(*dir, lint.ManifestName)
+	if _, statErr := os.Stat(manifestPath); errors.Is(statErr, iofs.ErrNotExist) {
+		// The working revision predates this repository's adoption of stele:
+		// there is no stele.yaml at all, so there are no module roots to
+		// check and no breaking configuration to read. That is exactly the
+		// "nothing to compare" shape breaking.Load already gives the
+		// previous revision (see ErrNoManifest) — the same reasoning
+		// carries over to this side. Only the manifest's absence is
+		// forgiven here: a manifest that exists but fails to parse falls
+		// through to config.Load below and fails the run as it always has.
+		//
+		// --audit and --prune are also about a manifest that is not there —
+		// there is nothing to audit and nothing to prune — so they take
+		// this same exit rather than a confusing attempt to open a file
+		// that does not exist.
+		fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
+			Outcome: breaking.NothingToCompare,
+			Reason: "this revision has no " + lint.ManifestName + ": it predates this repository's " +
+				"adoption of stele, so there are no module roots to check",
+		}))
+		return nil
+	} else if statErr != nil {
+		return statErr
+	}
 	mf, err := config.Load(manifestPath)
 	if err != nil {
 		return err
@@ -141,6 +166,18 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	if effectiveBase == "" && *against == "" {
 		return fmt.Errorf("stele breaking: one of --base, breaking.base, or --against is required\n\n%s", breakingUsage)
+	}
+	// breaking.base and --base name a branch, fetched as refs/heads/<name>;
+	// passing what "git branch -r" prints instead — origin/master — sends
+	// the tool looking for refs/heads/origin/master and it is not there,
+	// surfacing a confusing git error rather than the obvious mistake it
+	// is. Caught here, before Choose ever runs, so the message names the
+	// mistake and the fix rather than git's own wording.
+	if effectiveBase != "" {
+		if branch, ok := r.RemoteQualifiedBase(effectiveBase); ok {
+			return fmt.Errorf("stele breaking: --base %s names a remote-tracking ref, not a branch; "+
+				"pass the branch name alone: --base %s", effectiveBase, branch)
+		}
 	}
 
 	// Computed once, from the working manifest, and passed to every Render
