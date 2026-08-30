@@ -80,6 +80,9 @@ func Load(ctx context.Context, r *gitrepo.Repo, sha string, fetch resolve.FetchF
 	if err != nil {
 		return Revision{}, err
 	}
+	if err := ValidateConfig(mf.Breaking); err != nil {
+		return Revision{}, fmt.Errorf("%s: %w", manifestPath, err)
+	}
 
 	lockPath := filepath.Join(dir, lint.LockName)
 	if _, err := os.Stat(lockPath); errors.Is(err, fs.ErrNotExist) {

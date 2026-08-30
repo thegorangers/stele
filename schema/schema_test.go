@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-	"github.com/thegorangers/stele/internal/breaking"
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/lint"
 	"github.com/thegorangers/stele/internal/lockfile"
@@ -20,19 +19,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The corpus exercises the parser's refusal of a breaking-rule id no rule
-// this tool has carries, and of a permission's change field against what the
-// named rule's discriminant requires. Both checks are wired at init rather
-// than by a direct import inside internal/config — see
-// config.BreakingRuleFact for why.
-func init() {
-	rules := breaking.Rules()
-	facts := make([]config.BreakingRuleFact, len(rules))
-	for i, r := range rules {
-		facts[i] = config.BreakingRuleFact{ID: r.ID, HasDiscriminant: r.HasDiscriminant}
-	}
-	config.RegisterBreakingRuleFacts(facts)
-}
+// A breaking-rule id no rule this tool has carries, and a permission's
+// change field against what the named rule's discriminant requires, are not
+// exercised by this corpus: both are checked in internal/breaking against
+// the real rule registry (see breaking.ValidateConfig), not by config.Load,
+// which is "the parser" this file compares the schema against. A manifest
+// using either is accepted by both the schema and config.Load, so it would
+// not belong in beyond/ — beyond/ is for what the schema cannot express
+// among things the parser here does check.
 
 // The corpus is one set of example files per described format, split by what
 // the two checkers are expected to say about it:

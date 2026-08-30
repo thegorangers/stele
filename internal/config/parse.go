@@ -268,45 +268,17 @@ func checkLintRuleID(id string) error {
 	return nil
 }
 
-// BreakingRuleFact is what this package needs to know about one
-// breaking-change rule to validate a manifest against it: that it exists,
-// and whether a permission against it must carry a change.
+// checkBreakingRuleID checks the shape of a breaking-change rule id.
 //
-// It restates two fields of internal/breaking's RuleInfo rather than
-// importing that type, and RegisterBreakingRuleFacts below restates the
-// same two fields as a function signature rather than taking a RuleInfo
-// slice directly — both for the same reason: internal/breaking already
-// imports this package (to load a manifest when resolving a previous
-// revision), so this package cannot import internal/breaking back without
-// a cycle. The values still come from exactly one place, breaking.Rules();
-// this type only lets them cross the boundary without a second import.
-type BreakingRuleFact struct {
-	ID              string
-	HasDiscriminant bool
-}
-
-// breakingRuleFacts is the set RegisterBreakingRuleFacts last supplied, or
-// nil if nothing has. A nil map means existence is not checked here — the
-// same posture Lint takes for its own rule ids, which are checked for shape
-// in this package and for existence wherever the rules that are loaded are
-// known.
-var breakingRuleFacts map[string]BreakingRuleFact
-
-// RegisterBreakingRuleFacts supplies the set of breaking-change rules that
-// breaking.rules and breaking.allow entries are validated against. See
-// BreakingRuleFact for why this is an injected set instead of a direct
-// import of internal/breaking's registry.
-func RegisterBreakingRuleFacts(facts []BreakingRuleFact) {
-	m := make(map[string]BreakingRuleFact, len(facts))
-	for _, f := range facts {
-		m[f.ID] = f
-	}
-	breakingRuleFacts = m
-}
-
-// checkBreakingRuleID checks the shape of a breaking-change rule id. Whether
-// a rule of that id exists is answered by breakingRuleFacts when it has been
-// populated, for the reason BreakingRuleFact documents.
+// Whether a rule of that id exists is not this package's question: this
+// package describes what a manifest may say, and the set of rules that
+// exist is a property of the engine, exactly as it is for a lint rule id
+// (see checkLintRuleID). internal/breaking imports this package already —
+// to load a manifest when resolving a previous revision — so the reverse
+// import a direct existence check would need is a cycle. The existence
+// check, and the permission discriminant checks that also depend on the
+// rule set, live in internal/breaking, checked against Rules/LookupRule
+// when it loads a manifest's breaking block. See breaking.ValidateConfig.
 func checkBreakingRuleID(id string) error {
 	if err := rule.CheckID(id); err != nil {
 		return fmt.Errorf("%w; write it as namespace/name, such as break/message_removed", err)
@@ -314,7 +286,8 @@ func checkBreakingRuleID(id string) error {
 	return nil
 }
 
-// validate checks the breaking block.
+// validate checks the breaking block: shape only. See checkBreakingRuleID
+// for why existence and discriminant checks are not here.
 func (b *Breaking) validate() error {
 	if b == nil {
 		return nil
@@ -339,11 +312,6 @@ func (b *Breaking) validateRules() error {
 		}
 		if err := checkBreakingRuleID(r.ID); err != nil {
 			return fmt.Errorf("%s.id: %w", field, err)
-		}
-		if breakingRuleFacts != nil {
-			if _, known := breakingRuleFacts[r.ID]; !known {
-				return fmt.Errorf("%s.id: %s is not a rule this tool has", field, r.ID)
-			}
 		}
 		if first, dup := seen[r.ID]; dup {
 			return fmt.Errorf("%s.id: duplicate configuration for %s, already set by breaking.rules[%d]; "+
@@ -384,20 +352,6 @@ func (b *Breaking) validateAllow() error {
 			// A permission with no stated reason cannot be told from a
 			// workaround six months later.
 			return fmt.Errorf("%s.reason: missing", field)
-		}
-		fact, known := breakingRuleFacts[p.Rule]
-		if breakingRuleFacts != nil && !known {
-			return fmt.Errorf("%s.rule: %s is not a rule this tool has", field, p.Rule)
-		}
-		if known {
-			switch {
-			case fact.HasDiscriminant && p.Change == "":
-				return fmt.Errorf("%s.change: missing; %s carries a discriminant beyond its subject, and a "+
-					"permission without it is refused rather than treated as matching anything", field, p.Rule)
-			case !fact.HasDiscriminant && p.Change != "":
-				return fmt.Errorf("%s.change: %q is written, but %s has no discriminant beyond its subject; "+
-					"removals have nothing to discriminate on beyond the subject itself", field, p.Change, p.Rule)
-			}
 		}
 	}
 	return nil

@@ -4,22 +4,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/thegorangers/stele/internal/breaking"
 	"github.com/thegorangers/stele/internal/config"
 )
 
-// This package's tests validate breaking.rules and breaking.allow entries
-// against the real rule registry, not a second hand-written list. See
-// config.BreakingRuleFact for why this is wired at init rather than by a
-// direct import inside the config package.
-func init() {
-	rules := breaking.Rules()
-	facts := make([]config.BreakingRuleFact, len(rules))
-	for i, r := range rules {
-		facts[i] = config.BreakingRuleFact{ID: r.ID, HasDiscriminant: r.HasDiscriminant}
-	}
-	config.RegisterBreakingRuleFacts(facts)
-}
+// This package validates the shape of the breaking block only: unknown
+// keys, severity spellings, duplicate rule ids within the block, and the
+// reason required to lower a rule or grant a permission. Whether a rule id
+// names a rule this tool actually has, and whether a permission's change
+// matches what that rule's discriminant requires, are checked in
+// internal/breaking against the real rule registry — see
+// TestValidateConfig in that package — because internal/breaking already
+// imports this package (to load a manifest when resolving a previous
+// revision) and this package importing it back would cycle.
 
 func TestLoad_NoBreakingBlockIsNil(t *testing.T) {
 	f := mustLoad(t, "version: 1\nmodules:\n  - path: api\n")
@@ -122,24 +118,9 @@ func TestLoad_BreakingInvalid(t *testing.T) {
 			want: "reason",
 		},
 		{
-			name: "rule id no rule carries",
-			yaml: "version: 1\nmodules:\n  - path: api\nbreaking:\n  rules:\n    - id: break/no_such_rule\n      severity: error\n",
-			want: "break/no_such_rule",
-		},
-		{
 			name: "permission with no reason",
 			yaml: "version: 1\nmodules:\n  - path: api\nbreaking:\n  allow:\n    - rule: break/message_removed\n      subject: example.orders.v1.Draft\n",
 			want: "reason",
-		},
-		{
-			name: "permission for discriminant rule with no change",
-			yaml: "version: 1\nmodules:\n  - path: api\nbreaking:\n  allow:\n    - rule: break/field_type_changed\n      subject: example.orders.v1.Order.total\n      reason: widening\n",
-			want: "change",
-		},
-		{
-			name: "permission for non-discriminant rule with a change",
-			yaml: "version: 1\nmodules:\n  - path: api\nbreaking:\n  allow:\n    - rule: break/message_removed\n      subject: example.orders.v1.Draft\n      change: something\n      reason: because\n",
-			want: "change",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
