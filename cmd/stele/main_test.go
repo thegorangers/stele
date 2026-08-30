@@ -80,7 +80,10 @@ func TestCLI(t *testing.T) {
 		{name: "breaking warns against is not a CI default", args: []string{"breaking", "--help"}, help: true, wantHelp: "NOT a substitute for --base"},
 		{name: "breaking unknown flag is named", args: []string{"breaking", "--nosuch"}, wantErr: "not defined: -nosuch"},
 		{name: "breaking positional argument refused", args: []string{"breaking", "x"}, wantErr: `unexpected argument "x"`},
-		{name: "breaking requires base or against", args: []string{"breaking"}, wantErr: "--base or --against is required"},
+		// The no-base-at-all case now depends on the manifest (breaking.base
+		// may supply it), so it needs a real repository fixture and is
+		// covered at the command level by TestBreakingNoBaseNamesAllThreeWays
+		// instead of this flag-only table.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, errOut strings.Builder
@@ -816,10 +819,10 @@ func TestBreakingCleanRunExitsZero(t *testing.T) {
 	}
 }
 
-// TestBreakingRemovedFieldExitsZeroAndNamesTheField: this release is
-// report-only. A finding — even one as serious as a removed field — must
-// still exit zero, and the field must be named in the output.
-func TestBreakingRemovedFieldExitsZeroAndNamesTheField(t *testing.T) {
+// TestBreakingRemovedFieldFailsAndNamesTheField: a finding standing at
+// error — the default — now fails the run, and the field is still named in
+// the output.
+func TestBreakingRemovedFieldFailsAndNamesTheField(t *testing.T) {
 	dir := breakingRepo(t)
 	breakingWrite(t, dir, "stele.yaml", breakingManifest)
 	breakingWrite(t, dir, "stele.lock", breakingLock)
@@ -836,14 +839,14 @@ message Order {
 
 	var out, errOut strings.Builder
 	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
-	if err != nil {
-		t.Fatalf("a finding must not fail the run: %v\n%s", err, out.String())
+	if err == nil {
+		t.Fatalf("a finding standing at error must fail the run:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "example.v1.Order.status") {
 		t.Errorf("the removed field is not named:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "report-only") {
-		t.Errorf("the report does not say it is report-only:\n%s", out.String())
+	if strings.Contains(out.String(), "report-only") {
+		t.Errorf("the report-only notice must be gone:\n%s", out.String())
 	}
 }
 
@@ -925,8 +928,8 @@ message Order {
 
 	var out, errOut strings.Builder
 	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
-	if err != nil {
-		t.Fatalf("a finding must not fail the run: %v\n%s", err, out.String())
+	if err == nil {
+		t.Fatalf("the working manifest carries no breaking block, so the finding stands at error and must fail the run:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "example.v1.Order.status") {
 		t.Errorf("the base revision's own severity:off did not stay in the past; "+
@@ -1042,8 +1045,8 @@ message Owned {
 
 	var out, errOut strings.Builder
 	err := run(context.Background(), []string{"breaking", "--dir", dir, "--against", base}, &out, &errOut)
-	if err != nil {
-		t.Fatalf("a closure finding must not fail the run: %v\n%s", err, out.String())
+	if err == nil {
+		t.Fatalf("a closure finding at error severity must fail the run:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "example.Dep.extra") {
 		t.Errorf("the closure finding does not name the removed field example.Dep.extra:\n%s", out.String())
@@ -1117,10 +1120,9 @@ message Order {
 	}
 }
 
-// TestBreakingErrorSeverityStillExitsZero pins Plan A's guarantee for this
-// task: the exit status does not change here, whatever severity a finding
-// carries. Task 5 changes this.
-func TestBreakingErrorSeverityStillExitsZero(t *testing.T) {
+// TestBreakingErrorSeverityFailsAndIsMarked: the valve. An error-severity
+// finding both fails the run and is still marked "error" in the output.
+func TestBreakingErrorSeverityFailsAndIsMarked(t *testing.T) {
 	dir := breakingRepo(t)
 	breakingWrite(t, dir, "stele.yaml", breakingManifest)
 	breakingWrite(t, dir, "stele.lock", breakingLock)
@@ -1137,8 +1139,8 @@ message Order {
 
 	var out, errOut strings.Builder
 	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
-	if err != nil {
-		t.Fatalf("an error-severity finding must still exit zero today: %v\n%s", err, out.String())
+	if err == nil {
+		t.Fatalf("an error-severity finding must fail the run:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), ": error: break/field_removed:") {
 		t.Errorf("the finding is not marked as an error:\n%s", out.String())
@@ -1258,8 +1260,8 @@ message Order {
 
 	var out, errOut strings.Builder
 	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
-	if err != nil {
-		t.Fatalf("the command still exits zero: %v\n%s", err, out.String())
+	if err == nil {
+		t.Fatalf("the standing error-severity finding must fail the run:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "example.v1.Order.status") ||
 		!strings.Contains(out.String(), ": error: break/field_type_changed:") {
@@ -1312,5 +1314,220 @@ message Order {
 	}
 	if !strings.Contains(out.String(), "break/field_removed") {
 		t.Errorf("the dormant note must name the rule:\n%s", out.String())
+	}
+}
+
+// breakingRemoveStatus commits a removal of Order.status to dir's current
+// branch, the fixture every test below the valve reuses.
+func breakingRemoveStatus(t *testing.T, dir string) {
+	t.Helper()
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
+}
+
+// TestBreakingErrorFindingExitsNonZero is the valve itself: a finding
+// standing at error — the default, with no breaking: block at all — must
+// now fail the run. This supersedes
+// TestBreakingErrorSeverityStillExitsZero's guarantee for Plan A.
+func TestBreakingErrorFindingExitsNonZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRemoveStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("a finding standing at error must fail the run:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("the removed field is not named:\n%s", out.String())
+	}
+}
+
+// TestBreakingWarningFindingExitsZero: the same removal, lowered to
+// warning, must still exit zero and still be reported.
+func TestBreakingWarningFindingExitsZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  rules:\n    - id: break/field_removed\n      severity: warning\n      reason: still churning\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRemoveStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a warning-severity finding must not fail the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("the finding is missing:\n%s", out.String())
+	}
+}
+
+// TestBreakingPermittedErrorFindingExitsZero: an error-severity finding
+// with a matching permission must exit zero — the second way this
+// repository has to accept a breaking change on purpose.
+func TestBreakingPermittedErrorFindingExitsZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  allow:\n    - rule: break/field_removed\n"+
+		"      subject: example.v1.Order.status\n      reason: dropped in the v2 rollout\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRemoveStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a permitted error-severity finding must not fail the run: %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("a matching permission must remove the finding from the command's output:\n%s", out.String())
+	}
+}
+
+// TestBreakingStalePermissionAloneExitsZero: a stale permission — one that
+// matched nothing — is a note, not a finding, and must not fail the run on
+// its own even though the underlying rule stands at error.
+func TestBreakingStalePermissionAloneExitsZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  allow:\n    - rule: break/field_type_changed\n"+
+		"      subject: example.v1.Order.status\n      change: string -> bytes\n"+
+		"      reason: was already approved for a different change\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work; no finding to permit")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a stale permission alone must not fail the run: %v\n%s", err, out.String())
+	}
+}
+
+// TestBreakingBaseFromManifestIsUsedWhenFlagAbsent: breaking.base supplies
+// the default base branch when --base is not given.
+func TestBreakingBaseFromManifestIsUsedWhenFlagAbsent(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+"breaking:\n  base: main\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRemoveStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("breaking.base must have been consulted; the finding must have failed the run:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("breaking.base was not used as the default base branch:\n%s", out.String())
+	}
+}
+
+// TestBreakingFlagBaseOverridesManifestBase: --base wins when both --base
+// and breaking.base are present.
+func TestBreakingFlagBaseOverridesManifestBase(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+"breaking:\n  base: nosuchbranch\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRemoveStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("--base must have won over the bogus breaking.base:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("--base did not override breaking.base as expected:\n%s", out.String())
+	}
+}
+
+// TestBreakingNoBaseNamesAllThreeWays: with none of --base, --against, or
+// breaking.base given, the error must name all three ways to supply a
+// base.
+func TestBreakingNoBaseNamesAllThreeWays(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir}, &out, &errOut)
+	if err == nil {
+		t.Fatal("no base at all must fail the run")
+	}
+	for _, want := range []string{"--base", "--against", "breaking.base"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not name %q: %v", want, err)
+		}
+	}
+}
+
+// TestBreakingCleanComparisonStillExitsZero is the negative for the valve:
+// a real comparison that finds nothing must still exit zero.
+func TestBreakingCleanComparisonStillExitsZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder("\n  string note = 3;"), "add a field, not a break")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a clean comparison must exit zero: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "no breaking changes") {
+		t.Errorf("a clean comparison does not say so:\n%s", out.String())
+	}
+}
+
+// TestBreakingFailureToCompareStillFailsForItsOwnReason is the negative for
+// the valve on the other side: a failure to compare must keep failing the
+// run, and for its own reason, not because of any finding.
+func TestBreakingFailureToCompareStillFailsForItsOwnReason(t *testing.T) {
+	origin := breakingRepo(t)
+	breakingWrite(t, origin, "stele.yaml", breakingManifest)
+	breakingWrite(t, origin, "stele.lock", breakingLock)
+	breakingCommit(t, origin, "api/example/v1/order.proto", breakingOrder(""), "base")
+	breakingCommit(t, origin, "api/example/v1/order.proto", breakingOrder("\n  string note = 3;"), "second")
+
+	parent := t.TempDir()
+	shallow := filepath.Join(parent, "shallow")
+	cmd := exec.Command("git", "clone", "-q", "--depth", "1", "file://"+origin, shallow)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git clone --depth 1: %v\n%s", err, out)
+	}
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", shallow, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a shallow clone must fail the run, not exit zero")
+	}
+	if !strings.Contains(err.Error(), "shallow") {
+		t.Errorf("the failure to compare must still fail for its own reason (shallowness), not a finding: %v", err)
 	}
 }

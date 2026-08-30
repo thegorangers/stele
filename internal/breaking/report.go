@@ -58,10 +58,6 @@ type Info struct {
 const blindZone = `blind zone: this engine does not check json_name renames, ` +
 	`int32 widening to int64 under protojson, or google.api.http changes`
 
-// reportOnlyNotice says the run cannot fail a build, so a reader does not
-// have to infer that from the exit status.
-const reportOnlyNotice = "report-only: this run always exits zero"
-
 // Render renders findings and the outcome of the run that produced them as
 // human-facing text.
 func Render(findings []Finding, info Info) string {
@@ -109,8 +105,6 @@ func Render(findings []Finding, info Info) string {
 		}
 	}
 
-	b.WriteString("\n")
-	b.WriteString(reportOnlyNotice)
 	b.WriteString("\n")
 	b.WriteString(blindZone)
 	b.WriteString("\n")

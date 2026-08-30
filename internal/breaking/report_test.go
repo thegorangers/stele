@@ -76,17 +76,6 @@ func TestOwningNoProtosIsNotRenderedAsClean(t *testing.T) {
 	}
 }
 
-// Plan A cannot fail a build, and the report says so rather than leaving a
-// reader to infer it from an exit status.
-func TestReportSaysItIsReportOnly(t *testing.T) {
-	out := Render([]Finding{{Rule: "break/field_removed", Category: Source,
-		Path: "api/orders/v1/order.proto", Subject: "example.orders.v1.Order.eta"}},
-		Info{Outcome: Compared, Previous: "abc1234", Reason: "merge-base with main"})
-	if !strings.Contains(out, "report-only") {
-		t.Error("a reader must not have to infer from the exit status that nothing failed")
-	}
-}
-
 // A report containing a closure finding and an owned finding shows the
 // distinction between them.
 func TestClosureFindingIsVisuallyDistinctFromOwned(t *testing.T) {

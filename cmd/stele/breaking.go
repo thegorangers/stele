@@ -14,24 +14,25 @@ import (
 	"github.com/thegorangers/stele/internal/gitrepo"
 	"github.com/thegorangers/stele/internal/lint"
 	"github.com/thegorangers/stele/internal/source"
+	"github.com/thegorangers/stele/rule"
 )
 
 const breakingUsage = `stele breaking reports what changed in this repository's proto contracts that
 would break a consumer.
 
-This release is report-only: it always exits zero when it finds something to
-report. There is no mechanism yet to permit a breaking change deliberately —
-that is a later plan — and a command that failed a build with no way to
-accept a finding would leave a repository one option: deleting the CI job.
-That is the failure this design exists to avoid.
+A finding standing at error fails the run; so does a rule that failed to
+run at all, whatever severity it was configured at. A repository accepts a
+breaking change on purpose in one of two ways: lower the rule with
+breaking.rules, or permit the specific change with breaking.allow. A
+warning never fails the run, and neither does a stale or dormant
+permission.
 
-A failure to compare is different, and still fails the run: a shallow clone,
-an unreadable manifest, a revision that cannot be fetched. Only findings are
-non-fatal.
+A failure to compare is different again, and always fails the run: a
+shallow clone, an unreadable manifest, a revision that cannot be fetched.
 
 The previous revision is chosen the way a code review chooses one: the
 merge-base with the base branch on a topic branch, or the first parent when
-already on it. See --base and --against below.
+already on it. See --base, --against and breaking.base below.
 
 Usage:
   stele breaking [flags]
@@ -39,9 +40,9 @@ Usage:
 Flags:
   --dir DIR       directory holding stele.yaml (default ".")
   --base BRANCH   the base branch this revision is compared against on a
-                  topic branch. A later plan moves this into the manifest as
-                  breaking.base; for now it is required unless --against is
-                  given.
+                  topic branch. Overrides breaking.base in the manifest when
+                  both are given; one of --base, breaking.base or --against
+                  is required.
   --against REF   compare directly against REF, with no merge-base. This is
                   NOT a substitute for --base as a CI default: comparing
                   against a moving upstream ref such as origin/master is
@@ -79,9 +80,6 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if rest := fs.Args(); len(rest) > 0 {
 		return fmt.Errorf("unexpected argument %q; stele breaking takes flags only\n\n%s", rest[0], breakingUsage)
 	}
-	if *base == "" && *against == "" {
-		return fmt.Errorf("stele breaking: --base or --against is required\n\n%s", breakingUsage)
-	}
 
 	r, err := gitrepo.Open(*dir)
 	if err != nil {
@@ -113,6 +111,18 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if err := breaking.ValidateConfig(mf.Breaking); err != nil {
 		return fmt.Errorf("%s: %w", manifestPath, err)
 	}
+
+	// --base wins when both --base and breaking.base are given: a flag
+	// passed explicitly on this invocation is a more specific instruction
+	// than a manifest default every invocation shares.
+	effectiveBase := *base
+	if effectiveBase == "" && mf.Breaking != nil {
+		effectiveBase = mf.Breaking.Base
+	}
+	if effectiveBase == "" && *against == "" {
+		return fmt.Errorf("stele breaking: one of --base, breaking.base, or --against is required\n\n%s", breakingUsage)
+	}
+
 	// Computed once, from the working manifest, and passed to every Render
 	// call below regardless of outcome — including the two that precede any
 	// comparison. The design's rule is "on every run", not "on every run
@@ -130,7 +140,7 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		}
 	} else {
 		var ok bool
-		prev, ok, err = breaking.Choose(r, *base)
+		prev, ok, err = breaking.Choose(r, effectiveBase)
 		if err != nil {
 			return err
 		}
@@ -212,7 +222,26 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		Reason:   prev.Reason,
 		Notes:    notes,
 	}))
-	// This release is report-only: findings never fail the run. Only the
-	// errors returned above — a failure to compare — do.
+	// The valve: a finding standing at error fails the run. A warning
+	// never does, and neither does a stale or dormant permission — those
+	// are notes, not findings, and never reach this slice. The engine has
+	// no notion today of a rule that failed to run rather than finding
+	// nothing (every rule is exercised inline as part of Classify/
+	// ClassifyClosure, with no separate execution result to inspect), so
+	// there is nothing here to check for that beyond what ValidateConfig
+	// and the errors returned above already guard: an unparseable
+	// severity or a bogus rule id fails the run before this point, and a
+	// failure to compare fails it for its own reason above.
+	for _, f := range findings {
+		if f.Severity == rule.SeverityError {
+			return errBreakingFindings
+		}
+	}
 	return nil
 }
+
+// errBreakingFindings is returned when at least one finding stands at
+// error severity after ApplySeverity and Permit have run. Its message is
+// deliberately empty of detail: the report already printed to stdout names
+// every finding, and repeating that here would just be noise on stderr.
+var errBreakingFindings = errors.New("stele breaking: at least one finding stands at error")
