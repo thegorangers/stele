@@ -267,6 +267,15 @@ message, and carries a path with no line where nothing survives.
 
 ## Migrations: a rename map, not a permission
 
+**Not built.** This section describes a design, not behaviour the tool has. It was
+planned as part of the valve and taken out: a revision's descriptors are
+immutable and a field whose type moved still carries the old fully-qualified
+name, so renaming index keys does not produce the property the mechanism exists
+for — a lossless rename producing no findings. It needs a feasibility probe
+rather than a task list. Until then a repository facing a package rename holds
+the rule at `warning`.
+
+
 A package rename changes the full name of everything inside it, so every
 declaration reads as removed. Permitting that one declaration at a time is
 hundreds of entries, and one blanket entry would license a genuine removal hidden
@@ -411,8 +420,7 @@ red for somebody else's change — the neighbour-blaming failure arriving by ano
 door.
 
 **The posture is reported, which is less than measured and should not be dressed
-as more.** `stele breaking --audit` reports stale permissions and moves, and it
-reports what this repository has lowered — counting both `severity` and a rule
+as more.** `stele breaking --audit` reports stale permissions and what this repository has lowered — counting both `severity` and a rule
 whose `ignore` list covers everything it would otherwise check, because an audit
 that can be zeroed by a mechanism it does not count is worse than none.
 
