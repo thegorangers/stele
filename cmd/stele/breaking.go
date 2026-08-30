@@ -51,11 +51,15 @@ Flags:
   --cache-dir DIR where fetched repositories are kept (default
                   $XDG_CACHE_HOME/stele, else ~/.cache/stele;
                   $STELE_CACHE_DIR is honoured too)
-  --audit         report this repository's stale and lowered permissions
-                  instead of comparing for a merge. Exits non-zero only when
-                  it finds a stale permission — a fact about a file that
-                  needs an edit — and never for what this repository has
-                  lowered, which is a decision, not a defect. This reports
+  --audit         report this repository's stale permissions and lowered
+                  rules instead of comparing for a merge. Exits non-zero
+                  only when it finds a stale permission — a fact about a
+                  file that needs an edit — and never for what this
+                  repository has lowered, which is a decision, not a
+                  defect. That non-zero exit is meant for a scheduled job
+                  that reddens alone, not for the merge path: putting
+                  --audit there blocks a merge on staleness, which is
+                  exactly the fate an ordinary run refuses it. This reports
                   about this repository alone; there is no fleet-wide
                   aggregator behind it. Cannot be combined with --prune.
   --prune         delete this repository's stale permissions from the
@@ -226,23 +230,28 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	changes := breaking.Diff(prevRev, cur)
-	findings := breaking.Classify(changes, prevRev, cur)
-	findings = append(findings, breaking.ClassifyClosure(prevRev, cur)...)
+	rawFindings := breaking.Classify(changes, prevRev, cur)
+	rawFindings = append(rawFindings, breaking.ClassifyClosure(prevRev, cur)...)
 	// Severity is resolved against the working manifest only, mf.Breaking —
 	// never prevRev's or cur's, for the reason given above ValidateConfig.
-	findings = breaking.ApplySeverity(findings, mf.Breaking)
+	findings := breaking.ApplySeverity(rawFindings, mf.Breaking)
 
 	if *audit || *prune {
-		return runBreakingAudit(mf, manifestPath, findings, cur, prev, *prune, stdout)
+		// rawFindings, not findings: AuditLowered asks whether an ignore
+		// list covers every path a rule actually fired on, and
+		// ApplySeverity has already dropped exactly those findings from
+		// findings — the ones an ignore list silenced are the evidence, so
+		// the audit needs them, not the report a merge would see.
+		return runBreakingAudit(mf, manifestPath, findings, rawFindings, prev, *prune, stdout)
 	}
 
 	// Permit runs after ApplySeverity: see its own doc comment for why the
 	// order matters (a permission naming a rule this manifest set to off
 	// must come out dormant, not silently matched against findings that
 	// severity has already dropped).
-	var stale []config.Permission
-	findings, stale = breaking.Permit(findings, mf.Breaking)
-	notes = append(notes, breaking.PermitNotes(mf.Breaking, stale)...)
+	kept, stale := breaking.Permit(findings, mf.Breaking)
+	notes = append(notes, breaking.PermitNotes(mf.Breaking, stale, findings)...)
+	findings = kept
 
 	fmt.Fprint(stdout, breaking.Render(findings, breaking.Info{
 		Outcome:  breaking.Compared,
@@ -272,24 +281,29 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 // error severity after ApplySeverity and Permit have run. Its message is
 // deliberately empty of detail: the report already printed to stdout names
 // every finding, and repeating that here would just be noise on stderr.
-var errBreakingFindings = errors.New("stele breaking: at least one finding stands at error")
+var errBreakingFindings = errors.New("breaking: at least one finding stands at error")
 
 // runBreakingAudit implements --audit and --prune. Both start from the same
 // place: which of mf.Breaking.Allow matched nothing among findings, split
 // into stale (spent — the change it approved is behind the base) and
 // dormant (its rule is off, not spent). --audit reports both, plus every
 // rule this manifest has lowered, counting an ignore list that covers
-// every path a rule would check as lowered even while severity stays at
-// error — the ignore-mechanism gap the design calls out by name. --prune
-// deletes the stale entries, never the dormant ones, and nothing else.
+// every path where the rule actually fired this run as lowered even while
+// severity stays at error — the ignore-mechanism gap the design calls out
+// by name. --prune deletes the stale entries, never the dormant ones, and
+// nothing else.
 //
-// findings here is not used to decide anything about --prune or --audit's
+// findings is post-ApplySeverity — the same set a merge run would see, and
+// what StaleAllowIndices and permission matching compare against. rawFindings
+// is the set before ApplySeverity dropped anything an ignore list or
+// severity: off removed; AuditLowered needs it to see what an ignore list
+// actually silenced. Neither slice is used to decide --prune or --audit's
 // own exit status beyond producing the stale/dormant split: the valve
 // itself (a finding standing at error failing the run) belongs to the
 // ordinary path in runBreaking and is deliberately not reached here — an
 // audit that could fail a merge on a finding would not be the valve this
 // design asked for.
-func runBreakingAudit(mf *config.File, manifestPath string, findings []breaking.Finding, cur breaking.Revision, prev breaking.Previous, prune bool, stdout io.Writer) error {
+func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFindings []breaking.Finding, prev breaking.Previous, prune bool, stdout io.Writer) error {
 	idx := breaking.StaleAllowIndices(findings, mf.Breaking)
 
 	var staleSpent, staleDormant []config.Permission
@@ -303,14 +317,15 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings []breaking.
 	}
 
 	var notes []string
-	notes = append(notes, breaking.AuditLowered(mf.Breaking, cur.Owned)...)
-	notes = append(notes, breaking.PermitNotes(mf.Breaking, append(append([]config.Permission{}, staleSpent...), staleDormant...))...)
+	notes = append(notes, breaking.AuditLowered(mf.Breaking, rawFindings)...)
+	notes = append(notes, breaking.PermitNotes(mf.Breaking, append(append([]config.Permission{}, staleSpent...), staleDormant...), findings)...)
 
 	fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
-		Outcome:  breaking.Compared,
+		Outcome:  breaking.Audited,
 		Previous: prev.SHA,
 		Reason:   prev.Reason,
 		Notes:    notes,
+		Findings: len(findings),
 	}))
 
 	if prune {
@@ -338,4 +353,4 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings []breaking.
 // (spent, not dormant) permission. Its message is deliberately empty of
 // detail: the report already printed to stdout names every stale
 // permission, and repeating that here would just be noise on stderr.
-var errAuditStale = errors.New("stele breaking --audit: at least one permission is stale")
+var errAuditStale = errors.New("breaking --audit: at least one permission is stale")
