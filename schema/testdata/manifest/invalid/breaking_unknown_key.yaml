@@ -1,0 +1,6 @@
+# invalid: bogus is not a field of the breaking block.
+version: 1
+modules:
+  - path: api
+breaking:
+  bogus: true

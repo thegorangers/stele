@@ -1,0 +1,8 @@
+# invalid: severity is one of error, warning, off.
+version: 1
+modules:
+  - path: api
+breaking:
+  rules:
+    - id: break/message_removed
+      severity: relaxed

@@ -19,6 +19,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// A breaking-rule id no rule this tool has carries, and a permission's
+// change field against what the named rule's discriminant requires, are not
+// exercised by this corpus: both are checked in internal/breaking against
+// the real rule registry (see breaking.ValidateConfig), not by config.Load,
+// which is "the parser" this file compares the schema against. A manifest
+// using either is accepted by both the schema and config.Load, so it would
+// not belong in beyond/ — beyond/ is for what the schema cannot express
+// among things the parser here does check.
+
 // The corpus is one set of example files per described format, split by what
 // the two checkers are expected to say about it:
 //

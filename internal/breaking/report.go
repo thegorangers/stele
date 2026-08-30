@@ -7,10 +7,12 @@ import (
 	"github.com/thegorangers/stele/rule"
 )
 
-// Outcome says what kind of run produced a report. There are four of them,
-// and three are not a clean comparison: an empty report is indistinguishable
-// from a clean one on its own, so a run that never compared anything must
-// never render the way a run that compared and found nothing does.
+// Outcome says what kind of run produced a report. There are five of them,
+// and four are not a clean comparison: an empty report is indistinguishable
+// from a clean one on its own, so a run that never compared anything — and,
+// just as much, a run that never compared for a merge at all, such as
+// --audit — must never render the way a run that compared and found nothing
+// does.
 type Outcome int
 
 const (
@@ -27,6 +29,13 @@ const (
 	// NoOwnedProtos means this repository owns no protobuf files, so
 	// there was nothing for the engine to check in the first place.
 	NoOwnedProtos
+	// Audited means this is a report about the manifest itself — stale and
+	// lowered permissions and rules — produced by --audit, not a comparison.
+	// findings passed to Render is always nil for this outcome; Info.Findings
+	// carries how many findings the run judged, so the report can say what
+	// it did not render rather than being silently indistinguishable from a
+	// clean Compared report.
+	Audited
 )
 
 // Info carries what Render needs about the run beyond the findings
@@ -40,6 +49,37 @@ type Info struct {
 	// Reason explains Outcome — why there was nothing to compare, why the
 	// comparison was skipped, and so on.
 	Reason string
+	// Notes are things about this run that qualify everything below them
+	// but are not findings — at present, every rule the working manifest
+	// lowered below error, named with its severity and its reason (see
+	// LoweredNotes). They are printed above everything else for the same
+	// reason internal/lint/run.go's unpinnedNotes are: a reader who meets
+	// them afterwards has already read the findings as the whole answer,
+	// and a repository that protects nothing must not be able to say so
+	// quietly. Printed on every run, whether or not the lowered rule ever
+	// fired.
+	Notes []string
+	// Findings is the number of findings the run judged, used only by the
+	// Audited outcome: --audit renders no findings themselves (an audit is
+	// about the manifest, not a re-statement of the comparison), but a
+	// reader still needs to know it looked at something rather than
+	// nothing.
+	//
+	// What the number counts, stated because the second coherence gap the
+	// re-review raised was exactly this being ambiguous: it is taken after
+	// ApplySeverity and before Permit — the count of findings this
+	// manifest's rules (severity and ignore) produced, not the count a
+	// merge run would fail on. A finding a permission approves is still in
+	// this number and is never itself rendered. That is deliberate, not an
+	// oversight: --audit's question is "what did this repository's rules
+	// find", the same set AuditLowered and the stale/dormant split are
+	// computed from (see cmd/stele/breaking.go's runBreakingAudit), and
+	// running Permit first would make the count depend on which findings
+	// happened to be pre-approved — the very thing the stale/dormant/
+	// mismatched split exists to report on separately. A reader who wants
+	// "how many of these would still fail a merge" already has that number
+	// from an ordinary run; this one answers a different question.
+	Findings int
 }
 
 // blindZone lists what this engine cannot see, printed in every report's
@@ -48,14 +88,15 @@ type Info struct {
 const blindZone = `blind zone: this engine does not check json_name renames, ` +
 	`int32 widening to int64 under protojson, or google.api.http changes`
 
-// reportOnlyNotice says the run cannot fail a build, so a reader does not
-// have to infer that from the exit status.
-const reportOnlyNotice = "report-only: this run always exits zero"
-
 // Render renders findings and the outcome of the run that produced them as
 // human-facing text.
 func Render(findings []Finding, info Info) string {
 	var b strings.Builder
+
+	for _, n := range info.Notes {
+		b.WriteString(n)
+		b.WriteString("\n")
+	}
 
 	switch info.Outcome {
 	case NothingToCompare:
@@ -68,6 +109,12 @@ func Render(findings []Finding, info Info) string {
 		b.WriteString("; comparison skipped\n")
 	case NoOwnedProtos:
 		b.WriteString("no owned protos: this repository has nothing for breaking-change detection to check\n")
+	case Audited:
+		fmt.Fprintf(&b, "audit: this repository's manifest compared against %s", info.Previous)
+		if info.Reason != "" {
+			fmt.Fprintf(&b, " (%s)", info.Reason)
+		}
+		fmt.Fprintf(&b, "; %d finding(s) judged\n", info.Findings)
 	default: // Compared
 		if len(findings) == 0 {
 			b.WriteString("no breaking changes")
@@ -94,8 +141,6 @@ func Render(findings []Finding, info Info) string {
 		}
 	}
 
-	b.WriteString("\n")
-	b.WriteString(reportOnlyNotice)
 	b.WriteString("\n")
 	b.WriteString(blindZone)
 	b.WriteString("\n")
@@ -124,10 +169,20 @@ func renderFinding(f Finding) string {
 	} else {
 		message = fmt.Sprintf("(category: %s) %s", categoryName(f.Category), message)
 	}
+	// Change is the discriminant a permission must spell exactly to match
+	// this finding (see Permit, permit.go). It has to be visible in the
+	// rendered line, not only on the struct, or a user has no way to learn
+	// what to copy into an allow[] entry — a mechanism whose input is
+	// invisible is not a mechanism. Folded into the message, like category
+	// and subject above it, rather than a new field on rule.Finding, so
+	// the rendered shape stays path:line:col: severity: rule: message.
+	if f.Change != "" {
+		message = fmt.Sprintf("%s (change: %s)", message, f.Change)
+	}
 
 	rf := rule.Finding{
 		Rule:     f.Rule,
-		Severity: rule.SeverityError,
+		Severity: f.Severity,
 		Path:     f.Path,
 		Pos:      f.Pos,
 		Subject:  f.Subject,

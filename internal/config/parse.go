@@ -120,7 +120,10 @@ func (f *File) validate() error {
 			}
 		}
 	}
-	return f.Lint.validate()
+	if err := f.Lint.validate(); err != nil {
+		return err
+	}
+	return f.Breaking.validate()
 }
 
 // validate checks the lint block.
@@ -261,6 +264,105 @@ func checkLintRuleID(id string) error {
 	if err := rule.CheckID(id); err != nil {
 		return fmt.Errorf("%w; write it as namespace/name, such as %s/enum_value_prefix",
 			err, rule.NamespaceBuiltin)
+	}
+	return nil
+}
+
+// checkBreakingRuleID checks the shape of a breaking-change rule id.
+//
+// Whether a rule of that id exists is not this package's question: this
+// package describes what a manifest may say, and the set of rules that
+// exist is a property of the engine, exactly as it is for a lint rule id
+// (see checkLintRuleID). internal/breaking imports this package already —
+// to load a manifest when resolving a previous revision — so the reverse
+// import a direct existence check would need is a cycle. The existence
+// check, and the permission discriminant checks that also depend on the
+// rule set, live in internal/breaking, checked against Rules/LookupRule
+// when it loads a manifest's breaking block. See breaking.ValidateConfig.
+func checkBreakingRuleID(id string) error {
+	if err := rule.CheckID(id); err != nil {
+		return fmt.Errorf("%w; write it as namespace/name, such as break/message_removed", err)
+	}
+	return nil
+}
+
+// validate checks the breaking block: shape only. See checkBreakingRuleID
+// for why existence and discriminant checks are not here.
+func (b *Breaking) validate() error {
+	if b == nil {
+		return nil
+	}
+	if b.Base == "" && len(b.Rules) == 0 && len(b.Allow) == 0 {
+		// As with lint: a block that configures nothing reads as if it
+		// configured something.
+		return fmt.Errorf("breaking: at least one of base, rules or allow is required")
+	}
+	if err := b.validateRules(); err != nil {
+		return err
+	}
+	return b.validateAllow()
+}
+
+func (b *Breaking) validateRules() error {
+	seen := make(map[string]int, len(b.Rules))
+	for i, r := range b.Rules {
+		field := fmt.Sprintf("breaking.rules[%d]", i)
+		if r.ID == "" {
+			return fmt.Errorf("%s.id: missing", field)
+		}
+		if err := checkBreakingRuleID(r.ID); err != nil {
+			return fmt.Errorf("%s.id: %w", field, err)
+		}
+		if first, dup := seen[r.ID]; dup {
+			return fmt.Errorf("%s.id: duplicate configuration for %s, already set by breaking.rules[%d]; "+
+				"a rule has one severity, and the tool cannot honour two", field, r.ID, first)
+		}
+		seen[r.ID] = i
+		if r.Severity != "" && !slices.Contains(BreakingSeverities, r.Severity) {
+			return fmt.Errorf("%s.severity: %q is not a severity; write one of %s",
+				field, r.Severity, strings.Join(BreakingSeverities, ", "))
+		}
+		if (r.Severity == rule.SeverityNameWarning || r.Severity == rule.SeverityNameOff) && r.Reason == "" {
+			// Lowering a rule requires a reason, on the same terms a
+			// permission does: otherwise approving one change is gated on a
+			// stated reason while switching the rule off for every future
+			// change, for ever, is free.
+			return fmt.Errorf("%s.reason: missing; lowering %s to %s requires a stated reason", field, r.ID, r.Severity)
+		}
+		if len(r.Ignore) > 0 && r.Reason == "" {
+			// An ignore list is an off switch for the paths it names, on the
+			// same terms severity: off is for every path — see The valve in
+			// docs/design/2026-08-28-breaking-change-detection.md. Without
+			// this a repository could silence a rule over exactly the
+			// package that matters, for ever, without writing the sentence
+			// severity: off would have required for the same effect.
+			return fmt.Errorf("%s.reason: missing; %s carries an ignore list, which requires a stated "+
+				"reason on the same terms lowering severity does", field, r.ID)
+		}
+		if err := validateIgnore(fmt.Sprintf("%s.ignore", field), r.Ignore); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Breaking) validateAllow() error {
+	for i, p := range b.Allow {
+		field := fmt.Sprintf("breaking.allow[%d]", i)
+		if p.Rule == "" {
+			return fmt.Errorf("%s.rule: missing", field)
+		}
+		if err := checkBreakingRuleID(p.Rule); err != nil {
+			return fmt.Errorf("%s.rule: %w", field, err)
+		}
+		if p.Subject == "" {
+			return fmt.Errorf("%s.subject: missing", field)
+		}
+		if p.Reason == "" {
+			// A permission with no stated reason cannot be told from a
+			// workaround six months later.
+			return fmt.Errorf("%s.reason: missing", field)
+		}
 	}
 	return nil
 }

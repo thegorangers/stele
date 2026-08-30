@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/thegorangers/stele/internal/lint"
+	"github.com/thegorangers/stele/rule"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -58,6 +59,13 @@ type Finding struct {
 	// taking the pin bump, or by taking it deliberately — and the report
 	// task needs to render that distinction without parsing prose.
 	Closure bool
+	// Severity is what this finding costs, resolved from the working
+	// tree's breaking block by ApplySeverity. It is the zero value
+	// (SeverityError) until ApplySeverity stamps it; Classify and
+	// ClassifyClosure never set it, for the same reason a rule never sets
+	// its own severity in rule.Finding — it is a property of what this
+	// repository says about itself, not of the change that was found.
+	Severity rule.Severity
 }
 
 // Classify turns Diff's neutral changes into findings, each carrying a
@@ -298,7 +306,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 		for _, p := range pairs {
 			renamedField[p.rem.Subject] = true
 			findings = append(findings, Finding{
-				Rule:     "break/field_renamed",
+				Rule:     RuleFieldRenamed,
 				Category: Source,
 				Subject:  p.add.Subject,
 				Path:     p.add.Path,
@@ -312,7 +320,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				continue
 			}
 			findings = append(findings, Finding{
-				Rule:     "break/field_removed",
+				Rule:     RuleFieldRemoved,
 				Category: Source,
 				Subject:  r.Subject,
 				Path:     r.Path,
@@ -336,7 +344,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 
 		if before.Number() != after.Number() {
 			findings = append(findings, Finding{
-				Rule:     "break/field_number_changed",
+				Rule:     RuleFieldNumberChanged,
 				Category: Wire,
 				Subject:  c.Subject,
 				Path:     c.Path,
@@ -353,7 +361,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 				cat = Source
 			}
 			findings = append(findings, Finding{
-				Rule:     "break/field_type_changed",
+				Rule:     RuleFieldTypeChanged,
 				Category: cat,
 				Subject:  c.Subject,
 				Path:     c.Path,
@@ -366,7 +374,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 
 		if before.Cardinality() != after.Cardinality() {
 			findings = append(findings, Finding{
-				Rule:     "break/field_cardinality_changed",
+				Rule:     RuleFieldCardinalityChanged,
 				Category: Wire,
 				Subject:  c.Subject,
 				Path:     c.Path,
@@ -405,7 +413,7 @@ func classifyFields(byKindParent map[parentKey]*grouped, changes []Change, skip 
 					afterLabel = "none"
 				}
 				findings = append(findings, Finding{
-					Rule:     "break/field_oneof_changed",
+					Rule:     RuleFieldOneofChanged,
 					Category: cat,
 					Subject:  c.Subject,
 					Path:     c.Path,
@@ -544,7 +552,7 @@ func classifyOneofs(byKindParent map[parentKey]*grouped, skip func(protoreflect.
 			before, _ := p.rem.Before.(protoreflect.OneofDescriptor)
 			after, _ := p.add.After.(protoreflect.OneofDescriptor)
 			findings = append(findings, Finding{
-				Rule:     "break/oneof_renamed",
+				Rule:     RuleOneofRenamed,
 				Category: Source,
 				Subject:  p.add.Subject,
 				Path:     p.add.Path,
@@ -637,7 +645,7 @@ func classifyEnumValues(byKindParent map[parentKey]*grouped, changes []Change, s
 		})
 		for _, p := range pairs {
 			findings = append(findings, Finding{
-				Rule:     "break/enum_value_renamed",
+				Rule:     RuleEnumValueRenamed,
 				Category: Source,
 				Subject:  p.add.Subject,
 				Path:     p.add.Path,
@@ -651,7 +659,7 @@ func classifyEnumValues(byKindParent map[parentKey]*grouped, changes []Change, s
 				continue
 			}
 			findings = append(findings, Finding{
-				Rule:     "break/enum_value_removed",
+				Rule:     RuleEnumValueRemoved,
 				Category: Source,
 				Subject:  r.Subject,
 				Path:     r.Path,
@@ -673,7 +681,7 @@ func classifyEnumValues(byKindParent map[parentKey]*grouped, changes []Change, s
 		}
 		if before.Number() != after.Number() {
 			findings = append(findings, Finding{
-				Rule:     "break/enum_value_number_changed",
+				Rule:     RuleEnumValueNumberChanged,
 				Category: Wire,
 				Subject:  c.Subject,
 				Path:     c.Path,
@@ -706,7 +714,7 @@ func classifyMessages(byKindParent map[parentKey]*grouped, skip func(protoreflec
 		}
 		for _, r := range g.removed {
 			findings = append(findings, Finding{
-				Rule:     "break/message_removed",
+				Rule:     RuleMessageRemoved,
 				Category: Source,
 				Subject:  r.Subject,
 				Path:     r.Path,
@@ -735,7 +743,7 @@ func classifyEnums(byKindParent map[parentKey]*grouped, skip func(protoreflect.F
 		}
 		for _, r := range g.removed {
 			findings = append(findings, Finding{
-				Rule:     "break/enum_removed",
+				Rule:     RuleEnumRemoved,
 				Category: Source,
 				Subject:  r.Subject,
 				Path:     r.Path,
@@ -764,7 +772,7 @@ func classifyServices(byKindParent map[parentKey]*grouped, skip func(protoreflec
 		}
 		for _, r := range g.removed {
 			findings = append(findings, Finding{
-				Rule:     "break/service_removed",
+				Rule:     RuleServiceRemoved,
 				Category: Wire,
 				Subject:  r.Subject,
 				Path:     r.Path,
@@ -799,7 +807,7 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 		}
 		for _, r := range g.removed {
 			findings = append(findings, Finding{
-				Rule:     "break/method_removed",
+				Rule:     RuleMethodRemoved,
 				Category: Wire,
 				Subject:  r.Subject,
 				Path:     r.Path,
@@ -821,7 +829,7 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 		}
 		if before.Input().FullName() != after.Input().FullName() || before.Output().FullName() != after.Output().FullName() {
 			findings = append(findings, Finding{
-				Rule:     "break/method_signature_changed",
+				Rule:     RuleMethodSignatureChanged,
 				Category: Wire,
 				Subject:  c.Subject,
 				Path:     c.Path,
@@ -836,7 +844,7 @@ func classifyMethods(byKindParent map[parentKey]*grouped, changes []Change, skip
 			beforeLabel := streamingLabel(before.IsStreamingClient(), before.IsStreamingServer())
 			afterLabel := streamingLabel(after.IsStreamingClient(), after.IsStreamingServer())
 			findings = append(findings, Finding{
-				Rule:     "break/method_streaming_changed",
+				Rule:     RuleMethodStreamingChanged,
 				Category: Wire,
 				Subject:  c.Subject,
 				Path:     c.Path,
@@ -921,7 +929,7 @@ func classifyPackages(prev, cur Revision) (findings []Finding, swallowed map[pro
 		path := firstOwnedFileOfPackage(prev, p)
 		if renamedTo != "" {
 			findings = append(findings, Finding{
-				Rule:     "break/package_renamed",
+				Rule:     RulePackageRenamed,
 				Category: Wire,
 				Subject:  string(p),
 				Path:     path,
@@ -930,7 +938,7 @@ func classifyPackages(prev, cur Revision) (findings []Finding, swallowed map[pro
 			})
 		} else {
 			findings = append(findings, Finding{
-				Rule:     "break/package_removed",
+				Rule:     RulePackageRemoved,
 				Category: Wire,
 				Subject:  string(p),
 				Path:     path,
@@ -1069,7 +1077,7 @@ func classifyFiles(changes []Change, prev Revision) []Finding {
 		}
 		if survives {
 			findings = append(findings, Finding{
-				Rule:     "break/file_removed",
+				Rule:     RuleFileRemoved,
 				Category: Source,
 				Subject:  c.Subject,
 				Path:     path,
@@ -1122,7 +1130,7 @@ func classifyGoPackage(prev, cur Revision) []Finding {
 		agp := goPackageOf(after)
 		if bgp != agp {
 			findings = append(findings, Finding{
-				Rule:     "break/go_package_changed",
+				Rule:     RuleGoPackageChanged,
 				Category: Source,
 				Subject:  "file:" + f.Path(),
 				Path:     f.Path(),

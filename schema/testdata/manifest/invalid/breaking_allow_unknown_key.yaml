@@ -1,0 +1,10 @@
+# invalid: note is not a field of a permission entry.
+version: 1
+modules:
+  - path: api
+breaking:
+  allow:
+    - rule: break/message_removed
+      subject: example.orders.v1.Draft
+      reason: dead type
+      note: nope
