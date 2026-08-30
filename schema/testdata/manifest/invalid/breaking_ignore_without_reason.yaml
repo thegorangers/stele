@@ -1,0 +1,10 @@
+# invalid: an ignore list is an off switch over the paths it names, and
+# requires a stated reason on the same terms lowering severity does.
+version: 1
+modules:
+  - path: api
+breaking:
+  rules:
+    - id: break/message_removed
+      ignore:
+        - api/example/internal

@@ -52,7 +52,7 @@
     },
     "breaking": {
       "$ref": "#/$defs/breaking",
-      "description": "Configuration for breaking-change detection.\n\nAbsent means every rule at error over every file this repository owns — the same reasoning as lint's, and for the same reason.\n\nThe parser also checks: at least one of base, rules or allow must be present; no two rule entries may name the same rule; a rule lowered to warning or off must carry a reason; and a permission must carry a reason. The engine additionally refuses a rule id no rule this tool has carries, and refuses a permission's change field being present or absent against what the named rule's discriminant requires — neither is expressible here, because both depend on the fixed set of rules the tool ships with, which is a fact about the binary, not about this file."
+      "description": "Configuration for breaking-change detection.\n\nAbsent means every rule at error over every file this repository owns — the same reasoning as lint's, and for the same reason.\n\nThe parser also checks: at least one of base, rules or allow must be present; no two rule entries may name the same rule; a rule lowered to warning or off must carry a reason; a rule carrying a non-empty ignore list must carry a reason, on the same terms; and a permission must carry a reason. The engine additionally refuses a rule id no rule this tool has carries, and refuses a permission's change field being present or absent against what the named rule's discriminant requires — neither is expressible here, because both depend on the fixed set of rules the tool ships with, which is a fact about the binary, not about this file."
     }
   },
   "$defs": {
@@ -803,12 +803,12 @@
           ]
         },
         "reason": {
-          "description": "Why this rule is lowered. Required when severity is warning or off; not required when it is error, or absent.",
+          "description": "Why this rule is lowered. Required when severity is warning or off, or when ignore is non-empty; not required when severity is error or absent and ignore is empty or absent.",
           "type": "string",
           "minLength": 1
         },
         "ignore": {
-          "description": "Import paths this rule alone is not applied to. Matched exactly as lint.ignore is.",
+          "description": "Import paths this rule alone is not applied to. Matched exactly as lint.ignore is.\n\nAn ignore list is an off switch over the paths it names, on the same terms severity: off is over every path, and requires a reason for the same reason.",
           "type": [
             "array",
             "null"
@@ -820,24 +820,46 @@
           }
         }
       },
-      "if": {
-        "properties": {
-          "severity": {
-            "enum": [
-              "warning",
-              "off"
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "severity": {
+                "enum": [
+                  "warning",
+                  "off"
+                ]
+              }
+            },
+            "required": [
+              "severity"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason"
             ]
           }
         },
-        "required": [
-          "severity"
-        ]
-      },
-      "then": {
-        "required": [
-          "reason"
-        ]
-      }
+        {
+          "if": {
+            "properties": {
+              "ignore": {
+                "type": "array",
+                "minItems": 1
+              }
+            },
+            "required": [
+              "ignore"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ]
     },
     "permission": {
       "title": "permission",

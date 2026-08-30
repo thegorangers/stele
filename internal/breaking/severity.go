@@ -2,6 +2,7 @@ package breaking
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/lint"
@@ -79,11 +80,21 @@ func LoweredNotes(cfg *config.Breaking) []string {
 	}
 	var notes []string
 	for _, r := range cfg.Rules {
-		if r.Severity == "" || r.Severity == rule.SeverityNameError {
-			continue
+		if r.Severity != "" && r.Severity != rule.SeverityNameError {
+			notes = append(notes, fmt.Sprintf(
+				"stele: breaking: the rule %q is %s: %s", r.ID, r.Severity, r.Reason))
 		}
-		notes = append(notes, fmt.Sprintf(
-			"stele: breaking: the rule %q is %s: %s", r.ID, r.Severity, r.Reason))
+		// An ignore list is an off switch over the paths it names, same as
+		// severity: off is over every path, and it gets the same treatment:
+		// named out loud on every run, whether or not it ever silences
+		// anything, rather than left for a reader to find by going and
+		// looking at the manifest. Printed even when severity was already
+		// reported above — the two are independent things a rule config can
+		// say, and a rule can carry both at once.
+		if len(r.Ignore) > 0 {
+			notes = append(notes, fmt.Sprintf(
+				"stele: breaking: the rule %q ignores %s: %s", r.ID, strings.Join(r.Ignore, ", "), r.Reason))
+		}
 	}
 	return notes
 }
@@ -91,20 +102,29 @@ func LoweredNotes(cfg *config.Breaking) []string {
 // AuditLowered is LoweredNotes' superset for `stele breaking --audit`: a
 // rule counts as lowered when its severity is below error, exactly as
 // LoweredNotes already reports, or — even while it stands at error — when
-// its ignore list covers every path in owned, so that no finding of it can
-// ever be produced. Both are the same fact from a reader's point of view:
-// this repository has, in effect, switched the rule off. An audit that a
-// mechanism it does not count (ignore) can zero to nothing is worse than
-// no audit at all — which is why --audit asks this question and the
-// ordinary run does not: LoweredNotes prints on every run, cheaply, before
-// a comparison is even known to be possible, and owned is not always in
-// hand at that point; --audit always runs the full comparison, so owned
-// always is.
+// its ignore list covers every path where that rule actually fired this
+// run, so that every finding it would otherwise have produced was
+// silenced. Both are the same fact from a reader's point of view: this
+// repository has, in effect, switched the rule off.
 //
-// owned is the set of import paths the working revision owns — the paths a
-// rule would check absent its own ignore list — normally Revision.Owned
-// from the current side of the comparison.
-func AuditLowered(cfg *config.Breaking, owned []string) []string {
+// This asks a different, narrower question than "does the ignore list
+// cover every path this repository owns" — a manifest naming one package
+// out of a hundred is not lowered over the other ninety-nine, and asking
+// about all of owned would call it lowered only in the rare case a
+// repository is nearly all ignored. The question that matters is whether
+// the paths this rule would have complained about are exactly the paths
+// silenced, and that is a question only the findings themselves can
+// answer: a path with no finding for this rule was never going to fire
+// regardless of the ignore list, and its absence from the ignore list
+// proves nothing about whether the mechanism did anything.
+//
+// findings is the full set Classify/ClassifyClosure produced, before
+// ApplySeverity has dropped anything an ignore list or severity: off
+// removes — the run always has this in hand by the time --audit's full
+// comparison has happened, unlike LoweredNotes, which is printed before a
+// comparison is even known to be possible and so cannot ask this question
+// at all.
+func AuditLowered(cfg *config.Breaking, findings []Finding) []string {
 	if cfg == nil {
 		return nil
 	}
@@ -114,27 +134,30 @@ func AuditLowered(cfg *config.Breaking, owned []string) []string {
 		case r.Severity != "" && r.Severity != rule.SeverityNameError:
 			notes = append(notes, fmt.Sprintf(
 				"stele: breaking: the rule %q is %s: %s", r.ID, r.Severity, r.Reason))
-		case len(r.Ignore) > 0 && ignoresEverything(r.Ignore, owned):
+		case len(r.Ignore) > 0 && ignoresEveryHit(r.Ignore, r.ID, findings):
 			notes = append(notes, fmt.Sprintf(
-				"stele: breaking: the rule %q is lowered: its ignore list covers every path it would check",
+				"stele: breaking: the rule %q is lowered: its ignore list covers every path where it fired this run",
 				r.ID))
 		}
 	}
 	return notes
 }
 
-// ignoresEverything reports whether ignore covers every one of paths. An
-// empty paths — nothing owned to check — is deliberately not "everything":
-// a rule cannot be said to have silenced itself over a repository that
-// owns no protos for it to check in the first place.
-func ignoresEverything(ignore, paths []string) bool {
-	if len(paths) == 0 {
-		return false
-	}
-	for _, p := range paths {
-		if !lint.Ignores(ignore, p) {
+// ignoresEveryHit reports whether ignore covers the path of every finding
+// of ruleID among findings. No finding of ruleID at all — the rule never
+// had anything to say this run — is deliberately not "everything": a rule
+// cannot be said to have silenced itself over a run it had nothing to
+// report in the first place.
+func ignoresEveryHit(ignore []string, ruleID string, findings []Finding) bool {
+	hit := false
+	for _, f := range findings {
+		if f.Rule != ruleID {
+			continue
+		}
+		hit = true
+		if !lint.Ignores(ignore, f.Path) {
 			return false
 		}
 	}
-	return true
+	return hit
 }

@@ -329,6 +329,16 @@ func (b *Breaking) validateRules() error {
 			// change, for ever, is free.
 			return fmt.Errorf("%s.reason: missing; lowering %s to %s requires a stated reason", field, r.ID, r.Severity)
 		}
+		if len(r.Ignore) > 0 && r.Reason == "" {
+			// An ignore list is an off switch for the paths it names, on the
+			// same terms severity: off is for every path — see The valve in
+			// docs/design/2026-08-28-breaking-change-detection.md. Without
+			// this a repository could silence a rule over exactly the
+			// package that matters, for ever, without writing the sentence
+			// severity: off would have required for the same effect.
+			return fmt.Errorf("%s.reason: missing; %s carries an ignore list, which requires a stated "+
+				"reason on the same terms lowering severity does", field, r.ID)
+		}
 		if err := validateIgnore(fmt.Sprintf("%s.ignore", field), r.Ignore); err != nil {
 			return err
 		}
