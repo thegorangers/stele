@@ -75,7 +75,10 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
   **Versioning.** A new command is `MINOR` on the full scale in
   [RELEASING.md](RELEASING.md); while the major version is 0 that bumps
-  `PATCH`, not `MINOR` — this ships as `v0.3.1`.
+  `PATCH`, not `MINOR`. The exit-status change below is `MAJOR`-class —
+  RELEASING.md's 0.x rule bumps `MINOR` for what would otherwise be
+  `MAJOR` — and the two land together, so `v0.4.0`, the higher of the two
+  bumps, is what this release carries.
 
 - **The valve.** `stele.yaml` gains a `breaking:` block:
 
@@ -146,14 +149,16 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 ### Refused input
 
 - **`stele breaking` now exits non-zero when a finding stands at `error`.**
-  The previous release always exited zero on a finding — that is how it
-  shipped, deliberately, so the valve above and this exit-status change
-  would land together as one announced change rather than two. Under
-  [RELEASING.md](RELEASING.md) a command's exit status for an input that
-  already worked is part of the contract, and this bumps the minor while
-  the major version is 0. **A CI job that passed under the previous release
-  can now fail**, on the first breaking change it finds at `error`
-  severity — which, with no `breaking:` block written, is every rule.
+  `stele breaking` is itself new in this `[Unreleased]` entry, so no
+  release has ever shipped it — but `main` has carried it since the entry
+  above, always exiting zero on a finding, and the valve and this
+  exit-status change land together as one announced change rather than
+  two. Under [RELEASING.md](RELEASING.md) a command's exit status for an
+  input that already worked is part of the contract, and this bumps the
+  minor while the major version is 0. **A build run from `main` that
+  passed before this line can now fail**, on the first breaking change it
+  finds at `error` severity — which, with no `breaking:` block written, is
+  every rule.
 
   To keep such a build passing without reviewing anything, lower the
   rule(s) that are firing, with a reason:
