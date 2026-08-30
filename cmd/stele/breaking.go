@@ -69,6 +69,25 @@ Flags:
                   the file unchanged. A dormant permission — one whose rule
                   is off — is never pruned: raising the rule back to error
                   makes it needed again. Cannot be combined with --audit.
+  --report-only   findings are classified and rendered at their real
+                  severity, but none of them fail the run. A failure to
+                  compare — a shallow clone, an absent base branch, an
+                  unreadable manifest, a dead pin — still fails it: those
+                  say the tool itself is not working in this CI, which is
+                  exactly what a shadow period needs to see immediately,
+                  not two weeks later. Meant for running this command in CI
+                  before a repository gates on it: two weeks of firings,
+                  read and classified by hand as true or false, is the
+                  evidence a historical replay cannot give (see docs/design
+                  /2026-08-28-breaking-change-detection.md, "Evidence").
+                  Command-line only — there is no breaking.report_only in
+                  the manifest, on purpose: this is a property of one run,
+                  not a posture the repository holds. In a file it would
+                  outlive the shadow period it exists for, and it would be
+                  exactly the one-line "protect nothing" switch that a
+                  block-level default was rejected for being. Cannot be
+                  combined with --audit or --prune, whose exit status is
+                  already not about findings.
 `
 
 func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -77,13 +96,14 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	fs.Usage = func() {}
 
 	var (
-		dir      = fs.String("dir", ".", "directory holding stele.yaml")
-		base     = fs.String("base", "", "the base branch to compare against on a topic branch")
-		against  = fs.String("against", "", "compare directly against this revision, no merge-base")
-		cacheDir = fs.String("cache-dir", "", "where fetched repositories are kept")
-		audit    = fs.Bool("audit", false, "report stale and lowered permissions instead of comparing for a merge")
-		prune    = fs.Bool("prune", false, "delete stale permissions from the manifest and nothing else")
-		help     = fs.Bool("help", false, "show this help")
+		dir        = fs.String("dir", ".", "directory holding stele.yaml")
+		base       = fs.String("base", "", "the base branch to compare against on a topic branch")
+		against    = fs.String("against", "", "compare directly against this revision, no merge-base")
+		cacheDir   = fs.String("cache-dir", "", "where fetched repositories are kept")
+		audit      = fs.Bool("audit", false, "report stale and lowered permissions instead of comparing for a merge")
+		prune      = fs.Bool("prune", false, "delete stale permissions from the manifest and nothing else")
+		reportOnly = fs.Bool("report-only", false, "findings never fail the run; a failure to compare still does")
+		help       = fs.Bool("help", false, "show this help")
 	)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -101,6 +121,10 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	if *audit && *prune {
 		return fmt.Errorf("stele breaking: --audit and --prune cannot be combined\n\n%s", breakingUsage)
+	}
+	if *reportOnly && (*audit || *prune) {
+		return fmt.Errorf("stele breaking: --report-only cannot be combined with --audit or --prune; "+
+			"their exit status is already not about findings\n\n%s", breakingUsage)
 	}
 
 	r, err := gitrepo.Open(*dir)
@@ -133,6 +157,7 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			Outcome: breaking.NothingToCompare,
 			Reason: "this revision has no " + lint.ManifestName + ": it predates this repository's " +
 				"adoption of stele, so there are no module roots to check",
+			ReportOnly: *reportOnly,
 		}))
 		return nil
 	} else if statErr != nil {
@@ -203,9 +228,10 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		}
 		if !ok {
 			fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
-				Outcome: breaking.NothingToCompare,
-				Reason:  "there is no previous revision to compare against here",
-				Notes:   notes,
+				Outcome:    breaking.NothingToCompare,
+				Reason:     "there is no previous revision to compare against here",
+				Notes:      notes,
+				ReportOnly: *reportOnly,
 			}))
 			return nil
 		}
@@ -230,10 +256,11 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	if unchanged && !*audit && !*prune {
 		fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
-			Outcome:  breaking.Unchanged,
-			Previous: prev.SHA,
-			Reason:   prev.Reason,
-			Notes:    notes,
+			Outcome:    breaking.Unchanged,
+			Previous:   prev.SHA,
+			Reason:     prev.Reason,
+			Notes:      notes,
+			ReportOnly: *reportOnly,
 		}))
 		return nil
 	}
@@ -247,7 +274,7 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	cur, err := breaking.Load(ctx, r, prev.Working, fetch, false)
 	if err != nil {
 		if errors.Is(err, breaking.ErrNoOwnedProtos) {
-			fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{Outcome: breaking.NoOwnedProtos, Notes: notes}))
+			fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{Outcome: breaking.NoOwnedProtos, Notes: notes, ReportOnly: *reportOnly}))
 			return nil
 		}
 		return err
@@ -257,9 +284,10 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if err != nil {
 		if errors.Is(err, breaking.ErrNoManifest) || errors.Is(err, breaking.ErrNoOwnedProtos) {
 			fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
-				Outcome: breaking.NothingToCompare,
-				Reason:  err.Error(),
-				Notes:   notes,
+				Outcome:    breaking.NothingToCompare,
+				Reason:     err.Error(),
+				Notes:      notes,
+				ReportOnly: *reportOnly,
 			}))
 			return nil
 		}
@@ -291,11 +319,21 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	findings = kept
 
 	fmt.Fprint(stdout, breaking.Render(findings, breaking.Info{
-		Outcome:  breaking.Compared,
-		Previous: prev.SHA,
-		Reason:   prev.Reason,
-		Notes:    notes,
+		Outcome:    breaking.Compared,
+		Previous:   prev.SHA,
+		Reason:     prev.Reason,
+		Notes:      notes,
+		ReportOnly: *reportOnly,
 	}))
+	// --report-only: findings are rendered above at their real severity —
+	// nothing here softens them — but none of them fail the run. A failure
+	// to compare is not affected: it already returned an error above this
+	// point, before there was anything to render, and that path is exactly
+	// what a shadow period needs surfaced immediately rather than swallowed
+	// for two weeks the way allow_failure: true on the job would swallow it.
+	if *reportOnly {
+		return nil
+	}
 	// The valve: a finding standing at error fails the run. A warning
 	// never does, and neither does a stale or dormant permission — those
 	// are notes, not findings, and never reach this slice. The engine has

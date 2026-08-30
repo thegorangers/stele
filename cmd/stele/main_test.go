@@ -2120,3 +2120,160 @@ func TestBreakingRemoteQualifiedBaseNamesTheMistake(t *testing.T) {
 		t.Errorf("the error does not name the mistake and the fix: %v", err)
 	}
 }
+
+// TestBreakingReportOnlyErrorFindingExitsZeroButIsStillRenderedAsError:
+// --report-only is the shadow-period flag — findings are still classified
+// and rendered at their real severity, but none of them fail the run.
+func TestBreakingReportOnlyErrorFindingExitsZeroButIsStillRenderedAsError(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRemoveStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--report-only"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("--report-only must exit zero even on an error finding: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("the finding is missing from the report:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "error") {
+		t.Errorf("the finding must still render at its real severity, error:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "report-only") {
+		t.Errorf("the report does not say the run is report-only:\n%s", out.String())
+	}
+}
+
+// TestBreakingSameFindingWithoutReportOnlyStillFails: the flag is the only
+// difference — the identical input, without --report-only, still exits
+// non-zero on the same finding.
+func TestBreakingSameFindingWithoutReportOnlyStillFails(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingRemoveStatus(t, dir)
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("without --report-only, the same error finding must fail the run:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "report-only") {
+		t.Errorf("an ordinary run must not claim to be report-only:\n%s", out.String())
+	}
+}
+
+// TestBreakingReportOnlyShallowCloneStillFails: a failure to compare is not
+// a finding, and --report-only must not soften it — a shadow period needs
+// this surfaced immediately, not swallowed for two weeks.
+func TestBreakingReportOnlyShallowCloneStillFails(t *testing.T) {
+	origin := breakingRepo(t)
+	breakingWrite(t, origin, "stele.yaml", breakingManifest)
+	breakingWrite(t, origin, "stele.lock", breakingLock)
+	breakingCommit(t, origin, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	parent := filepath.Dir(origin)
+	shallow := filepath.Join(parent, "shallow")
+	cmd := exec.Command("git", "clone", "-q", "--depth", "1", "file://"+origin, shallow)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git clone --depth 1: %v\n%s", err, out)
+	}
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", shallow, "--base", "main", "--report-only"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("--report-only must not turn a shallow clone into a passing run")
+	}
+	if !strings.Contains(err.Error(), "shallow") {
+		t.Errorf("the failure does not name shallowness, not a finding: %v", err)
+	}
+	if strings.Contains(err.Error(), "finding") {
+		t.Errorf("a shallow clone is a failure to compare, not a finding: %v", err)
+	}
+}
+
+// TestBreakingReportOnlyUnreadableManifestStillFails: a manifest that
+// exists but does not parse is a failure to compare, same as shallowness —
+// --report-only must not soften it either.
+func TestBreakingReportOnlyUnreadableManifestStillFails(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", "version: 1\nmodules: [not, valid, :\n")
+	breakingGit(t, dir, "add", ".")
+	breakingGit(t, dir, "commit", "-qm", "malformed manifest")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--report-only"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("--report-only must not turn an unreadable manifest into a passing run:\n%s", out.String())
+	}
+}
+
+// TestBreakingReportOnlyNamesTheModeOnEveryOutcome: a reader must not have
+// to infer the mode from the exit status on ANY outcome — a clean
+// comparison and the tree shortcut included, not only a run with findings.
+func TestBreakingReportOnlyNamesTheModeOnEveryOutcome(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic-clean")
+	breakingCommit(t, dir, "api/example/v1/other.proto", `syntax = "proto3";
+package example.v1;
+
+message Other {
+  int64 id = 1;
+}
+`, "an unrelated, non-breaking addition")
+
+	var cleanOut, errOut strings.Builder
+	if err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--report-only"}, &cleanOut, &errOut); err != nil {
+		t.Fatalf("a clean --report-only run must exit zero: %v\n%s", err, cleanOut.String())
+	}
+	if !strings.Contains(cleanOut.String(), "report-only") {
+		t.Errorf("a clean run does not say it is report-only:\n%s", cleanOut.String())
+	}
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic-shortcut", "main")
+	breakingCommit(t, dir, "README.md", "notes", "outside the watched module and lock paths")
+
+	var shortcutOut strings.Builder
+	if err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--report-only"}, &shortcutOut, &errOut); err != nil {
+		t.Fatalf("the tree-shortcut path must still exit zero under --report-only: %v\n%s", err, shortcutOut.String())
+	}
+	if !strings.Contains(shortcutOut.String(), "unchanged") {
+		t.Errorf("the tree shortcut did not fire as expected:\n%s", shortcutOut.String())
+	}
+	if !strings.Contains(shortcutOut.String(), "report-only") {
+		t.Errorf("the tree-shortcut outcome does not say it is report-only:\n%s", shortcutOut.String())
+	}
+}
+
+// TestBreakingReportOnlyCannotBeSetInManifest: the flag is command-line
+// only. breaking.report_only in stele.yaml must be refused as an unknown
+// key, the same as any other unrecognised field in the breaking block —
+// see internal/config's strict decoding.
+func TestBreakingReportOnlyCannotBeSetInManifest(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  base: main\n  report_only: true\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("breaking.report_only in the manifest must be refused as an unknown key")
+	}
+	if !strings.Contains(err.Error(), "report_only") {
+		t.Errorf("the error does not name the unknown key: %v", err)
+	}
+}

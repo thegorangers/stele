@@ -736,6 +736,48 @@ permissions from the manifest, taking each entry's comments with it, and
 leaves every other byte of the file unchanged; a dormant permission is never
 pruned. `--audit` and `--prune` cannot be combined.
 
+### `--report-only`, for a shadow period
+
+`--report-only` makes findings unable to fail the run — every one of them,
+whatever severity they stand at — while everything else about the report
+stays real: a finding still renders at its true severity, and a failure to
+*compare* still fails the run, because that is not a finding. A shallow
+clone, an absent base branch, an unreadable manifest, a dead pin: those say
+the tool is not working in this CI, and that is exactly what needs to be
+seen immediately, not swallowed for two weeks the way `allow_failure: true`
+on the CI job would swallow it alongside everything else.
+
+```
+$ stele breaking --base master --report-only
+breaking changes compared against b43992ea4f37bdc0116ac912f543ac3d0e4d6734 (merge-base with master):
+
+example/v1/order.proto:5:3: error: break/field_type_changed: (category: source) example.v1.Order.total: field example.v1.Order.total changed type from int32 to int64 (change: int32 -> int64)
+    revert the type, or add a new field instead of changing an existing one's type
+
+report-only: findings never fail this run; a failure to compare still does
+blind zone: this engine does not check json_name renames, int32 widening to int64 under protojson, or google.api.http changes
+```
+
+The exit status is 0 despite the `error` finding above, and the report says
+so on every outcome it produces — a clean comparison and the tree-shortcut
+skip included — so a reader never has to infer the mode from an exit status
+that, on its own, looks identical to a repository with nothing to report.
+
+**This exists for exactly one purpose: running the command in CI before a
+repository gates on it.** Two weeks of firings, read and classified by hand
+as true or false, is the evidence a historical replay of merged history
+cannot give — see the design's Evidence section
+(`docs/design/2026-08-28-breaking-change-detection.md`) for why that replay
+was tried and abandoned in favour of this. It is not a permanent posture,
+and it is deliberately not one: `breaking.report_only` in `stele.yaml` is
+refused as an unknown key, because a shadow period is a property of one run,
+not something a repository decides about itself. In a manifest it would
+outlive the two weeks it exists for, and it would be the one-line "protect
+nothing" switch that a block-level severity default was rejected for being
+in the first place (see [the valve](#the-valve) above). `--report-only`
+cannot be combined with `--audit` or `--prune`; their exit status is already
+about something other than findings.
+
 ### Flags
 
 ```
@@ -753,6 +795,8 @@ Flags:
                   instead of comparing for a merge
   --prune         delete this repository's stale permissions from the
                   manifest and nothing else
+  --report-only   findings never fail the run; a failure to compare still
+                  does. Command-line only — see --report-only above.
 ```
 
 **`--against` is not a substitute for `--base` as a CI default.**
