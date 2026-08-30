@@ -139,6 +139,16 @@ func renderFinding(f Finding) string {
 	} else {
 		message = fmt.Sprintf("(category: %s) %s", categoryName(f.Category), message)
 	}
+	// Change is the discriminant a permission must spell exactly to match
+	// this finding (see Permit, permit.go). It has to be visible in the
+	// rendered line, not only on the struct, or a user has no way to learn
+	// what to copy into an allow[] entry — a mechanism whose input is
+	// invisible is not a mechanism. Folded into the message, like category
+	// and subject above it, rather than a new field on rule.Finding, so
+	// the rendered shape stays path:line:col: severity: rule: message.
+	if f.Change != "" {
+		message = fmt.Sprintf("%s (change: %s)", message, f.Change)
+	}
 
 	rf := rule.Finding{
 		Rule:     f.Rule,
