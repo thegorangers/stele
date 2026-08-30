@@ -1,6 +1,11 @@
 package breaking
 
-import "github.com/thegorangers/stele/internal/config"
+import (
+	"fmt"
+
+	"github.com/thegorangers/stele/internal/config"
+	"github.com/thegorangers/stele/rule"
+)
 
 // Permit applies the working manifest's allow[] list against findings,
 // removing every finding one specific permission approves and reporting
@@ -62,6 +67,52 @@ func Permit(findings []Finding, cfg *config.Breaking) (kept []Finding, stale []c
 // both sides happened to be empty; gating the comparison on HasDiscriminant
 // is what keeps "differs" and "carries none" from collapsing into each
 // other.
+// PermitNotes turns the permissions Permit reported unmatched into the
+// lines a report prints, distinguishing why each matched nothing: the
+// remedy is opposite depending on the reason, and calling both "stale"
+// would tell a reader to delete a permission they still need.
+//
+//   - The permission's rule stands at its default (error) or was lowered to
+//     warning — a finding of that rule could exist, and none of them
+//     matched. The change this permission approved is behind the base:
+//     spent, and the right move is to delete it.
+//   - The permission's rule was set to off in this same manifest — no
+//     finding of that rule can exist at all right now, so "matched
+//     nothing" says nothing about whether the change is still there.
+//     Deleting this one would be wrong: raising the rule back to error
+//     needs it again immediately.
+//
+// cfg is the same working-manifest block Permit was called with; the
+// distinction costs nothing beyond a second look at cfg.Rules, which
+// ApplySeverity has already parsed once for the same manifest.
+func PermitNotes(cfg *config.Breaking, stale []config.Permission) []string {
+	if len(stale) == 0 {
+		return nil
+	}
+	var rules map[string]config.BreakingRule
+	if cfg != nil {
+		rules = make(map[string]config.BreakingRule, len(cfg.Rules))
+		for _, r := range cfg.Rules {
+			rules[r.ID] = r
+		}
+	}
+	notes := make([]string, 0, len(stale))
+	for _, p := range stale {
+		if rc, ok := rules[p.Rule]; ok && rc.Severity == rule.SeverityNameOff {
+			notes = append(notes, fmt.Sprintf(
+				"stele: breaking: the permission for %s on %s is dormant: rule %q is off, not spent; "+
+					"keep it, it will be needed again the moment the rule is raised back to error",
+				p.Rule, p.Subject, p.Rule))
+			continue
+		}
+		notes = append(notes, fmt.Sprintf(
+			"stele: breaking: the permission for %s on %s is stale: it matched nothing; "+
+				"the change it approved is behind the base, so it can be removed",
+			p.Rule, p.Subject))
+	}
+	return notes
+}
+
 func indexOfMatch(allow []config.Permission, f Finding) int {
 	for i, p := range allow {
 		if p.Rule != f.Rule || p.Subject != f.Subject {

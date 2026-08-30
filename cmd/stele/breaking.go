@@ -198,6 +198,13 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	// Severity is resolved against the working manifest only, mf.Breaking —
 	// never prevRev's or cur's, for the reason given above ValidateConfig.
 	findings = breaking.ApplySeverity(findings, mf.Breaking)
+	// Permit runs after ApplySeverity: see its own doc comment for why the
+	// order matters (a permission naming a rule this manifest set to off
+	// must come out dormant, not silently matched against findings that
+	// severity has already dropped).
+	var stale []config.Permission
+	findings, stale = breaking.Permit(findings, mf.Breaking)
+	notes = append(notes, breaking.PermitNotes(mf.Breaking, stale)...)
 
 	fmt.Fprint(stdout, breaking.Render(findings, breaking.Info{
 		Outcome:  breaking.Compared,

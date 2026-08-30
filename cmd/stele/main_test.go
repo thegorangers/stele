@@ -1195,3 +1195,122 @@ func TestBreakingUnchangedTreeWithNothingLoweredSaysNothingExtra(t *testing.T) {
 		t.Errorf("a run with nothing lowered must say nothing extra:\n%s", out.String())
 	}
 }
+
+// TestBreakingMatchingPermissionRemovesFinding is the command-level guard
+// for Permit: this cannot be proven by a unit test on Permit alone, because
+// Permit was wired into runBreaking after the fact — a unit test cannot
+// tell whether anything actually calls it. A permission naming the exact
+// (rule, subject) of a discriminant-less finding makes it disappear from
+// the command's own output, and the run still exits zero.
+func TestBreakingMatchingPermissionRemovesFinding(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  allow:\n    - rule: break/field_removed\n"+
+			"      subject: example.v1.Order.status\n      reason: dropped in the v2 rollout\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a permitted finding must not fail the run: %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("a matching permission must remove the finding from the command's output:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "is stale") || strings.Contains(out.String(), "is dormant") {
+		t.Errorf("a matched permission must not be reported at all:\n%s", out.String())
+	}
+}
+
+// TestBreakingMismatchedChangePermissionLeavesFindingAndReportsStale pins
+// the negative half of the same wiring: a permission whose change differs
+// from the finding's must not remove it, and the permission itself comes
+// back named as stale — spent, worth deleting — because its rule stands at
+// error and a finding of it could have matched.
+func TestBreakingMismatchedChangePermissionLeavesFindingAndReportsStale(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  allow:\n    - rule: break/field_type_changed\n"+
+			"      subject: example.v1.Order.status\n      change: string -> bytes\n"+
+			"      reason: was already approved for a different change\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+  int32 status = 2;
+}
+`, "retype status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("the command still exits zero: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1.Order.status") ||
+		!strings.Contains(out.String(), ": error: break/field_type_changed:") {
+		t.Errorf("the finding must still stand: the permission's change does not match:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "string -> int32") {
+		t.Errorf("the rendered finding must carry the discriminant, spelled as a permission must spell it:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "is stale") {
+		t.Errorf("the unmatched permission must be reported stale:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "is dormant") {
+		t.Errorf("this permission's rule is at error, not off: it must not be called dormant:\n%s", out.String())
+	}
+}
+
+// TestBreakingDormantPermissionOnOffRuleIsNotCalledStale is the other half
+// of the stale/dormant distinction: a permission naming a rule this same
+// manifest set to off matches nothing too, but for a different reason — no
+// finding of that rule can exist at all right now. Deleting it would be
+// wrong, so it must come back worded as dormant, never stale.
+func TestBreakingDormantPermissionOnOffRuleIsNotCalledStale(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  rules:\n    - id: break/field_removed\n      severity: off\n      reason: known and accepted\n"+
+			"  allow:\n    - rule: break/field_removed\n"+
+			"      subject: example.v1.Order.status\n      reason: kept for when the rule is raised again\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "api/example/v1/order.proto", `syntax = "proto3";
+package example.v1;
+
+message Order {
+  int64 id = 1;
+}
+`, "remove status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a dormant permission must not fail the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "is dormant") {
+		t.Errorf("the permission for an off rule must be reported dormant:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "is stale") {
+		t.Errorf("a dormant permission must never be worded as stale: a reader would delete what they still need:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "break/field_removed") {
+		t.Errorf("the dormant note must name the rule:\n%s", out.String())
+	}
+}
