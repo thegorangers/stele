@@ -1,0 +1,24 @@
+version: 1
+modules:
+  - path: api
+breaking:
+  base: master
+  rules:
+    - id: break/field_type_changed
+      severity: off
+      reason: consumers pin us at fixed points; a type change never lands unnoticed
+    - id: break/field_renamed
+      severity: warning
+      reason: source-only, on a probationary period while adoption completes
+      ignore:
+        - api/example/internal
+    - id: break/message_removed
+      severity: error
+  allow:
+    - rule: break/field_type_changed
+      subject: example.orders.v1.Order.total
+      change: int32 -> int64
+      reason: widening; no consumer stores this in a 32-bit field
+    - rule: break/message_removed
+      subject: example.orders.v1.Draft
+      reason: dead type, never shipped to a consumer

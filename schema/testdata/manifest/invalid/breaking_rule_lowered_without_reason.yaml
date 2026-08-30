@@ -1,0 +1,8 @@
+# invalid: lowering a rule to warning requires a stated reason.
+version: 1
+modules:
+  - path: api
+breaking:
+  rules:
+    - id: break/message_removed
+      severity: warning

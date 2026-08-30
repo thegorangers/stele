@@ -120,7 +120,10 @@ func (f *File) validate() error {
 			}
 		}
 	}
-	return f.Lint.validate()
+	if err := f.Lint.validate(); err != nil {
+		return err
+	}
+	return f.Breaking.validate()
 }
 
 // validate checks the lint block.
@@ -261,6 +264,141 @@ func checkLintRuleID(id string) error {
 	if err := rule.CheckID(id); err != nil {
 		return fmt.Errorf("%w; write it as namespace/name, such as %s/enum_value_prefix",
 			err, rule.NamespaceBuiltin)
+	}
+	return nil
+}
+
+// BreakingRuleFact is what this package needs to know about one
+// breaking-change rule to validate a manifest against it: that it exists,
+// and whether a permission against it must carry a change.
+//
+// It restates two fields of internal/breaking's RuleInfo rather than
+// importing that type, and RegisterBreakingRuleFacts below restates the
+// same two fields as a function signature rather than taking a RuleInfo
+// slice directly — both for the same reason: internal/breaking already
+// imports this package (to load a manifest when resolving a previous
+// revision), so this package cannot import internal/breaking back without
+// a cycle. The values still come from exactly one place, breaking.Rules();
+// this type only lets them cross the boundary without a second import.
+type BreakingRuleFact struct {
+	ID              string
+	HasDiscriminant bool
+}
+
+// breakingRuleFacts is the set RegisterBreakingRuleFacts last supplied, or
+// nil if nothing has. A nil map means existence is not checked here — the
+// same posture Lint takes for its own rule ids, which are checked for shape
+// in this package and for existence wherever the rules that are loaded are
+// known.
+var breakingRuleFacts map[string]BreakingRuleFact
+
+// RegisterBreakingRuleFacts supplies the set of breaking-change rules that
+// breaking.rules and breaking.allow entries are validated against. See
+// BreakingRuleFact for why this is an injected set instead of a direct
+// import of internal/breaking's registry.
+func RegisterBreakingRuleFacts(facts []BreakingRuleFact) {
+	m := make(map[string]BreakingRuleFact, len(facts))
+	for _, f := range facts {
+		m[f.ID] = f
+	}
+	breakingRuleFacts = m
+}
+
+// checkBreakingRuleID checks the shape of a breaking-change rule id. Whether
+// a rule of that id exists is answered by breakingRuleFacts when it has been
+// populated, for the reason BreakingRuleFact documents.
+func checkBreakingRuleID(id string) error {
+	if err := rule.CheckID(id); err != nil {
+		return fmt.Errorf("%w; write it as namespace/name, such as break/message_removed", err)
+	}
+	return nil
+}
+
+// validate checks the breaking block.
+func (b *Breaking) validate() error {
+	if b == nil {
+		return nil
+	}
+	if b.Base == "" && len(b.Rules) == 0 && len(b.Allow) == 0 {
+		// As with lint: a block that configures nothing reads as if it
+		// configured something.
+		return fmt.Errorf("breaking: at least one of base, rules or allow is required")
+	}
+	if err := b.validateRules(); err != nil {
+		return err
+	}
+	return b.validateAllow()
+}
+
+func (b *Breaking) validateRules() error {
+	seen := make(map[string]int, len(b.Rules))
+	for i, r := range b.Rules {
+		field := fmt.Sprintf("breaking.rules[%d]", i)
+		if r.ID == "" {
+			return fmt.Errorf("%s.id: missing", field)
+		}
+		if err := checkBreakingRuleID(r.ID); err != nil {
+			return fmt.Errorf("%s.id: %w", field, err)
+		}
+		if breakingRuleFacts != nil {
+			if _, known := breakingRuleFacts[r.ID]; !known {
+				return fmt.Errorf("%s.id: %s is not a rule this tool has", field, r.ID)
+			}
+		}
+		if first, dup := seen[r.ID]; dup {
+			return fmt.Errorf("%s.id: duplicate configuration for %s, already set by breaking.rules[%d]; "+
+				"a rule has one severity, and the tool cannot honour two", field, r.ID, first)
+		}
+		seen[r.ID] = i
+		if r.Severity != "" && !slices.Contains(BreakingSeverities, r.Severity) {
+			return fmt.Errorf("%s.severity: %q is not a severity; write one of %s",
+				field, r.Severity, strings.Join(BreakingSeverities, ", "))
+		}
+		if (r.Severity == rule.SeverityNameWarning || r.Severity == rule.SeverityNameOff) && r.Reason == "" {
+			// Lowering a rule requires a reason, on the same terms a
+			// permission does: otherwise approving one change is gated on a
+			// stated reason while switching the rule off for every future
+			// change, for ever, is free.
+			return fmt.Errorf("%s.reason: missing; lowering %s to %s requires a stated reason", field, r.ID, r.Severity)
+		}
+		if err := validateIgnore(fmt.Sprintf("%s.ignore", field), r.Ignore); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Breaking) validateAllow() error {
+	for i, p := range b.Allow {
+		field := fmt.Sprintf("breaking.allow[%d]", i)
+		if p.Rule == "" {
+			return fmt.Errorf("%s.rule: missing", field)
+		}
+		if err := checkBreakingRuleID(p.Rule); err != nil {
+			return fmt.Errorf("%s.rule: %w", field, err)
+		}
+		if p.Subject == "" {
+			return fmt.Errorf("%s.subject: missing", field)
+		}
+		if p.Reason == "" {
+			// A permission with no stated reason cannot be told from a
+			// workaround six months later.
+			return fmt.Errorf("%s.reason: missing", field)
+		}
+		fact, known := breakingRuleFacts[p.Rule]
+		if breakingRuleFacts != nil && !known {
+			return fmt.Errorf("%s.rule: %s is not a rule this tool has", field, p.Rule)
+		}
+		if known {
+			switch {
+			case fact.HasDiscriminant && p.Change == "":
+				return fmt.Errorf("%s.change: missing; %s carries a discriminant beyond its subject, and a "+
+					"permission without it is refused rather than treated as matching anything", field, p.Rule)
+			case !fact.HasDiscriminant && p.Change != "":
+				return fmt.Errorf("%s.change: %q is written, but %s has no discriminant beyond its subject; "+
+					"removals have nothing to discriminate on beyond the subject itself", field, p.Change, p.Rule)
+			}
+		}
 	}
 	return nil
 }

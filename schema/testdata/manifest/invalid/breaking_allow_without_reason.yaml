@@ -1,0 +1,8 @@
+# invalid: a permission requires a reason.
+version: 1
+modules:
+  - path: api
+breaking:
+  allow:
+    - rule: break/message_removed
+      subject: example.orders.v1.Draft

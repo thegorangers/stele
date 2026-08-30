@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/thegorangers/stele/internal/breaking"
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/lint"
 	"github.com/thegorangers/stele/internal/lockfile"
@@ -18,6 +19,20 @@ import (
 	"github.com/thegorangers/stele/schema"
 	"gopkg.in/yaml.v3"
 )
+
+// The corpus exercises the parser's refusal of a breaking-rule id no rule
+// this tool has carries, and of a permission's change field against what the
+// named rule's discriminant requires. Both checks are wired at init rather
+// than by a direct import inside internal/config — see
+// config.BreakingRuleFact for why.
+func init() {
+	rules := breaking.Rules()
+	facts := make([]config.BreakingRuleFact, len(rules))
+	for i, r := range rules {
+		facts[i] = config.BreakingRuleFact{ID: r.ID, HasDiscriminant: r.HasDiscriminant}
+	}
+	config.RegisterBreakingRuleFacts(facts)
+}
 
 // The corpus is one set of example files per described format, split by what
 // the two checkers are expected to say about it:

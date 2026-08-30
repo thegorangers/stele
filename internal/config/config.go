@@ -20,6 +20,11 @@ type File struct {
 	// Lint configures the contract lint. Absent means every rule at its own
 	// default over every file this repository owns.
 	Lint *Lint `yaml:"lint"`
+	// Breaking configures breaking-change detection. Absent means every rule
+	// at error over every file this repository owns — the same reasoning as
+	// Lint's, and for the same reason: a tool that had to be switched on
+	// would be switched on by the repositories that need it least.
+	Breaking *Breaking `yaml:"breaking"`
 }
 
 // Module is a proto module owned by this repository.
@@ -338,6 +343,68 @@ type LintRule struct {
 	// Ignore lists import paths this rule alone is not applied to.
 	Ignore []string `yaml:"ignore"`
 }
+
+// Breaking configures breaking-change detection.
+//
+// The block is optional, and its absence means every rule at error over every
+// file this repository owns — not a detector that does nothing. See Lint's
+// doc comment; the reasoning is the same one, restated because it governs
+// this block too.
+type Breaking struct {
+	// Base is the base branch a revision is compared against.
+	Base string `yaml:"base"`
+	// Rules is what this repository says about individual rules.
+	Rules []BreakingRule `yaml:"rules"`
+	// Allow is the individual changes this repository has approved, each
+	// against a rule that otherwise stands.
+	Allow []Permission `yaml:"allow"`
+}
+
+// BreakingRule is what a repository says about one breaking-change rule.
+type BreakingRule struct {
+	// ID names the rule. An ID no rule carries is an error naming it: the two
+	// ways that happens are a typo and a rule that has been removed, and both
+	// mean this file claims a protection that does not exist.
+	ID string `yaml:"id"`
+	// Severity is what a finding of this rule costs: error, warning or off.
+	// Empty means error, which is what an unconfigured rule already is.
+	Severity string `yaml:"severity"`
+	// Reason is required when Severity lowers the rule below error.
+	//
+	// Without this the mechanism is inverted: approving one change would be
+	// gated on a stated reason while switching the rule off for every future
+	// change, for ever, would be free. The larger concession is the one that
+	// needs the sentence.
+	Reason string `yaml:"reason"`
+	// Ignore lists import paths this rule alone is not applied to.
+	Ignore []string `yaml:"ignore"`
+}
+
+// Permission is one specific change this repository has approved against a
+// rule that otherwise stands at its configured severity.
+type Permission struct {
+	// Rule names the rule this permission is against.
+	Rule string `yaml:"rule"`
+	// Subject names what changed: the full name of the declaration.
+	Subject string `yaml:"subject"`
+	// Change is the discriminant beyond Subject — the pair of types, the
+	// destination oneof, the direction of a cardinality change — for a rule
+	// that carries one. Required for such a rule, and refused for a rule that
+	// carries none, because a removal has no attribute beyond its subject to
+	// discriminate on.
+	Change string `yaml:"change"`
+	// Reason is required: a permission with no stated reason cannot be told
+	// from a workaround six months later.
+	Reason string `yaml:"reason"`
+}
+
+// BreakingSeverities are the accepted spellings of BreakingRule.Severity, in
+// the order an error message should list them.
+//
+// They are deliberately the same spellings LintSeverities uses: two
+// vocabularies for one question — what does this repository do about this
+// rule — would be two sets of mistakes to make.
+var BreakingSeverities = LintSeverities
 
 // LintSeverities are the accepted spellings of LintRule.Severity, in the order
 // an error message should list them.

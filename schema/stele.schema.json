@@ -49,6 +49,10 @@
     "lint": {
       "$ref": "#/$defs/lint",
       "description": "Configuration for `stele lint`.\n\nAbsent means every rule at its own default over every file this repository owns — not a lint that does nothing.\n\nThe parser also checks: at least one of ignore or rules must be present, and no two rule entries may name the same rule. The lint engine additionally refuses a rule id no loaded rule carries, which this schema cannot express because third-party rules are loaded at run time."
+    },
+    "breaking": {
+      "$ref": "#/$defs/breaking",
+      "description": "Configuration for breaking-change detection.\n\nAbsent means every rule at error over every file this repository owns — the same reasoning as lint's, and for the same reason.\n\nThe parser also checks: at least one of base, rules or allow must be present; no two rule entries may name the same rule; a rule lowered to warning or off must carry a reason; and a permission must carry a reason. The engine additionally refuses a rule id no rule this tool has carries, and refuses a permission's change field being present or absent against what the named rule's discriminant requires — neither is expressible here, because both depend on the fixed set of rules the tool ships with, which is a fact about the binary, not about this file."
     }
   },
   "$defs": {
@@ -732,6 +736,148 @@
               }
             }
           ]
+        }
+      }
+    },
+    "breaking": {
+      "title": "breaking",
+      "description": "What this repository says about breaking-change detection.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "description": "The base branch a revision is compared against.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "master"
+          ]
+        },
+        "rules": {
+          "description": "What this repository says about individual rules. A rule not named here runs at error over every file.\n\nThe parser also checks: no two entries may name the same rule.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/breaking_rule"
+          }
+        },
+        "allow": {
+          "description": "Individual changes this repository has approved, each against a rule that otherwise stands at its configured severity.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/permission"
+          }
+        }
+      },
+      "minProperties": 1
+    },
+    "breaking_rule": {
+      "title": "breaking rule",
+      "description": "What this repository says about one breaking-change rule.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "description": "The rule, as `namespace/name`. The rules this tool ships with live in the `break` namespace. Run `stele breaking --rules` for the list.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*/[a-z0-9][a-z0-9_]*$",
+          "examples": [
+            "break/field_type_changed",
+            "break/message_removed"
+          ]
+        },
+        "severity": {
+          "description": "What a finding of this rule costs.\n\n`error` fails the run and is what an unconfigured rule already is. `warning` reports the finding and lets the run pass. `off` does not run the rule at all.\n\nLowering a rule to warning or off requires a reason, on the same terms a permission does: otherwise approving one change would be gated on a stated reason while switching the rule off for every future change, for ever, would be free.\n\nNote that YAML reads a bare off as false, so it must be quoted.",
+          "enum": [
+            "error",
+            "warning",
+            "off"
+          ]
+        },
+        "reason": {
+          "description": "Why this rule is lowered. Required when severity is warning or off; not required when it is error, or absent.",
+          "type": "string",
+          "minLength": 1
+        },
+        "ignore": {
+          "description": "Import paths this rule alone is not applied to. Matched exactly as lint.ignore is.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^*?\\[]+$"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "severity": {
+            "enum": [
+              "warning",
+              "off"
+            ]
+          }
+        },
+        "required": [
+          "severity"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
+    },
+    "permission": {
+      "title": "permission",
+      "description": "One specific change this repository has approved against a rule that otherwise stands at its configured severity.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "subject",
+        "reason"
+      ],
+      "properties": {
+        "rule": {
+          "description": "The rule this permission is against.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*/[a-z0-9][a-z0-9_]*$",
+          "examples": [
+            "break/field_type_changed"
+          ]
+        },
+        "subject": {
+          "description": "The full name of the declaration that changed.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "example.orders.v1.Order.total"
+          ]
+        },
+        "change": {
+          "description": "The discriminant beyond subject — the pair of types, the destination oneof, the direction of a cardinality change — for a rule that carries one. Required for such a rule and refused for a rule that carries none (a removal has no attribute beyond its subject to discriminate on), which this schema cannot express because it depends on the fixed set of rules the tool ships with, a fact about the binary rather than about this file.",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "int32 -> int64"
+          ]
+        },
+        "reason": {
+          "description": "Why this change was approved. Required: a permission with no stated reason cannot be told from a workaround six months later.",
+          "type": "string",
+          "minLength": 1
         }
       }
     }
