@@ -204,6 +204,27 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   still reports nothing, because the resolved names are unchanged even
   though `oneof_index` shifts.
 
+- **`stele breaking` no longer fails on a working revision with no
+  `stele.yaml`.** A branch cut before its repository adopted `stele` carries
+  no manifest at its tip; the run used to exit non-zero with a bare `open
+  stele.yaml: no such file or directory`, and that fired on every such
+  branch on the day a repository switched the check on, whether or not the
+  branch touched a proto file. It now reports `nothing to compare`, exits
+  zero, and says plainly that the revision predates the repository's
+  adoption of `stele` — the same treatment the previous revision already
+  received in this case. A manifest that exists but fails to parse is
+  unaffected and still fails the run; a manifest with no `modules:` is
+  unaffected and still reports owning no protos. `--audit` and `--prune`
+  take the same exit: there is no manifest for either to act on.
+
+- **`--base origin/master` now names the mistake instead of surfacing git's
+  error.** `--base` and `breaking.base` take a branch name, fetched as
+  `refs/heads/<name>`; a remote-qualified value — what `git branch -r`
+  prints — sent the tool looking for a ref that does not exist and failed
+  with a confusing `fatal: couldn't find remote ref refs/heads/origin/
+  master`. It is now refused up front with a message naming the value given
+  and the branch name to pass instead.
+
 ### Reports and messages
 
 - **Every `stele breaking` report ends with the blind zone**, naming three

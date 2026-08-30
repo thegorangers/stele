@@ -2031,3 +2031,92 @@ func TestBreakingPruneOfLastEntryRemovesAllowKey(t *testing.T) {
 		t.Errorf("--prune must remove the allow: key entirely once it holds nothing:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestBreakingWorkingRevisionNoManifestExitsZeroAndSaysWhy: a branch cut
+// before its repository adopted stele carries no stele.yaml at its tip. That
+// is not a failure to compare, the same way a previous revision with no
+// manifest is not: there are no module roots to check and no configuration
+// to read. The run must exit zero and say plainly that this revision
+// predates adoption, not print a bare "nothing to compare" a reader would
+// wonder about.
+func TestBreakingWorkingRevisionNoManifestExitsZeroAndSaysWhy(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingCommit(t, dir, "README.md", "notes", "pre-adoption commit, no stele.yaml at all")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a working revision with no manifest must exit zero: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "nothing to compare") {
+		t.Errorf("the report does not say there was nothing to compare:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "adopt") {
+		t.Errorf("the report does not say this revision predates adoption:\n%s", out.String())
+	}
+}
+
+// TestBreakingWorkingRevisionMalformedManifestStillFails: a manifest that
+// exists but does not parse is a real failure, not the benign "no manifest
+// at all" case above — only the manifest's absence is forgiven.
+func TestBreakingWorkingRevisionMalformedManifestStillFails(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", "version: 1\nmodules: [not, valid, :\n")
+	breakingGit(t, dir, "add", ".")
+	breakingGit(t, dir, "commit", "-qm", "malformed manifest")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("a malformed manifest must still fail the run:\n%s", out.String())
+	}
+}
+
+// TestBreakingWorkingRevisionNoModulesStillReportsNoOwnedProtos: a manifest
+// present with no modules: is the existing, separate "owns no protos"
+// outcome and must stay unchanged by the no-manifest fix above.
+func TestBreakingWorkingRevisionNoModulesStillReportsNoOwnedProtos(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingWrite(t, dir, "stele.yaml", "version: 1\n")
+	breakingWrite(t, dir, "stele.lock", "version: 1\ndeps: []\n")
+	breakingGit(t, dir, "add", ".")
+	breakingGit(t, dir, "commit", "-qm", "manifest with no modules")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("owning no protos must exit zero: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "no owned protos") {
+		t.Errorf("the report does not say it owns no protos:\n%s", out.String())
+	}
+}
+
+// TestBreakingRemoteQualifiedBaseNamesTheMistake: --base origin/master is
+// the obvious mistake to make — the value is a branch name, not a
+// remote-tracking ref, and the tool otherwise surfaces a confusing git
+// error about refs/heads/origin/master not existing. The message must name
+// the mistake and say what to pass instead.
+func TestBreakingRemoteQualifiedBaseNamesTheMistake(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "origin/main"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("a remote-qualified --base must be refused: %s", out.String())
+	}
+	if !strings.Contains(err.Error(), "origin/main") || !strings.Contains(err.Error(), "--base main") {
+		t.Errorf("the error does not name the mistake and the fix: %v", err)
+	}
+}
