@@ -1144,3 +1144,54 @@ message Order {
 		t.Errorf("the finding is not marked as an error:\n%s", out.String())
 	}
 }
+
+// TestBreakingUnchangedTreeStillAnnouncesLoweredRule: the tree-shortcut path
+// (TestBreakingCleanRunExitsZero) is measured at 84.7% of base-branch
+// commits in the fleet, and it is exactly the run where a reader is most
+// likely to assume protection is in force, because nothing else is
+// reported. A rule this repository turned off must still be named here,
+// not only on a run that happened to compare something.
+func TestBreakingUnchangedTreeStillAnnouncesLoweredRule(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  rules:\n    - id: break/field_removed\n      severity: off\n      reason: known and accepted\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a clean run must exit zero: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "unchanged") {
+		t.Errorf("a clean run does not say so:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "break/field_removed") || !strings.Contains(out.String(), "known and accepted") {
+		t.Errorf("the tree-shortcut run does not announce the lowered rule and its reason:\n%s", out.String())
+	}
+}
+
+// TestBreakingUnchangedTreeWithNothingLoweredSaysNothingExtra is the
+// negative of the test above: on the same tree-shortcut path, a manifest
+// with no breaking block prints no severity-related note.
+func TestBreakingUnchangedTreeWithNothingLoweredSaysNothingExtra(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a clean run must exit zero: %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "break/") {
+		t.Errorf("a run with nothing lowered must say nothing extra:\n%s", out.String())
+	}
+}
