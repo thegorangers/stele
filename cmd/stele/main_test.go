@@ -1719,3 +1719,144 @@ func TestBreakingPruneRemovesOnlyStaleAndLeavesEveryOtherByteUnchanged(t *testin
 		t.Errorf("--prune must remove exactly the stale entry and leave everything else byte-identical:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestBreakingPruneRemovesCommentAboveDeletedEntryAndKeepsCommentAboveRetainedEntry
+// is fix round 1's central regression test: a comment sitting directly
+// above a stale entry describes that entry, and leaving it behind when the
+// entry is pruned would misdescribe whatever permission a future edit adds
+// under the same key — the valve's whole defence (concessions land in a
+// diff a reviewer can read) inverted into a comment nobody wrote lying
+// about what is there. The comment must go with its entry. A comment above
+// an entry that survives pruning (here: dormant, so it is not touched at
+// all) must stay exactly where it was.
+func TestBreakingPruneRemovesCommentAboveDeletedEntryAndKeepsCommentAboveRetainedEntry(t *testing.T) {
+	dir := breakingRepo(t)
+	manifest := breakingManifest +
+		"breaking:\n" +
+		"  rules:\n" +
+		"    - id: break/field_removed\n" +
+		"      severity: off\n" +
+		"      reason: known and accepted\n" +
+		"  allow:\n" +
+		"    # discussed in review: nobody reads this field\n" +
+		"    - rule: break/field_type_changed\n" +
+		"      subject: example.v1.Order.total\n" +
+		"      change: int32 -> int64\n" +
+		"      reason: widening; no consumer stores this in a 32-bit field\n" +
+		"    # kept for when the rule is raised again\n" +
+		"    - rule: break/field_removed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      reason: kept for when the rule is raised again\n"
+	breakingWrite(t, dir, "stele.yaml", manifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--prune"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("--prune must succeed: %v\n%s", err, out.String())
+	}
+
+	want := breakingManifest +
+		"breaking:\n" +
+		"  rules:\n" +
+		"    - id: break/field_removed\n" +
+		"      severity: off\n" +
+		"      reason: known and accepted\n" +
+		"  allow:\n" +
+		"    # kept for when the rule is raised again\n" +
+		"    - rule: break/field_removed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      reason: kept for when the rule is raised again\n"
+
+	got, err := os.ReadFile(filepath.Join(dir, "stele.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("--prune must delete a pruned entry's own comment and leave a retained entry's comment untouched:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestBreakingPruneDoesNotTouchCommentAboveDormantPermission is the
+// negative half: a dormant permission is not pruned at all, so nothing
+// about it — including a comment naming why it is kept — may change. The
+// manifest here has no stale entry at all, so a correct --prune leaves the
+// file completely untouched.
+func TestBreakingPruneDoesNotTouchCommentAboveDormantPermission(t *testing.T) {
+	dir := breakingRepo(t)
+	manifest := breakingManifest +
+		"breaking:\n" +
+		"  rules:\n" +
+		"    - id: break/field_removed\n" +
+		"      severity: off\n" +
+		"      reason: known and accepted\n" +
+		"  allow:\n" +
+		"    # kept for when the rule is raised again\n" +
+		"    - rule: break/field_removed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      reason: kept for when the rule is raised again\n"
+	breakingWrite(t, dir, "stele.yaml", manifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--prune"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("--prune must succeed: %v\n%s", err, out.String())
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "stele.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != manifest {
+		t.Errorf("--prune must not touch a dormant permission or its comment:\ngot:\n%s\nwant (unchanged):\n%s", got, manifest)
+	}
+}
+
+// TestBreakingPruneOfLastEntryRemovesAllowKey: pruning every entry of
+// breaking.allow must remove the allow: key itself, not leave it bare —
+// a bare key would hold the next comment written under it the same way a
+// stale comment above a deleted entry would.
+func TestBreakingPruneOfLastEntryRemovesAllowKey(t *testing.T) {
+	dir := breakingRepo(t)
+	manifest := breakingManifest +
+		"breaking:\n" +
+		"  base: main\n" +
+		"  allow:\n" +
+		"    - rule: break/field_type_changed\n" +
+		"      subject: example.v1.Order.total\n" +
+		"      change: int32 -> int64\n" +
+		"      reason: widening; no consumer stores this in a 32-bit field\n"
+	breakingWrite(t, dir, "stele.yaml", manifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--prune"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("--prune must succeed: %v\n%s", err, out.String())
+	}
+
+	want := breakingManifest +
+		"breaking:\n" +
+		"  base: main\n"
+
+	got, err := os.ReadFile(filepath.Join(dir, "stele.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("--prune must remove the allow: key entirely once it holds nothing:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
