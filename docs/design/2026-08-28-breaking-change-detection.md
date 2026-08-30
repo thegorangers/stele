@@ -333,10 +333,18 @@ would be free. The larger concession is the one that needs the sentence.
 loud rather than left in a file somebody has to go and read. A repository may
 protect nothing; it may not do so quietly.
 
-The run's exit status is non-zero when a finding stands at `error` — and also
-when a rule failed to run at all, whatever severity it was configured at, because
-a rule that never reached a finding has said nothing about this repository.
-`severity: off` silences a rule's findings, not its failures.
+The run's exit status is non-zero when a finding stands at `error`.
+
+An earlier draft of this section also said that a rule which failed to run fails
+the run whatever severity it was configured at, on the principle that `off`
+silences a rule's findings and not its failures. The principle is right and the
+sentence was struck, because the engine has no notion of a rule failing: rules
+run inline over a descriptor diff, with no per-rule dispatch and no plugin
+boundary, and nothing in the tree recovers a panic — so a rule that breaks exits
+non-zero as a crash rather than being swallowed into a clean-looking report. The
+sentence promised a mechanism that does not exist and was not needed. It becomes
+needed the day breaking rules gain a host the way lint rules have one, and that
+is the day to write it.
 
 **An earlier revision refused per-rule configuration**, arguing that "breaks
 consumers, but only a warning" is `allow_failure: true` with more steps. That
