@@ -62,6 +62,29 @@ jobs:
       - name: Measure parity
         uses: ./.github/actions/parity
 
+  # govulncheck needs the network, to fetch the vulnerability database, so it
+  # cannot live in build-and-test alongside the hermetic checks CONTRIBUTING.md
+  # promises run without one. It reads the module graph and reports only
+  # vulnerabilities on a call path this tool actually ships — not merely a
+  # dependency with an advisory open — so unlike a bare `go list -m all`
+  # dependency scan it stays low-noise enough to fail the build rather than
+  # only report. A finding here is real work, not a false alarm to triage.
+  vulnerabilities:
+    name: reachable known vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   # The AIP inventory is derived from an external corpus, so the question
   # "has upstream moved" needs the network and the question "have we said
   # what we think about every AIP" does not. Only the first is here; the
