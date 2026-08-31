@@ -1,3 +1,18 @@
 /.idea/
 /stele
 /dist/
+
+# Working artefacts, deliberately not published.
+#
+# docs/design/plans held implementation plans: task lists addressed to whoever
+# was building a thing, not to anyone reading the project. A plan goes stale the
+# moment it is executed — both of the ones removed here described tasks that
+# were dropped or reshaped while they were being carried out — so publishing one
+# offers a reader an account of intent that the code beside it contradicts. What
+# was durable in them, the reasoning for a decision, belongs in docs/design and
+# in commit messages, and is already there.
+/docs/design/plans/
+# Scratch belonging to whatever tooling somebody builds with. This is stated
+# here rather than left to a .gitignore that a tool happens to drop inside its
+# own directory: that works only for the directory names the tool uses today.
+/.superpowers/
