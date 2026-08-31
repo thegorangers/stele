@@ -114,6 +114,16 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      # goreleaser's sboms section shells out to syft; unlike cosign it is
+      # not bundled in, so it needs its own install step. Pinned exactly,
+      # for the same reason govulncheck is pinned in ci.yml: a floating
+      # syft version could change what a release's SBOM says about
+      # unchanged code, without anything in this repository moving.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.51.0
+
       # Pinned exactly, like the Go version and for a weaker version of the
       # same reason. goreleaser does not compile anything — the bytes of a
       # binary come from the toolchain, and are the same as a plain
@@ -192,16 +202,23 @@ jobs:
       - name: The published bytes are the bytes that were checked
         run: |
           set -euo pipefail
-          # dist/SHA256SUMS names the archived binaries; /tmp/first.txt names
-          # the same bytes under their per-target build paths. Compare the
-          # digest sets.
+          # /tmp/first.txt names the four binaries built (twice) and compared
+          # above. dist/SHA256SUMS names those same binaries plus their SBOMs,
+          # which are generated only here, during release, and were never
+          # part of the reproducibility check — a CycloneDX document carries
+          # its own generation timestamp, so asking it to reproduce byte for
+          # byte would be asking the wrong question. The check is therefore
+          # that the verified binary digests are a SUBSET of what shipped,
+          # not that the two sets are equal.
           cut -d' ' -f1 /tmp/first.txt | sort >/tmp/a
           cut -d' ' -f1 dist/SHA256SUMS | sort >/tmp/b
-          if ! diff -u /tmp/a /tmp/b; then
-            echo "the published binaries are not the ones that were verified" >&2
+          missing="$(comm -23 /tmp/a /tmp/b)"
+          if [ -n "$missing" ]; then
+            echo "binaries verified by the reproducibility check are missing from the published SHA256SUMS:" >&2
+            echo "$missing" >&2
             exit 1
           fi
-          echo "published digests match the verified build"
+          echo "published digests include every binary that was verified"
 
       - name: Say how to verify what was published
         env:
