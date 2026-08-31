@@ -115,9 +115,14 @@ jobs:
         uses: sigstore/cosign-installer@v3
 
       # goreleaser's sboms section shells out to syft; unlike cosign it is
-      # not bundled in, so it needs its own install step.
+      # not bundled in, so it needs its own install step. Pinned exactly,
+      # for the same reason govulncheck is pinned in ci.yml: a floating
+      # syft version could change what a release's SBOM says about
+      # unchanged code, without anything in this repository moving.
       - name: Install syft
         uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v1.51.0
 
       # Pinned exactly, like the Go version and for a weaker version of the
       # same reason. goreleaser does not compile anything — the bytes of a
