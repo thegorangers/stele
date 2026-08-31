@@ -36,6 +36,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely — the categories above replace its fixed set for the reason given.
 Versions follow the policy in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+### Internal
+
+- `v0.4.0` was tagged but never published. Its release workflow failed at the
+  `Install cosign` step, before goreleaser ran: the step pinned
+  `cosign-release: v3.0.6`, which sends `sigstore/cosign-installer` down a
+  code path that downloads a detached signature (`.sig`) of the cosign
+  binary to verify it, and no cosign v3 release publishes a `.sig` asset —
+  v3 ships `.sigstore.json` bundles instead. No artefacts were built and no
+  GitHub release exists for the tag. The tag itself is not moved: the Go
+  module proxy has already cached `v0.4.0` at that commit, and moving a tag
+  under the proxy is a trap.
+
+  The fix is the removal of that pin; the tree at `v0.4.0` is otherwise
+  identical to this one. `v0.4.1` is the release that actually publishes it —
+  use `v0.4.1`, not `v0.4.0`.
+
 ## [v0.4.0] — 2026-08-31
 
 ### Generated output
