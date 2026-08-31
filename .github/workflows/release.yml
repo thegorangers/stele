@@ -112,7 +112,14 @@ jobs:
         uses: ./.github/actions/parity
 
       - name: Install cosign
+        # v3.0.6 is what @v3 already installs (the action's own default),
+        # so this pins the current behaviour rather than changing it.
+        # Dependabot only bumps the action tag, not an input value, so it
+        # will never propose moving this one — it needs a human to notice
+        # and update it deliberately.
         uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v3.0.6
 
       # goreleaser's sboms section shells out to syft; unlike cosign it is
       # not bundled in, so it needs its own install step. Pinned exactly,
