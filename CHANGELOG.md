@@ -36,12 +36,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 loosely — the categories above replace its fixed set for the reason given.
 Versions follow the policy in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [v0.4.0] — 2026-08-31
 
 ### Generated output
 
 - Nothing. `stele breaking` reads descriptors; it writes nothing `generate` or
   `export` produce.
+
+  That is measured rather than claimed:
+
+  - The parity corpus is byte-identical, and the release is gated on it —
+    `generate` and `export` both, through the same composite action CI runs on
+    every change.
+  - A repository from the fleet this tool was built for was generated twice,
+    once with `v0.3.0` and once with this release, from the same manifest and
+    the same lock: the generated tree and `stele.lock` were byte-identical,
+    file for file.
 
 ### Added
 
