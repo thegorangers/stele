@@ -38,6 +38,8 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [v0.4.1] — 2026-08-31
+
 ### Internal
 
 - `v0.4.0` was tagged but never published. Its release workflow failed at the
