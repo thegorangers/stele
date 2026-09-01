@@ -12,8 +12,8 @@ package breaking
 import (
 	"sort"
 
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"github.com/thegorangers/stele/internal/genreq"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // Reachable returns the import paths reachable, transitively, from the

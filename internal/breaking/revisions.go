@@ -8,13 +8,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"github.com/thegorangers/stele/internal/compile"
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/gitrepo"
 	"github.com/thegorangers/stele/internal/lint"
 	"github.com/thegorangers/stele/internal/pin"
 	"github.com/thegorangers/stele/internal/resolve"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // ErrNoManifest reports that a revision predates adoption of this tool: it
