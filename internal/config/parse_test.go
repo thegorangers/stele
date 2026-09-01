@@ -782,3 +782,56 @@ func TestLoad_RefusesRepeatedManagedOverridePath(t *testing.T) {
 		})
 	}
 }
+
+func TestMovesRefusedShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "duplicate from",
+			yaml: "breaking:\n  moves:\n    - from: example.a.v1\n      to: example.b.v1\n    - from: example.a.v1\n      to: example.c.v1\n",
+			want: "duplicate",
+		},
+		{
+			name: "cycle",
+			yaml: "breaking:\n  moves:\n    - from: example.a.v1\n      to: example.b.v1\n    - from: example.b.v1\n      to: example.a.v1\n",
+			want: "cycle",
+		},
+		{
+			name: "from equals to",
+			yaml: "breaking:\n  moves:\n    - from: example.a.v1\n      to: example.a.v1\n",
+			want: "moves nothing",
+		},
+		{
+			name: "mixed file and package",
+			yaml: "breaking:\n  moves:\n    - from: \"file:a/b.proto\"\n      to: example.b.v1\n",
+			want: "both sides",
+		},
+		{
+			name: "missing to",
+			yaml: "breaking:\n  moves:\n    - from: example.a.v1\n",
+			want: "to: missing",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load(write(t, validConfig+tc.yaml))
+			if err == nil {
+				t.Fatalf("accepted a manifest it must refuse")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMovesAccepted(t *testing.T) {
+	const y = "breaking:\n  moves:\n    - from: example.orders.v1\n      to: example.ordering.v1\n    - from: \"file:example/orders/v1/order.proto\"\n      to: \"file:example/ordering/v1/order.proto\"\n"
+	f := mustLoad(t, validConfig+y)
+	if got := len(f.Breaking.Moves); got != 2 {
+		t.Fatalf("moves: got %d, want 2", got)
+	}
+}
