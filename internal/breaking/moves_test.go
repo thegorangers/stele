@@ -10,6 +10,7 @@ import (
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/gitrepo"
 	"github.com/thegorangers/stele/internal/lint"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // movesFixture builds a two-commit repository whose revisions may differ in
@@ -158,5 +159,60 @@ message Order { string id = 1; }
 	}
 	if !strings.Contains(err.Error(), "example.ordering.v1.Order") {
 		t.Fatalf("error %q does not name the colliding declaration", err)
+	}
+}
+
+// Prefix-overlapping moves are accepted by the manifest layer — it refuses a
+// duplicate source, a cycle and a self-move, but not two sources where one is
+// a prefix of the other. The file's own package is looked up exactly and so
+// takes the longer source; a type reference matched against the shorter one
+// would name a package the exact lookup never produced.
+func TestOverlappingMovesRewriteReferencesByTheLongestSource(t *testing.T) {
+	body := `syntax = "proto3";
+package example.orders.v1;
+message Order { string id = 1; Line line = 2; }
+message Line { string sku = 1; }
+`
+	prev, _ := movesFixture(t,
+		map[string]string{"example/orders/v1/order.proto": body},
+		map[string]string{"example/orders/v1/order.proto": body})
+
+	moved, err := ApplyMoves(prev, []config.Move{
+		{From: "example.orders", To: "example.legacy"},
+		{From: "example.orders.v1", To: "example.ordering.v1"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyMoves: %v", err)
+	}
+
+	var order protoreflect.MessageDescriptor
+	for _, fd := range moved.Files {
+		if fd.Path() != "example/orders/v1/order.proto" {
+			continue
+		}
+		order = fd.Messages().ByName("Order")
+	}
+	if order == nil {
+		t.Fatal("the rewritten revision has no Order in example/orders/v1/order.proto")
+	}
+	if got, want := order.FullName(), protoreflect.FullName("example.ordering.v1.Order"); got != want {
+		t.Fatalf("message full name %q, want %q", got, want)
+	}
+	ref := order.Fields().ByName("line").Message().FullName()
+	if want := protoreflect.FullName("example.ordering.v1.Line"); ref != want {
+		t.Fatalf("field line refers to %q, want %q — a reference must match the longest move source",
+			ref, want)
+	}
+}
+
+// The identifier half of a go_package is rewritten with the dots stripped out
+// of the package name, which makes it a very short needle. Confined to the
+// half after the semicolon it is harmless; loose over the whole value it
+// rewrites bytes of the import path that have nothing to do with the move.
+func TestGoPackageRewriteLeavesTheImportPathAlone(t *testing.T) {
+	const gp = "example.test/lab/gen/a/b;ab"
+	got := rewriteGoPackage(gp, "example.a.b", "example.a.c")
+	if want := "example.test/lab/gen/a/c;ac"; got != want {
+		t.Fatalf("rewriteGoPackage(%q) = %q, want %q", gp, got, want)
 	}
 }

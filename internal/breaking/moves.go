@@ -2,6 +2,7 @@ package breaking
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -98,15 +99,33 @@ func rewriteFile(fdp *descriptorpb.FileDescriptorProto, pkgMoves, fileMoves map[
 
 	// Type references are fully qualified with a leading dot, and a reference
 	// may point into any moved package, not only this file's own.
+	//
+	// The sources are tried longest first, because the manifest layer permits
+	// two moves where one source is a prefix of the other (it refuses a
+	// duplicate source, a cycle and a self-move — not an overlap). A file's
+	// own Package is looked up exactly and therefore always takes the longer
+	// source, so a reference matched against the shorter one would name a
+	// package no file declares. Iterating the map directly picked whichever
+	// source the draw offered first, which made that mismatch a coin toss.
+	froms := make([]string, 0, len(pkgMoves))
+	for from := range pkgMoves {
+		froms = append(froms, from)
+	}
+	sort.Slice(froms, func(i, j int) bool {
+		if len(froms[i]) != len(froms[j]) {
+			return len(froms[i]) > len(froms[j])
+		}
+		return froms[i] < froms[j]
+	})
+
 	rewriteRef := func(s *string) {
 		if s == nil || *s == "" {
 			return
 		}
 		name := strings.TrimPrefix(*s, ".")
-		for from, to := range pkgMoves {
+		for _, from := range froms {
 			if name == from || strings.HasPrefix(name, from+".") {
-				renamed := "." + to + strings.TrimPrefix(name, from)
-				*s = renamed
+				*s = "." + pkgMoves[from] + strings.TrimPrefix(name, from)
 				return
 			}
 		}
@@ -142,20 +161,25 @@ func rewriteFile(fdp *descriptorpb.FileDescriptorProto, pkgMoves, fileMoves map[
 }
 
 // rewriteGoPackage maps a go_package through a package move by replacing the
-// segments the proto package contributed to it, in both the forms a
-// go_package uses them: the slash-separated import path, and the
-// dot-stripped identifier after the semicolon. Neither form need carry the
-// whole package — a repository generating under gen/ contributes only the
-// tail — so the longest matching tail wins, and a go_package that bears no
-// relation to the proto package at all is left alone: this cannot guess at a
-// convention the repository did not follow, and a go_package the rewrite
-// leaves behind shows up as an ordinary finding rather than being silently
-// accepted.
+// segments the proto package contributed to it. A go_package carries the
+// package in up to two forms — the slash-separated import path, and the
+// dot-stripped identifier after the semicolon — and each half is rewritten
+// only in its own form: the identifier form is a very short needle
+// ("ab" for example.a.b), and letting it loose over the whole value rewrote
+// bytes of the import path that had nothing to do with the move.
 //
-// SHORTCUT: go_package is mapped by textual substitution of the package path;
-// предел: a go_package unrelated to the proto package is left alone and shows
-// up as a finding; апгрейд: an explicit go_package field on the move entry, if
-// a repository hits it.
+// Neither half need carry the whole package — a repository generating under
+// gen/ contributes only the tail — so the longest matching tail wins. A
+// go_package that bears no relation to the proto package at all is left
+// alone: this cannot guess at a convention the repository did not follow.
+//
+// SHORTCUT: go_package is mapped by substituting the tail of the proto
+// package, in the import path and in the identifier separately; предел: a
+// go_package whose relation to the proto package is not that tail is left
+// unchanged and surfaces as an ordinary finding, and a half that happens to
+// contain the tail elsewhere is rewritten there too, producing a spurious
+// one; апгрейд: an explicit go_package field on the move entry, if a
+// repository hits either.
 func rewriteGoPackage(gp, oldPkg, newPkg string) string {
 	oldSeg := strings.Split(oldPkg, ".")
 	newSeg := strings.Split(newPkg, ".")
@@ -168,12 +192,10 @@ func rewriteGoPackage(gp, oldPkg, newPkg string) string {
 		minTail = 1
 	}
 
-	joinTail := func(seg []string, n int, sep string) string {
-		return strings.Join(seg[len(seg)-n:], sep)
-	}
 	substituteTail := func(s, sep string) string {
 		for n := min(len(oldSeg), len(newSeg)); n >= minTail; n-- {
-			from, to := joinTail(oldSeg, n, sep), joinTail(newSeg, n, sep)
+			from := strings.Join(oldSeg[len(oldSeg)-n:], sep)
+			to := strings.Join(newSeg[len(newSeg)-n:], sep)
 			if from != to && strings.Contains(s, from) {
 				return strings.ReplaceAll(s, from, to)
 			}
@@ -181,8 +203,12 @@ func rewriteGoPackage(gp, oldPkg, newPkg string) string {
 		return s
 	}
 
-	// The import path and the identifier are rewritten independently: a
-	// go_package may carry the package in one form, the other, or both.
-	gp = substituteTail(gp, "/")
-	return substituteTail(gp, "")
+	// "import/path;identifier", or just "import/path" when the generated
+	// package name is left to be derived from the path.
+	path, ident, hasIdent := strings.Cut(gp, ";")
+	path = substituteTail(path, "/")
+	if !hasIdent {
+		return path
+	}
+	return path + ";" + substituteTail(ident, "")
 }
