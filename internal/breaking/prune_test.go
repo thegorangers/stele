@@ -66,7 +66,7 @@ func TestPruneMatchesByIdentityNotPosition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Prune(path, []config.Permission{stale}); err != nil {
+	if err := Prune(path, []config.Permission{stale}, nil); err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestPruneRefusesFlowStyleList(t *testing.T) {
 		Reason:  "dropped in the v2 rollout",
 	}
 
-	err := Prune(path, []config.Permission{stale})
+	err := Prune(path, []config.Permission{stale}, nil)
 	if err == nil {
 		t.Fatal("Prune must refuse a flow-style allow list, not guess at the surgery")
 	}
@@ -132,5 +132,37 @@ func TestPruneRefusesFlowStyleList(t *testing.T) {
 	}
 	if string(got) != original {
 		t.Errorf("a refused prune must leave the file untouched:\ngot:\n%s\nwant (unchanged):\n%s", got, original)
+	}
+}
+
+// TestPruneRemovesAStaleMove is Task 5's own test: a stale move is pruned
+// from breaking.moves on the same terms a stale permission is pruned from
+// breaking.allow, and a move that is not stale survives.
+func TestPruneRemovesAStaleMove(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stele.yaml")
+	const before = `breaking:
+  base: master
+  moves:
+    - from: example.orders.v1
+      to: example.ordering.v1
+    - from: example.billing.v1
+      to: example.invoicing.v1
+`
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Prune(path, nil, []config.Move{{From: "example.orders.v1", To: "example.ordering.v1"}}); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "example.orders.v1") {
+		t.Fatalf("the stale move survived pruning:\n%s", got)
+	}
+	if !strings.Contains(string(got), "example.billing.v1") {
+		t.Fatalf("pruning removed a move that was not stale:\n%s", got)
 	}
 }

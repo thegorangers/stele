@@ -67,8 +67,8 @@ import (
 // write would have followed the link and updated whatever it pointed at.
 // A manifest is not expected to be a symlink, and the atomicity this buys
 // against a truncated, silently shorter allow[] list is worth that trade.
-func Prune(manifestPath string, stale []config.Permission) error {
-	if len(stale) == 0 {
+func Prune(manifestPath string, stale []config.Permission, staleMoves []config.Move) error {
+	if len(stale) == 0 && len(staleMoves) == 0 {
 		return nil
 	}
 
@@ -90,37 +90,12 @@ func Prune(manifestPath string, stale []config.Permission) error {
 	if breakingNode == nil {
 		return fmt.Errorf("%s: has no breaking: block to prune", manifestPath)
 	}
-	allowKey, allowNode := mapEntry(breakingNode, "allow")
-	if allowNode == nil || allowNode.Kind != yaml.SequenceNode {
-		return fmt.Errorf("%s: has no breaking.allow list to prune", manifestPath)
-	}
-
-	// idx is worked out fresh against this parse, by matching each stale
-	// permission's identity against every current entry — never by
-	// carrying over a position from the caller's own, possibly stale,
-	// read. See the doc comment above for why.
-	matched := make(map[int]bool)
-	for _, p := range stale {
-		for i, item := range allowNode.Content {
-			if permissionIdentity(item) == identity(p) {
-				matched[i] = true
-			}
-		}
-	}
-	if len(matched) == 0 {
-		return nil
-	}
-	idx := make([]int, 0, len(matched))
-	for i := range matched {
-		idx = append(idx, i)
-	}
-	sort.Ints(idx)
 
 	// allLines is every Line the whole document's node tree carries,
 	// sorted and de-duplicated. It is how the end of each deleted block is
 	// found: the boundary is the next line anywhere in the document that
 	// does not belong to the block's own subtree, whatever key or nesting
-	// happens to come after it — the allow list's own next entry, a
+	// happens to come after it — the pruned list's own next entry, a
 	// sibling key of breaking, a following top-level key, or nothing, in
 	// which case the block runs to the end of the file.
 	//
@@ -158,57 +133,32 @@ func Prune(manifestPath string, stale []config.Permission) error {
 		}
 	}
 
-	// A flow-style entry — allow: [{rule: ..., subject: ...}, {rule: ...,
-	// subject: ...}] — shares its Line with its siblings: the whole list
-	// sits on one source line, so item.Line for a stale entry is also the
-	// Line of every live entry beside it. Deleting by line range there does
-	// not delete one entry, it deletes the line, taking every permission on
-	// it along with the one being pruned. Line-range surgery only has a
-	// meaning to delete when a target's range holds nothing but that
-	// target, so this is checked before anything is marked for deletion,
-	// and refused rather than guessed at: --prune edits block-style lists
-	// only.
-	if len(idx) != len(allowNode.Content) {
-		survivors := make(map[int]bool, len(allowNode.Content)-len(idx))
-		for i := range allowNode.Content {
-			if !matched[i] {
-				survivors[i] = true
-			}
-		}
-		for _, i := range idx {
-			item := allowNode.Content[i]
-			start := item.Line - commentLines(item.HeadComment)
-			end := maxLine(item)
-			for j := range survivors {
-				sibling := allowNode.Content[j]
-				var sibLines []int
-				collectLines(sibling, &sibLines)
-				for _, l := range sibLines {
-					if l >= start && l <= end {
-						return fmt.Errorf("%s: breaking.allow[%d] shares its source line with a "+
-							"permission that is not being pruned; this looks like a flow-style list "+
-							"([{rule: ..., subject: ...}, ...]) — --prune edits block-style lists only, "+
-							"one entry beginning its own line, and refuses to guess at flow-style surgery",
-							manifestPath, i)
+	if len(stale) > 0 {
+		if err := pruneList(manifestPath, breakingKey, breakingNode, "allow", deleteBlock,
+			func(n *yaml.Node) bool {
+				id := permissionIdentity(n)
+				for _, p := range stale {
+					if id == identity(p) {
+						return true
 					}
 				}
-			}
+				return false
+			}); err != nil {
+			return err
 		}
 	}
-
-	if len(idx) == len(allowNode.Content) {
-		// Every entry is going: the key itself goes rather than being left
-		// bare. If allow was the only thing this breaking: block carried,
-		// "same for any other key this leaves empty" applies one level up
-		// too.
-		deleteBlock(allowKey, allowNode)
-		if len(breakingNode.Content) == 2 {
-			deleteBlock(breakingKey, breakingNode)
-		}
-	} else {
-		for _, i := range idx {
-			item := allowNode.Content[i]
-			deleteBlock(item, item)
+	if len(staleMoves) > 0 {
+		if err := pruneList(manifestPath, breakingKey, breakingNode, "moves", deleteBlock,
+			func(n *yaml.Node) bool {
+				from := moveIdentity(n)
+				for _, m := range staleMoves {
+					if from == m.From {
+						return true
+					}
+				}
+				return false
+			}); err != nil {
+			return err
 		}
 	}
 
@@ -222,6 +172,96 @@ func Prune(manifestPath string, stale []config.Permission) error {
 	}
 
 	return atomicfile.Write(manifestPath, []byte(out.String()))
+}
+
+// pruneList runs the shared line-range surgery for one breaking.<key> list
+// — allow or moves — marking, via deleteBlock, every entry match reports
+// true for. It is factored out of Prune because both lists are pruned on
+// the same terms: matched by identity read fresh off this parse (never by
+// a position the caller's earlier read decided — see Prune's own doc
+// comment for why), the key itself goes when every entry under it is
+// pruned, and a flow-style list is refused rather than guessed at.
+func pruneList(
+	manifestPath string,
+	breakingKey, breakingNode *yaml.Node,
+	key string,
+	deleteBlock func(startNode, endNode *yaml.Node),
+	match func(*yaml.Node) bool,
+) error {
+	listKey, listNode := mapEntry(breakingNode, key)
+	if listNode == nil || listNode.Kind != yaml.SequenceNode {
+		return fmt.Errorf("%s: has no breaking.%s list to prune", manifestPath, key)
+	}
+
+	matched := make(map[int]bool)
+	for i, item := range listNode.Content {
+		if match(item) {
+			matched[i] = true
+		}
+	}
+	if len(matched) == 0 {
+		return nil
+	}
+	idx := make([]int, 0, len(matched))
+	for i := range matched {
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+
+	// A flow-style entry — allow: [{rule: ..., subject: ...}, {rule: ...,
+	// subject: ...}] — shares its Line with its siblings: the whole list
+	// sits on one source line, so item.Line for a stale entry is also the
+	// Line of every live entry beside it. Deleting by line range there does
+	// not delete one entry, it deletes the line, taking every entry on it
+	// along with the one being pruned. Line-range surgery only has a
+	// meaning to delete when a target's range holds nothing but that
+	// target, so this is checked before anything is marked for deletion,
+	// and refused rather than guessed at: --prune edits block-style lists
+	// only.
+	if len(idx) != len(listNode.Content) {
+		survivors := make(map[int]bool, len(listNode.Content)-len(idx))
+		for i := range listNode.Content {
+			if !matched[i] {
+				survivors[i] = true
+			}
+		}
+		for _, i := range idx {
+			item := listNode.Content[i]
+			start := item.Line - commentLines(item.HeadComment)
+			end := maxLine(item)
+			for j := range survivors {
+				sibling := listNode.Content[j]
+				var sibLines []int
+				collectLines(sibling, &sibLines)
+				for _, l := range sibLines {
+					if l >= start && l <= end {
+						return fmt.Errorf("%s: breaking.%s[%d] shares its source line with an "+
+							"entry that is not being pruned; this looks like a flow-style list "+
+							"([{...}, ...]) — --prune edits block-style lists only, "+
+							"one entry beginning its own line, and refuses to guess at flow-style surgery",
+							manifestPath, key, i)
+					}
+				}
+			}
+		}
+	}
+
+	if len(idx) == len(listNode.Content) {
+		// Every entry is going: the key itself goes rather than being left
+		// bare. If this key was the only thing this breaking: block
+		// carried, "same for any other key this leaves empty" applies one
+		// level up too.
+		deleteBlock(listKey, listNode)
+		if len(breakingNode.Content) == 2 {
+			deleteBlock(breakingKey, breakingNode)
+		}
+	} else {
+		for _, i := range idx {
+			item := listNode.Content[i]
+			deleteBlock(item, item)
+		}
+	}
+	return nil
 }
 
 // permKey is the (rule, subject, change) triple Prune matches on — deliber-
@@ -253,6 +293,23 @@ func permissionIdentity(n *yaml.Node) permKey {
 		}
 	}
 	return k
+}
+
+// moveIdentity reads the "from" field straight off a parsed breaking.moves
+// entry's own mapping node — the same treatment permissionIdentity gives an
+// allow[] entry, and for the same reason: independent of whatever the
+// caller's earlier decode produced, so a file that moved under the command
+// is still matched against its own current text.
+func moveIdentity(n *yaml.Node) string {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return ""
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == "from" {
+			return n.Content[i+1].Value
+		}
+	}
+	return ""
 }
 
 // mapEntry returns the key and value nodes for key in mapping node m, or
