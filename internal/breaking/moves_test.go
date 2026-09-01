@@ -205,6 +205,86 @@ message Line { string sku = 1; }
 	}
 }
 
+func TestMoveToAPackageThisRepositoryDoesNotOwnIsRefused(t *testing.T) {
+	files := map[string]string{
+		"example/orders/v1/order.proto": `syntax = "proto3";
+package example.orders.v1;
+message Order { string id = 1; }
+`,
+	}
+	prev, cur := movesFixture(t, files, files)
+
+	err := ValidateMoves(prev, cur, []config.Move{{From: "example.orders.v1", To: "example.vendor.v1"}})
+	if err == nil {
+		t.Fatal("accepted a move pointing at a package this repository does not own")
+	}
+	if !strings.Contains(err.Error(), "example.vendor.v1") {
+		t.Fatalf("error %q does not name the destination", err)
+	}
+}
+
+func TestMoveWhoseSourceStillExistsIsRefused(t *testing.T) {
+	files := map[string]string{
+		"example/orders/v1/order.proto": `syntax = "proto3";
+package example.orders.v1;
+message Order { string id = 1; }
+`,
+		"example/ordering/v1/order.proto": `syntax = "proto3";
+package example.ordering.v1;
+message Order { string id = 1; }
+`,
+	}
+	prev, cur := movesFixture(t, files, files)
+
+	err := ValidateMoves(prev, cur, []config.Move{{From: "example.orders.v1", To: "example.ordering.v1"}})
+	if err == nil {
+		t.Fatal("accepted a move whose source still exists in the current revision")
+	}
+	if !strings.Contains(err.Error(), "still") {
+		t.Fatalf("error %q does not say the source is still there", err)
+	}
+}
+
+// A contradictory chain — a moved to b, and b moved to c — is not a cycle and
+// is accepted by the manifest layer, which cannot see the revisions. Here it
+// is refused: the first entry requires b to exist in the current revision,
+// and the second entry then finds that very fact and refuses because b has
+// not actually gone.
+func TestContradictoryChainIsRefused(t *testing.T) {
+	prev, cur := movesFixture(t,
+		map[string]string{
+			"example/a/v1/a.proto": `syntax = "proto3";
+package example.a.v1;
+message A { string id = 1; }
+`,
+			"example/b/v1/b.proto": `syntax = "proto3";
+package example.b.v1;
+message B { string id = 1; }
+`,
+		},
+		map[string]string{
+			"example/b/v1/b.proto": `syntax = "proto3";
+package example.b.v1;
+message B { string id = 1; }
+`,
+			"example/c/v1/c.proto": `syntax = "proto3";
+package example.c.v1;
+message C { string id = 1; }
+`,
+		})
+
+	err := ValidateMoves(prev, cur, []config.Move{
+		{From: "example.a.v1", To: "example.b.v1"},
+		{From: "example.b.v1", To: "example.c.v1"},
+	})
+	if err == nil {
+		t.Fatal("accepted a contradictory chain of moves")
+	}
+	if !strings.Contains(err.Error(), "example.b.v1") {
+		t.Fatalf("error %q does not name example.b.v1", err)
+	}
+}
+
 // The identifier half of a go_package is rewritten with the dots stripped out
 // of the package name, which makes it a very short needle. Confined to the
 // half after the semicolon it is harmless; loose over the whole value it

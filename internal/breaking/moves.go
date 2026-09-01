@@ -71,6 +71,65 @@ func ApplyMoves(prev Revision, moves []config.Move) (Revision, error) {
 	return out, nil
 }
 
+// ValidateMoves checks the two things about a move that the manifest alone
+// cannot decide, and that therefore are not in config's validation.
+//
+// A destination this repository does not own would make a pinned third party
+// the authority on whether your declarations still exist: the comparison
+// would pass for as long as the dependency happened to carry a matching
+// name, and break the day it did not, over a change nobody here made.
+//
+// A source that still exists in the current revision has not moved. Renaming
+// it in the previous revision would make the surviving original read as an
+// addition and the rename read as clean, which is the one shape that could
+// hide a removal.
+//
+// The destination is checked before the source, and that order is what
+// catches a contradictory chain (a moved to b, and b moved to c) without a
+// third check: the first entry requires b to be owned in the current
+// revision, and the second entry's source check then finds that b is still
+// there and refuses, naming the fact both entries disagree about.
+func ValidateMoves(prev, cur Revision, moves []config.Move) error {
+	curPkgs := map[string]bool{}
+	curPaths := map[string]bool{}
+	owned := map[string]bool{}
+	for _, p := range cur.Owned {
+		owned[p] = true
+	}
+	for _, fd := range cur.Files {
+		if !owned[fd.Path()] {
+			continue
+		}
+		curPkgs[string(fd.Package())] = true
+		curPaths[fd.Path()] = true
+	}
+
+	for i, m := range moves {
+		field := fmt.Sprintf("breaking.moves[%d]", i)
+		if strings.HasPrefix(m.From, config.MoveFilePrefix) {
+			from := strings.TrimPrefix(m.From, config.MoveFilePrefix)
+			to := strings.TrimPrefix(m.To, config.MoveFilePrefix)
+			if !curPaths[to] {
+				return fmt.Errorf("%s.to: %s is not a file this repository owns in the current revision; "+
+					"a move may only point at your own declarations", field, to)
+			}
+			if curPaths[from] {
+				return fmt.Errorf("%s.from: %s still exists in the current revision, so it has not moved", field, from)
+			}
+			continue
+		}
+		if !curPkgs[m.To] {
+			return fmt.Errorf("%s.to: %s is not a package this repository owns in the current revision; "+
+				"a move may only point at your own declarations, or a pinned dependency becomes "+
+				"the authority on whether they exist", field, m.To)
+		}
+		if curPkgs[m.From] {
+			return fmt.Errorf("%s.from: %s still exists in the current revision, so it has not moved", field, m.From)
+		}
+	}
+	return nil
+}
+
 // rewriteFile applies the move maps to one file descriptor in place. It is
 // called on a fresh FileDescriptorProto produced by protodesc, never on
 // anything shared.
