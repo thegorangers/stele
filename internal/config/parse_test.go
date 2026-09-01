@@ -835,3 +835,23 @@ func TestMovesAccepted(t *testing.T) {
 		t.Fatalf("moves: got %d, want 2", got)
 	}
 }
+
+// A chain (a moves to b, b moves to c) is not a cycle: nothing returns to
+// where it started. It is refused elsewhere, against the compiled revisions,
+// because a chain is contradictory about whether b exists — not here, where
+// only the shape of the move map is knowable.
+func TestMovesChainIsNotACycle(t *testing.T) {
+	const y = "breaking:\n  moves:\n    - from: example.a.v1\n      to: example.b.v1\n    - from: example.b.v1\n      to: example.c.v1\n"
+	mustLoad(t, validConfig+y)
+}
+
+func TestMovesThreeEntryCycleRefused(t *testing.T) {
+	const y = "breaking:\n  moves:\n    - from: example.a.v1\n      to: example.b.v1\n    - from: example.b.v1\n      to: example.c.v1\n    - from: example.c.v1\n      to: example.a.v1\n"
+	_, err := config.Load(write(t, validConfig+y))
+	if err == nil {
+		t.Fatalf("accepted a manifest it must refuse")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("error %q does not mention %q", err, "cycle")
+	}
+}

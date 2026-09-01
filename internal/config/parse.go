@@ -376,7 +376,7 @@ func (b *Breaking) validateAllow() error {
 // revisions and are checked in internal/breaking.
 func (b *Breaking) validateMoves() error {
 	seen := make(map[string]int, len(b.Moves))
-	to := make(map[string]string, len(b.Moves))
+	edge := make(map[string]string, len(b.Moves))
 	for i, m := range b.Moves {
 		field := fmt.Sprintf("breaking.moves[%d]", i)
 		if m.From == "" {
@@ -399,13 +399,33 @@ func (b *Breaking) validateMoves() error {
 				"one name cannot move to two places", field, m.From, first)
 		}
 		seen[m.From] = i
-		to[m.To] = m.From
+		edge[m.From] = m.To
 	}
-	for i, m := range b.Moves {
-		if src, ok := to[m.From]; ok {
-			return fmt.Errorf("breaking.moves[%d]: cycle, %s moves to %s while %s moves to %s; "+
-				"the previous revision cannot be renamed into two states at once",
-				i, m.From, m.To, src, m.From)
+	// A cycle is a walk that returns to where it started, not merely a name
+	// that appears as both a "to" and, elsewhere, a "from" — that is a chain,
+	// and a chain is refused later, against the compiled revisions, for a
+	// different reason than a cycle is.
+	for i, start := range b.Moves {
+		field := fmt.Sprintf("breaking.moves[%d]", i)
+		visited := map[string]bool{start.From: true}
+		cur := start.To
+		for {
+			if cur == start.From {
+				return fmt.Errorf("%s: cycle, %s moves to %s and the chain of moves leads back to %s; "+
+					"the previous revision cannot be renamed into two states at once",
+					field, start.From, start.To, start.From)
+			}
+			if visited[cur] {
+				// A different cycle, not containing start.From: it is
+				// reported from its own entry's iteration instead.
+				break
+			}
+			visited[cur] = true
+			next, ok := edge[cur]
+			if !ok {
+				break
+			}
+			cur = next
 		}
 	}
 	return nil
