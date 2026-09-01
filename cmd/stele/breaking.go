@@ -294,6 +294,23 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 
+	// Moves are read from mf.Breaking — the working manifest — and never
+	// from prevRev's or cur's own, for the same reason severity is: a
+	// revision must not get to configure how it is judged. See the comment
+	// above ValidateConfig.
+	var staleMoves []config.Move
+	if mf.Breaking != nil && len(mf.Breaking.Moves) > 0 {
+		if err := breaking.ValidateMoves(prevRev, cur, mf.Breaking.Moves); err != nil {
+			return err
+		}
+		staleMoves = breaking.StaleMoves(prevRev, mf.Breaking.Moves)
+		notes = append(notes, breaking.MoveNotes(staleMoves)...)
+		prevRev, err = breaking.ApplyMoves(prevRev, mf.Breaking.Moves)
+		if err != nil {
+			return err
+		}
+	}
+
 	changes := breaking.Diff(prevRev, cur)
 	rawFindings := breaking.Classify(changes, prevRev, cur)
 	rawFindings = append(rawFindings, breaking.ClassifyClosure(prevRev, cur)...)
@@ -307,7 +324,7 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		// ApplySeverity has already dropped exactly those findings from
 		// findings — the ones an ignore list silenced are the evidence, so
 		// the audit needs them, not the report a merge would see.
-		return runBreakingAudit(mf, manifestPath, findings, rawFindings, prev, *prune, stdout)
+		return runBreakingAudit(mf, manifestPath, findings, rawFindings, staleMoves, prev, *prune, stdout)
 	}
 
 	// Permit runs after ApplySeverity: see its own doc comment for why the
@@ -382,7 +399,7 @@ var errBreakingFindings = errors.New("breaking: at least one finding stands at e
 // ordinary path in runBreaking and is deliberately not reached here — an
 // audit that could fail a merge on a finding would not be the valve this
 // design asked for.
-func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFindings []breaking.Finding, prev breaking.Previous, prune bool, stdout io.Writer) error {
+func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFindings []breaking.Finding, staleMoves []config.Move, prev breaking.Previous, prune bool, stdout io.Writer) error {
 	idx := breaking.StaleAllowIndices(findings, mf.Breaking)
 
 	// idx is "matched nothing", which is necessary but not sufficient for
@@ -411,6 +428,7 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFinding
 	notes = append(notes, breaking.AuditLowered(mf.Breaking, rawFindings)...)
 	allStale := append(append(append([]config.Permission{}, staleSpent...), staleDormant...), staleMismatched...)
 	notes = append(notes, breaking.PermitNotes(mf.Breaking, allStale, findings)...)
+	notes = append(notes, breaking.MoveNotes(staleMoves)...)
 
 	fmt.Fprint(stdout, breaking.Render(nil, breaking.Info{
 		Outcome:  breaking.Audited,
@@ -424,13 +442,10 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFinding
 		// Prune matches staleSpent against the manifest's own current text
 		// by (rule, subject, change), not by position — see its own doc
 		// comment for why that matters even within one invocation.
-		// staleMoves is nil here: wiring breaking.moves into this command
-		// is a separate change (Prune's signature already carries the
-		// parameter it needs for that).
-		if err := breaking.Prune(manifestPath, staleSpent, nil); err != nil {
+		if err := breaking.Prune(manifestPath, staleSpent, staleMoves); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "stele: breaking: --prune removed %d stale permission(s); dormant permissions were left in place\n", len(staleSpent))
+		fmt.Fprintf(stdout, "stele: breaking: --prune removed %d stale permission(s) and %d stale move(s); dormant permissions were left in place\n", len(staleSpent), len(staleMoves))
 		return nil
 	}
 
