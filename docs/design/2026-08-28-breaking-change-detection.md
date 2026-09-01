@@ -267,13 +267,20 @@ message, and carries a path with no line where nothing survives.
 
 ## Migrations: a rename map, not a permission
 
-**Not built.** This section describes a design, not behaviour the tool has. It was
-planned as part of the valve and taken out: a revision's descriptors are
-immutable and a field whose type moved still carries the old fully-qualified
-name, so renaming index keys does not produce the property the mechanism exists
-for — a lossless rename producing no findings. It needs a feasibility probe
-rather than a task list. Until then a repository facing a package rename holds
-the rule at `warning`.
+**Not built, but no longer unproven.** This section describes a design, not
+behaviour the tool has. It was taken out of the valve because a revision's
+descriptors are immutable and a field whose type moved still carries the old
+fully-qualified name, so renaming index keys cannot produce the property the
+mechanism exists for. The feasibility probe it was waiting on has since run, and
+immutability turns out not to be the obstacle it looked like, because the
+descriptors are rebuilt rather than mutated: the previous revision is converted
+back to `FileDescriptorProto` with `protodesc`, the names are rewritten there,
+and the result is recompiled. Measured on this fleet's own protocols, renaming a
+package took a comparison from 24 changes to none, and a rename that also dropped
+a field reported exactly that field, under its new name. The cost is about 9 ms
+and 5 MB against roughly 35 ms to compile one side, so it does not weigh. Until
+the mechanism is built, a repository facing a package rename holds the rule at
+`warning`.
 
 
 A package rename changes the full name of everything inside it, so every
@@ -300,15 +307,27 @@ to be got right.
 That framing settles what "identical shape" would otherwise have to enumerate:
 there is no shape comparison. The consequences are stated:
 
-- **`go_package` follows the package.** A `go_package` change explained by a
-  declared move is part of that move; one that is not explained is a finding.
+- **`go_package` does not follow the package on its own — the rewrite must carry
+  it.** The probe established this: renaming the proto package leaves
+  `go_package` pointing at the old import path, and a `go_package` the rewrite
+  fails to update is a change the comparison then reports. So this is a
+  requirement on the rewriter, not a consequence of it. A `go_package` change
+  explained by a declared move is part of that move; one that is not explained is
+  a finding.
 - **`to` must be a module this repository owns.** Pointing a move at a dependency
   would make a pinned third party the authority on whether your declarations still
   exist.
 - **A move is refused, not resolved, when it is ambiguous**: two entries with the
   same `from`, a cycle, or a `from` that still exists in the current revision
-  while claiming to have moved.
-- **File-path moves take the same form** over `file:` subjects. A file *split* —
+  while claiming to have moved. A rename that collides with an existing
+  declaration needs no check of its own: recompiling the rewritten revision fails
+  on the duplicate name, and that failure is the refusal.
+- **File paths move under their own map, not the package's.** The probe found
+  that a package rename leaves file paths untouched, and that they are a separate
+  namespace — a repository can rename the package without moving the files, or
+  move the files without renaming the package. So a file move is its own entry
+  over `file:` subjects rather than a consequence of a package entry. A file
+  *split* —
   one file becoming two in the same package — is not expressible, is named as
   unsupported, and reports as ordinary removals and additions.
 - **A move that matches nothing is stale**, reported by `--audit` and removed by
@@ -540,6 +559,15 @@ the discriminant the next paragraph required. "The tool fetches the base ref" ha
 no component behind it. The fabricated-merge test compared against the tip, which
 fails whenever the base moves. Cost was understated and the tree shortcut was not
 considered.
+
+**Corrected by the migrations probe.** Three statements in the `moves` section
+described what was assumed rather than what a probe found. `go_package` was said
+to follow the package; it does not, and carrying it is now a requirement on the
+rewriter. File-path moves were said to take "the same form", which read as a
+consequence of a package move; paths are a separate namespace and need their own
+entries. Name collisions were left to be checked; recompilation refuses them for
+free. The section also said the mechanism needed a feasibility probe — it has had
+one, and the approach it found is recorded above.
 
 **Refuted by measurement, and recorded because a reviewer's verdict is data.**
 Two findings called fatal did not survive contact with the fleet: the first-parent
