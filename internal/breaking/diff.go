@@ -1,6 +1,7 @@
 package breaking
 
 import (
+	"bytes"
 	"sort"
 
 	"github.com/thegorangers/stele/internal/lint"
@@ -284,6 +285,33 @@ func sortedUnion[K ~string, V any](a, b map[K]V) []K {
 	return keys
 }
 
+// protoMsgEqual reports whether b and a serialise identically, and is the one
+// predicate every descEqual case uses instead of proto.Equal. proto.Equal
+// walks message-valued extensions (custom options such as buf.validate.field
+// or google.api.http) by comparing the dynamic messages that hold their
+// values field by field, including each message's descriptor pointer. prev
+// and cur are compiled by two independent compiler runs, so an option value
+// that is byte-for-byte identical on both sides is still backed by two
+// distinct descriptor instances, and proto.Equal reports it unequal purely
+// on that account — a false Modified with no textual difference behind it.
+// Deterministic marshalling sidesteps identity entirely: two messages that
+// serialise to the same bytes are the same declaration, regardless of which
+// descriptor instance produced them.
+//
+// A marshal error is not swallowed into "equal" or "unequal" by guesswork: a
+// descriptor this package cannot even serialise is not one this package can
+// call identical, so it is reported unequal (changed), which is what causes
+// diffDeclarations to surface it as a Modified change rather than silently
+// dropping it from the report.
+func protoMsgEqual(b, a proto.Message) bool {
+	bb, berr := proto.MarshalOptions{Deterministic: true}.Marshal(b)
+	ab, aerr := proto.MarshalOptions{Deterministic: true}.Marshal(a)
+	if berr != nil || aerr != nil {
+		return false
+	}
+	return bytes.Equal(bb, ab)
+}
+
 // descEqual reports whether before and after are the same declaration at its
 // own granularity: a message is compared on its own properties only, never
 // on the fields, oneofs, enums or nested messages it contains, because those
@@ -309,13 +337,13 @@ func descEqual(before, after protoreflect.Descriptor) bool {
 		bp.NestedType, ap.NestedType = nil, nil
 		bp.EnumType, ap.EnumType = nil, nil
 		bp.OneofDecl, ap.OneofDecl = nil, nil
-		return proto.Equal(bp, ap)
+		return protoMsgEqual(bp, ap)
 	case protoreflect.FieldDescriptor:
 		a, ok := after.(protoreflect.FieldDescriptor)
 		if !ok {
 			return false
 		}
-		if !proto.Equal(protodesc.ToFieldDescriptorProto(b), protodesc.ToFieldDescriptorProto(a)) {
+		if !protoMsgEqual(protodesc.ToFieldDescriptorProto(b), protodesc.ToFieldDescriptorProto(a)) {
 			return false
 		}
 		// The raw FieldDescriptorProto compared above carries oneof_index, a
@@ -342,10 +370,10 @@ func descEqual(before, after protoreflect.Descriptor) bool {
 		// itself, or it is invisible everywhere and reported against no
 		// subject at all.
 		if b.IsMap() && a.IsMap() {
-			if !proto.Equal(protodesc.ToFieldDescriptorProto(b.MapKey()), protodesc.ToFieldDescriptorProto(a.MapKey())) {
+			if !protoMsgEqual(protodesc.ToFieldDescriptorProto(b.MapKey()), protodesc.ToFieldDescriptorProto(a.MapKey())) {
 				return false
 			}
-			if !proto.Equal(protodesc.ToFieldDescriptorProto(b.MapValue()), protodesc.ToFieldDescriptorProto(a.MapValue())) {
+			if !protoMsgEqual(protodesc.ToFieldDescriptorProto(b.MapValue()), protodesc.ToFieldDescriptorProto(a.MapValue())) {
 				return false
 			}
 		}
@@ -355,7 +383,7 @@ func descEqual(before, after protoreflect.Descriptor) bool {
 		if !ok {
 			return false
 		}
-		return proto.Equal(protodesc.ToOneofDescriptorProto(b), protodesc.ToOneofDescriptorProto(a))
+		return protoMsgEqual(protodesc.ToOneofDescriptorProto(b), protodesc.ToOneofDescriptorProto(a))
 	case protoreflect.EnumDescriptor:
 		a, ok := after.(protoreflect.EnumDescriptor)
 		if !ok {
@@ -363,13 +391,13 @@ func descEqual(before, after protoreflect.Descriptor) bool {
 		}
 		bp, ap := protodesc.ToEnumDescriptorProto(b), protodesc.ToEnumDescriptorProto(a)
 		bp.Value, ap.Value = nil, nil
-		return proto.Equal(bp, ap)
+		return protoMsgEqual(bp, ap)
 	case protoreflect.EnumValueDescriptor:
 		a, ok := after.(protoreflect.EnumValueDescriptor)
 		if !ok {
 			return false
 		}
-		return proto.Equal(protodesc.ToEnumValueDescriptorProto(b), protodesc.ToEnumValueDescriptorProto(a))
+		return protoMsgEqual(protodesc.ToEnumValueDescriptorProto(b), protodesc.ToEnumValueDescriptorProto(a))
 	case protoreflect.ServiceDescriptor:
 		a, ok := after.(protoreflect.ServiceDescriptor)
 		if !ok {
@@ -377,13 +405,13 @@ func descEqual(before, after protoreflect.Descriptor) bool {
 		}
 		bp, ap := protodesc.ToServiceDescriptorProto(b), protodesc.ToServiceDescriptorProto(a)
 		bp.Method, ap.Method = nil, nil
-		return proto.Equal(bp, ap)
+		return protoMsgEqual(bp, ap)
 	case protoreflect.MethodDescriptor:
 		a, ok := after.(protoreflect.MethodDescriptor)
 		if !ok {
 			return false
 		}
-		return proto.Equal(protodesc.ToMethodDescriptorProto(b), protodesc.ToMethodDescriptorProto(a))
+		return protoMsgEqual(protodesc.ToMethodDescriptorProto(b), protodesc.ToMethodDescriptorProto(a))
 	default:
 		// No other descriptor kind is ever indexed; a change here without a
 		// matching case would otherwise report every occurrence as
