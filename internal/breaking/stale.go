@@ -8,7 +8,8 @@ import (
 )
 
 // StaleMoves reports the moves whose source names nothing in the previous
-// revision. The rename has passed out of the comparison window: prev has
+// revision — nothing this repository owns, and nothing a dependency
+// carries either. The rename has passed out of the comparison window: prev has
 // moved on (the renamed declaration is gone, or was never there at this
 // point in history), so rewriting it through this entry no longer does
 // anything, and the entry can go.
@@ -22,19 +23,7 @@ import (
 // them, and the two are not interchangeable — see ValidateMoves' own doc
 // comment for why that check runs against cur.
 func StaleMoves(prev Revision, moves []config.Move) []config.Move {
-	pkgs := map[string]bool{}
-	paths := map[string]bool{}
-	owned := map[string]bool{}
-	for _, p := range prev.Owned {
-		owned[p] = true
-	}
-	for _, fd := range prev.Files {
-		if !owned[fd.Path()] {
-			continue
-		}
-		pkgs[string(fd.Package())] = true
-		paths[fd.Path()] = true
-	}
+	pkgs, paths := revisionNames(prev, false)
 
 	var stale []config.Move
 	for _, m := range moves {
@@ -49,6 +38,33 @@ func StaleMoves(prev Revision, moves []config.Move) []config.Move {
 		}
 	}
 	return stale
+}
+
+// revisionNames returns the proto packages and the file paths rev carries.
+// With ownedOnly set only this repository's own declarations are counted;
+// otherwise a dependency's count too.
+//
+// Both readings are needed and they are not interchangeable. ValidateMoves
+// asks whether a source was this repository's to rename, which only
+// ownership can answer. Staleness asks the weaker question of whether the
+// old name is present at all, and deliberately counts a dependency's names:
+// a move pointed at a dependency is a mistake to be refused, not an entry
+// to be quietly filed as stale and swept away by --prune.
+func revisionNames(rev Revision, ownedOnly bool) (pkgs, paths map[string]bool) {
+	pkgs = map[string]bool{}
+	paths = map[string]bool{}
+	owned := map[string]bool{}
+	for _, p := range rev.Owned {
+		owned[p] = true
+	}
+	for _, fd := range rev.Files {
+		if ownedOnly && !owned[fd.Path()] {
+			continue
+		}
+		pkgs[string(fd.Package())] = true
+		paths[fd.Path()] = true
+	}
+	return pkgs, paths
 }
 
 // MoveNotes renders one line per stale move, in the voice PermitNotes uses

@@ -296,3 +296,48 @@ func TestGoPackageRewriteLeavesTheImportPathAlone(t *testing.T) {
 		t.Fatalf("rewriteGoPackage(%q) = %q, want %q", gp, got, want)
 	}
 }
+
+// dropOwned returns rev with path no longer owned, which is how this test
+// file spells "that file belongs to a dependency": ownership is the only
+// thing that distinguishes a dependency's declarations from this
+// repository's own, on either side of the comparison.
+func dropOwned(rev Revision, path string) Revision {
+	out := rev
+	out.Owned = nil
+	for _, p := range rev.Owned {
+		if p != path {
+			out.Owned = append(out.Owned, p)
+		}
+	}
+	return out
+}
+
+// TestMoveFromADependencyPackageIsRefused: a move may only rename what this
+// repository owned before, and a source it never owned is refused for the
+// same reason a destination it does not own is — it would put a pinned
+// third party in charge of whether these declarations exist.
+func TestMoveFromADependencyPackageIsRefused(t *testing.T) {
+	files := map[string]string{
+		"example/vendored/v1/thing.proto": `syntax = "proto3";
+package example.vendored.v1;
+message Thing { string id = 1; }
+`,
+		"example/ordering/v1/order.proto": `syntax = "proto3";
+package example.ordering.v1;
+message Order { string id = 1; }
+`,
+	}
+	prev, cur := movesFixture(t, files, files)
+	prev = dropOwned(prev, "example/vendored/v1/thing.proto")
+	cur = dropOwned(cur, "example/vendored/v1/thing.proto")
+
+	err := ValidateMoves(prev, cur, []config.Move{
+		{From: "example.vendored.v1", To: "example.ordering.v1"},
+	})
+	if err == nil {
+		t.Fatal("a move whose source this repository never owned was accepted")
+	}
+	if !strings.Contains(err.Error(), "example.vendored.v1") || !strings.Contains(err.Error(), "previous revision") {
+		t.Errorf("the refusal does not say the source was not owned in the previous revision: %v", err)
+	}
+}

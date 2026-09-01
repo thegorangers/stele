@@ -71,18 +71,37 @@ func ApplyMoves(prev Revision, moves []config.Move) (Revision, error) {
 	return out, nil
 }
 
-// ValidateMoves checks the two things about a move that the manifest alone
-// cannot decide, and that therefore are not in config's validation.
+// ValidateMoves checks the three things about a move that the manifest
+// alone cannot decide, and that therefore are not in config's validation.
 //
 // A destination this repository does not own would make a pinned third party
 // the authority on whether your declarations still exist: the comparison
 // would pass for as long as the dependency happened to carry a matching
 // name, and break the day it did not, over a change nobody here made.
 //
+// A source this repository did not own in the previous revision was never
+// this repository's to rename. Pointing a move at a dependency's package
+// would have ApplyMoves rewrite that dependency's files and every reference
+// into them, which again makes a pinned third party the authority on
+// whether your own declarations exist. A source that names nothing at all
+// in the previous revision is a different thing — a stale entry, retired
+// through --audit and --prune — and never reaches this check.
+//
 // A source that still exists in the current revision has not moved. Renaming
 // it in the previous revision would make the surviving original read as an
 // addition and the rename read as clean, which is the one shape that could
 // hide a removal.
+//
+// A stale move — one whose source names nothing at all in the previous
+// revision, a dependency's declarations included — is skipped entirely
+// rather than checked. Its source refers to names that are no longer
+// there, so asking whether it still describes the current revision is a
+// meaningless question, and answering it with a refusal would put the only
+// mechanism for retiring such an entry (StaleMoves, reported by --audit and
+// deleted by --prune) behind a validation the entry cannot pass. The
+// skip cannot swallow the ownership refusal above: that one fires for a
+// source the previous revision does carry but this repository did not own,
+// which is precisely the case staleness does not cover.
 //
 // The destination is checked before the source, and that order is what
 // catches a contradictory chain (a moved to b, and b moved to c) without a
@@ -90,23 +109,16 @@ func ApplyMoves(prev Revision, moves []config.Move) (Revision, error) {
 // revision, and the second entry's source check then finds that b is still
 // there and refuses, naming the fact both entries disagree about.
 func ValidateMoves(prev, cur Revision, moves []config.Move) error {
-	curPkgs := map[string]bool{}
-	curPaths := map[string]bool{}
-	owned := map[string]bool{}
-	for _, p := range cur.Owned {
-		owned[p] = true
-	}
-	for _, fd := range cur.Files {
-		if !owned[fd.Path()] {
-			continue
-		}
-		curPkgs[string(fd.Package())] = true
-		curPaths[fd.Path()] = true
-	}
+	curPkgs, curPaths := revisionNames(cur, true)
+	prevPkgs, prevPaths := revisionNames(prev, true)
+	prevAllPkgs, prevAllPaths := revisionNames(prev, false)
 
 	for i, m := range moves {
 		field := fmt.Sprintf("breaking.moves[%d]", i)
 		if strings.HasPrefix(m.From, config.MoveFilePrefix) {
+			if !prevAllPaths[strings.TrimPrefix(m.From, config.MoveFilePrefix)] {
+				continue
+			}
 			from := strings.TrimPrefix(m.From, config.MoveFilePrefix)
 			to := strings.TrimPrefix(m.To, config.MoveFilePrefix)
 			if !curPaths[to] {
@@ -116,6 +128,14 @@ func ValidateMoves(prev, cur Revision, moves []config.Move) error {
 			if curPaths[from] {
 				return fmt.Errorf("%s.from: %s still exists in the current revision, so it has not moved", field, from)
 			}
+			if !prevPaths[from] {
+				return fmt.Errorf("%s.from: %s is not a file this repository owned in the previous revision; "+
+					"a move may only rename your own declarations, or a pinned dependency becomes "+
+					"the authority on whether they exist", field, from)
+			}
+			continue
+		}
+		if !prevAllPkgs[m.From] {
 			continue
 		}
 		if !curPkgs[m.To] {
@@ -125,6 +145,11 @@ func ValidateMoves(prev, cur Revision, moves []config.Move) error {
 		}
 		if curPkgs[m.From] {
 			return fmt.Errorf("%s.from: %s still exists in the current revision, so it has not moved", field, m.From)
+		}
+		if !prevPkgs[m.From] {
+			return fmt.Errorf("%s.from: %s is not a package this repository owned in the previous revision; "+
+				"a move may only rename your own declarations, or a pinned dependency becomes "+
+				"the authority on whether they exist", field, m.From)
 		}
 	}
 	return nil

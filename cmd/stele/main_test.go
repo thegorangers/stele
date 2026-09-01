@@ -2473,3 +2473,41 @@ func TestBreakingPruneRemovesStaleAllowAndStaleMoveTogether(t *testing.T) {
 		t.Errorf("--prune must remove the stale permission and the stale move, leaving everything else byte-identical:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestBreakingPruneRetiresAMoveThatIsStaleAndAlsoInvalid: staleness is
+// decided before validation, and a stale move is not validated at all —
+// otherwise the one mechanism the design names for retiring an entry
+// (--audit, then --prune) would be unreachable for the entry that most
+// needs it. Here the source has aged out of the window AND the destination
+// has since been renamed again, so the entry would fail validation; it must
+// still be reported and pruned.
+func TestBreakingPruneRetiresAMoveThatIsStaleAndAlsoInvalid(t *testing.T) {
+	dir := breakingRepo(t)
+	manifest := breakingManifest +
+		"breaking:\n" +
+		"  moves:\n" +
+		"    - from: example.ancient\n" +
+		"      to: example.gone\n"
+	breakingWrite(t, dir, "stele.yaml", manifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--prune"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("--prune must retire a move that is stale and otherwise invalid: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.ancient") {
+		t.Errorf("the report does not name the stale move:\n%s", out.String())
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "stele.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != breakingManifest {
+		t.Errorf("--prune must remove the stale move and its now-empty block:\ngot:\n%s\nwant:\n%s", got, breakingManifest)
+	}
+}

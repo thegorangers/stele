@@ -300,10 +300,17 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	// above ValidateConfig.
 	var staleMoves []config.Move
 	if mf.Breaking != nil && len(mf.Breaking.Moves) > 0 {
+		// Staleness is decided first, and a stale move is then exempt
+		// from validation (ValidateMoves skips it, on the same
+		// predicate). A move whose source has aged out of the comparison
+		// window names declarations that are not there to be checked
+		// against anything, and refusing it would leave --audit and
+		// --prune — the only way the design offers to retire an entry —
+		// behind an error the entry exists to be rescued from.
+		staleMoves = breaking.StaleMoves(prevRev, mf.Breaking.Moves)
 		if err := breaking.ValidateMoves(prevRev, cur, mf.Breaking.Moves); err != nil {
 			return err
 		}
-		staleMoves = breaking.StaleMoves(prevRev, mf.Breaking.Moves)
 		prevRev, err = breaking.ApplyMoves(prevRev, mf.Breaking.Moves)
 		if err != nil {
 			return err
