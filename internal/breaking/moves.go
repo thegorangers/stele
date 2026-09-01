@@ -233,11 +233,11 @@ func rewriteFile(fdp *descriptorpb.FileDescriptorProto, pkgMoves, fileMoves map[
 // alone: this cannot guess at a convention the repository did not follow.
 //
 // SHORTCUT: go_package is mapped by substituting the tail of the proto
-// package, in the import path and in the identifier separately; предел: a
+// package, in the import path and in the identifier separately; ceiling: a
 // go_package whose relation to the proto package is not that tail is left
 // unchanged and surfaces as an ordinary finding, and a half that happens to
 // contain the tail elsewhere is rewritten there too, producing a spurious
-// one; апгрейд: an explicit go_package field on the move entry, if a
+// one; upgrade: an explicit go_package field on the move entry, if a
 // repository hits either.
 func rewriteGoPackage(gp, oldPkg, newPkg string) string {
 	oldSeg := strings.Split(oldPkg, ".")
