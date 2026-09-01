@@ -22,6 +22,9 @@ func Load(path string) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := refuseNullSequenceItems(raw); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true) // an unknown key is an error naming that key
 	var f File
@@ -32,6 +35,59 @@ func Load(path string) (*File, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return &f, nil
+}
+
+// refuseNullSequenceItems refuses a manifest that contains an empty (null)
+// entry inside a YAML block sequence — a stray "-" line, or an explicit
+// "~"/"null" — anywhere in the document.
+//
+// Found by FuzzParseManifest: gopkg.in/yaml.v3 silently drops a null item
+// when it decodes a sequence node into a Go slice of a non-nilable element
+// type ([]Module, []Dep, []Permission and every other list field this
+// manifest has). "modules: [~, {path: a}, {path: b}]" and
+// "modules: [{path: a}, {path: b}]" decode to the identical two-element
+// slice — the tool cannot tell a stray blank line from three well-formed
+// entries, and the entry that vanishes could just as well be a live
+// breaking.allow permission as an accidental blank line. That is exactly
+// the silent-data-loss failure mode this package exists to refuse rather
+// than risk: KnownFields(true) already exists so a mistyped key is an error
+// naming it, not a silent skip; a mistyped list item deserves the same
+// answer. This walks the raw parse tree — the one place a null item is
+// still visible before the typed Decode discards it — and refuses the whole
+// document if it finds one, naming the line.
+func refuseNullSequenceItems(raw []byte) error {
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		// A malformed document is the typed decode's error to report, in
+		// its own words; this pass only adds a refusal for what a
+		// syntactically valid document would otherwise decode wrong.
+		return nil
+	}
+	if len(root.Content) == 0 {
+		return nil
+	}
+	return walkForNullSequenceItems(root.Content[0])
+}
+
+func walkForNullSequenceItems(n *yaml.Node) error {
+	if n == nil {
+		return nil
+	}
+	if n.Kind == yaml.SequenceNode {
+		for _, item := range n.Content {
+			if item.Kind == yaml.ScalarNode && item.Tag == "!!null" {
+				return fmt.Errorf("line %d: empty list entry; yaml.v3 would silently drop this item rather "+
+					"than decode it, shortening the list without an error — write a value here, or remove the line",
+					item.Line)
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if err := walkForNullSequenceItems(c); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Version is the only manifest format version this tool understands.
