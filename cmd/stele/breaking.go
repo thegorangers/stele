@@ -55,8 +55,8 @@ Flags:
                   $STELE_CACHE_DIR is honoured too)
   --audit         report this repository's stale permissions and lowered
                   rules instead of comparing for a merge. Exits non-zero
-                  only when it finds a stale permission — a fact about a
-                  file that needs an edit — and never for what this
+                  only when it finds a stale permission or a stale move — a
+                  fact about a file that needs an edit — and never for what this
                   repository has lowered, which is a decision, not a
                   defect. That non-zero exit is meant for a scheduled job
                   that reddens alone, not for the merge path: putting
@@ -456,18 +456,20 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFinding
 		return nil
 	}
 
-	// The audit valve: a stale permission is a fact about a file that
-	// needs an edit, and --audit exists to fail on exactly that — never
-	// on what this repository has lowered, which is a decision that
-	// needed nobody's approval to make and needs none here to keep.
-	if len(staleSpent) > 0 {
+	// The audit valve: a stale permission — and a stale move, which is
+	// the same kind of fact, an entry the manifest still carries that no
+	// longer does anything — is a fact about a file that needs an edit,
+	// and --audit exists to fail on exactly that. Never on what this
+	// repository has lowered, which is a decision that needed nobody's
+	// approval to make and needs none here to keep.
+	if len(staleSpent) > 0 || len(staleMoves) > 0 {
 		return errAuditStale
 	}
 	return nil
 }
 
 // errAuditStale is returned by --audit when it finds at least one stale
-// (spent, not dormant) permission. Its message is deliberately empty of
+// (spent, not dormant) permission or at least one stale move. Its message is deliberately empty of
 // detail: the report already printed to stdout names every stale
 // permission, and repeating that here would just be noise on stderr.
-var errAuditStale = errors.New("breaking --audit: at least one permission is stale")
+var errAuditStale = errors.New("breaking --audit: at least one permission or move is stale")

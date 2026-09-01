@@ -2511,3 +2511,28 @@ func TestBreakingPruneRetiresAMoveThatIsStaleAndAlsoInvalid(t *testing.T) {
 		t.Errorf("--prune must remove the stale move and its now-empty block:\ngot:\n%s\nwant:\n%s", got, breakingManifest)
 	}
 }
+
+// TestBreakingAuditReddensOnAStaleMove: a stale move is a fact about a
+// file that needs an edit, exactly as a stale permission is, and --audit
+// exists to fail on that. Reporting it as a note while exiting zero would
+// leave the promise that --prune has something to remove visible only to
+// whoever read the output.
+func TestBreakingAuditReddensOnAStaleMove(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  moves:\n    - from: example.ancient\n      to: example.v1\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--audit"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("--audit must exit non-zero on a stale move:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "example.ancient") {
+		t.Errorf("the audit does not name the stale move:\n%s", out.String())
+	}
+}
