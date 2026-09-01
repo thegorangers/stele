@@ -38,6 +38,15 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+
+- `breaking.moves` declares that a proto package or file was renamed. `stele
+  breaking` rewrites the previous revision through that map before comparing
+  — a rename, not a suppression — so a lossless rename produces no findings,
+  and a rename that also dropped a field, message or enum still reports that
+  drop, under its new name. A move whose `from` no longer exists is stale:
+  `--audit` reports it and `--prune` removes it, same as a stale permission.
+
 ### Fixed
 
 - `stele breaking`'s declaration comparison used `proto.Equal` to decide

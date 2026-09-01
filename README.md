@@ -736,6 +736,22 @@ permissions from the manifest, taking each entry's comments with it, and
 leaves every other byte of the file unchanged; a dormant permission is never
 pruned. `--audit` and `--prune` cannot be combined.
 
+### Renames
+
+```yaml
+breaking:
+  moves:
+    - from: example.orders.v1
+      to: example.ordering.v1
+    - from: "file:example/orders/v1/order.proto"
+      to: "file:example/ordering/v1/order.proto"
+```
+
+`breaking.moves` declares that a proto package or file was renamed; `stele
+breaking` rewrites the previous revision through that map before comparing,
+so a lossless rename produces no findings and a rename that also dropped
+something still reports the drop, under its new name.
+
 ### `--report-only`, for a shadow period
 
 `--report-only` makes findings unable to fail the run — every one of them,

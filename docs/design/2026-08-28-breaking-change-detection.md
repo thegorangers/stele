@@ -267,20 +267,19 @@ message, and carries a path with no line where nothing survives.
 
 ## Migrations: a rename map, not a permission
 
-**Not built, but no longer unproven.** This section describes a design, not
-behaviour the tool has. It was taken out of the valve because a revision's
-descriptors are immutable and a field whose type moved still carries the old
-fully-qualified name, so renaming index keys cannot produce the property the
-mechanism exists for. The feasibility probe it was waiting on has since run, and
-immutability turns out not to be the obstacle it looked like, because the
-descriptors are rebuilt rather than mutated: the previous revision is converted
-back to `FileDescriptorProto` with `protodesc`, the names are rewritten there,
-and the result is recompiled. Measured on this fleet's own protocols, renaming a
+**Built.** This section now describes the mechanism as it runs, not merely a
+design. It was taken out of the valve because a revision's descriptors are
+immutable and a field whose type moved still carries the old fully-qualified
+name, so renaming index keys cannot produce the property the mechanism exists
+for. The feasibility probe it was waiting on has since run, and immutability
+turns out not to be the obstacle it looked like, because the descriptors are
+rebuilt rather than mutated: the previous revision is converted back to
+`FileDescriptorProto` with `protodesc`, the names are rewritten there, and the
+result is recompiled. Measured on this fleet's own protocols, renaming a
 package took a comparison from 24 changes to none, and a rename that also dropped
 a field reported exactly that field, under its new name. The cost is about 9 ms
-and 5 MB against roughly 35 ms to compile one side, so it does not weigh. Until
-the mechanism is built, a repository facing a package rename holds the rule at
-`warning`.
+and 5 MB against roughly 35 ms to compile one side, so it does not weigh. A
+repository facing a package rename declares it in `breaking.moves`.
 
 
 A package rename changes the full name of everything inside it, so every
