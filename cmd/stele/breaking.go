@@ -304,7 +304,6 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 			return err
 		}
 		staleMoves = breaking.StaleMoves(prevRev, mf.Breaking.Moves)
-		notes = append(notes, breaking.MoveNotes(staleMoves)...)
 		prevRev, err = breaking.ApplyMoves(prevRev, mf.Breaking.Moves)
 		if err != nil {
 			return err
@@ -331,6 +330,7 @@ func runBreaking(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	// order matters (a permission naming a rule this manifest set to off
 	// must come out dormant, not silently matched against findings that
 	// severity has already dropped).
+	notes = append(notes, breaking.MoveNotes(staleMoves)...)
 	kept, stale := breaking.Permit(findings, mf.Breaking)
 	notes = append(notes, breaking.PermitNotes(mf.Breaking, stale, findings)...)
 	findings = kept
