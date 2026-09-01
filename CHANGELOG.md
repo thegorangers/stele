@@ -38,6 +38,20 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- `stele breaking`'s declaration comparison used `proto.Equal` to decide
+  whether a descriptor changed. For a message-valued custom option — such as
+  `(buf.validate.field)` or `(google.api.http)` — that value is a dynamic
+  message backed by a descriptor instance private to whichever compiler run
+  produced it, and `prev` and `cur` are always compiled by two separate
+  runs. `proto.Equal` compares that instance identity along with the actual
+  content, so an option that serialises identically on both sides could
+  still be reported `Modified`. The comparison now marshals both sides
+  deterministically and compares bytes, which does not depend on which run
+  produced the descriptor. No output of `generate` or `export` is affected;
+  this changes only what `stele breaking` reports.
+
 ## [v0.4.1] — 2026-08-31
 
 ### Internal
