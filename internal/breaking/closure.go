@@ -12,7 +12,7 @@ package breaking
 import (
 	"sort"
 
-	"github.com/bufbuild/protocompile/linker"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"github.com/thegorangers/stele/internal/genreq"
 )
 
@@ -37,20 +37,21 @@ func Reachable(rev Revision) []string {
 }
 
 // reachableClosure walks rev's owned files' imports, transitively, and
-// returns both the reachable import paths and the linker.File each one
+// returns both the reachable import paths and the file descriptor each one
 // resolved to — the latter is what lets the closure comparison build
 // synthetic Revisions and hand them straight to Diff and Classify, reusing
 // their machinery exactly rather than reimplementing it against a second
 // descriptor shape.
-func reachableClosure(rev Revision) ([]string, linker.Files) {
+func reachableClosure(rev Revision) ([]string, []protoreflect.FileDescriptor) {
 	owned := ownedSet(rev.Owned)
-	visited := make(map[string]linker.File)
+	visited := make(map[string]protoreflect.FileDescriptor)
 
-	var walk func(f linker.File)
-	walk = func(f linker.File) {
+	var walk func(f protoreflect.FileDescriptor)
+	walk = func(f protoreflect.FileDescriptor) {
 		imports := f.Imports()
 		for i := 0; i < imports.Len(); i++ {
-			p := imports.Get(i).Path()
+			imp := imports.Get(i)
+			p := imp.Path()
 			if _, ok := visited[p]; ok {
 				continue
 			}
@@ -60,11 +61,12 @@ func reachableClosure(rev Revision) ([]string, linker.Files) {
 			if genreq.IsWellKnown(p) {
 				continue
 			}
-			child := f.FindImportByPath(p)
-			if child == nil {
+			child := imp.FileDescriptor
+			if child.IsPlaceholder() {
 				// The graph promised this import resolves (compilation
 				// would already have failed otherwise); if it somehow
-				// doesn't, there is nothing to walk into or report on.
+				// does not — a placeholder descriptor — there is nothing to walk
+				// into or report on.
 				continue
 			}
 			visited[p] = child
@@ -79,7 +81,7 @@ func reachableClosure(rev Revision) ([]string, linker.Files) {
 	}
 
 	paths := make([]string, 0, len(visited))
-	files := make(linker.Files, 0, len(visited))
+	files := make([]protoreflect.FileDescriptor, 0, len(visited))
 	for p, f := range visited {
 		paths = append(paths, p)
 		files = append(files, f)

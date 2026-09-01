@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bufbuild/protocompile/linker"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"github.com/thegorangers/stele/internal/compile"
 	"github.com/thegorangers/stele/internal/config"
 	"github.com/thegorangers/stele/internal/gitrepo"
@@ -29,8 +29,14 @@ var ErrNoOwnedProtos = errors.New("breaking: the revision owns no proto files")
 
 // Revision is one side of a breaking-change comparison: the compiled files
 // this revision owns, and the import paths that make up Owned.
+//
+// Files is the plain descriptor interface rather than protocompile's
+// linker.Files because a revision does not always come from a compiler: a
+// revision with moves applied is rebuilt through protodesc, and its files are
+// protoregistry's. Every consumer here only ever used the embedded
+// protoreflect.FileDescriptor, so nothing is lost by naming that directly.
 type Revision struct {
-	Files linker.Files
+	Files []protoreflect.FileDescriptor
 	Owned []string
 	// DepName maps every import path this revision's graph resolved from a
 	// dependency (as opposed to this repository's own root manifest) to the
@@ -116,7 +122,11 @@ func Load(ctx context.Context, r *gitrepo.Repo, sha string, fetch resolve.FetchF
 	if err != nil {
 		return Revision{}, err
 	}
-	return Revision{Files: files, Owned: owned, DepName: depNames(g)}, nil
+	descs := make([]protoreflect.FileDescriptor, 0, len(files))
+	for _, f := range files {
+		descs = append(descs, f)
+	}
+	return Revision{Files: descs, Owned: owned, DepName: depNames(g)}, nil
 }
 
 // depNames maps every import path the graph resolved from a dependency to
