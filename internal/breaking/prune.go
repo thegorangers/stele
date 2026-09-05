@@ -11,9 +11,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Prune deletes the entries of breaking.allow named by stale — matched
+// Prune deletes the entries of breaking.allow named by stale, and the
+// entries of breaking.moves named by staleMoves — matched
 // against the manifest's own current text by (rule, subject, change), not
-// by position — and leaves every other byte of the file exactly as it was.
+// by position, and a move by its "from" — and leaves every other byte of
+// the file exactly as it was. It returns how many entries of each list it
+// actually matched and deleted, which is not necessarily how many it was
+// asked about: an entry whose text changed under the command is neither
+// deleted nor counted.
 //
 // Matching by identity rather than index is deliberate: stale is computed
 // once, from the configuration the caller already loaded, and Prune reads
@@ -67,28 +72,28 @@ import (
 // write would have followed the link and updated whatever it pointed at.
 // A manifest is not expected to be a symlink, and the atomicity this buys
 // against a truncated, silently shorter allow[] list is worth that trade.
-func Prune(manifestPath string, stale []config.Permission, staleMoves []config.Move) error {
+func Prune(manifestPath string, stale []config.Permission, staleMoves []config.Move) (removedPerms, removedMoves int, err error) {
 	if len(stale) == 0 && len(staleMoves) == 0 {
-		return nil
+		return 0, 0, nil
 	}
 
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	var root yaml.Node
 	if err := yaml.Unmarshal(raw, &root); err != nil {
-		return fmt.Errorf("%s: %w", manifestPath, err)
+		return 0, 0, fmt.Errorf("%s: %w", manifestPath, err)
 	}
 	if len(root.Content) == 0 {
-		return fmt.Errorf("%s: empty document", manifestPath)
+		return 0, 0, fmt.Errorf("%s: empty document", manifestPath)
 	}
 	doc := root.Content[0]
 
 	breakingKey, breakingNode := mapEntry(doc, "breaking")
 	if breakingNode == nil {
-		return fmt.Errorf("%s: has no breaking: block to prune", manifestPath)
+		return 0, 0, fmt.Errorf("%s: has no breaking: block to prune", manifestPath)
 	}
 
 	// allLines is every Line the whole document's node tree carries,
@@ -133,8 +138,12 @@ func Prune(manifestPath string, stale []config.Permission, staleMoves []config.M
 		}
 	}
 
+	// emptied counts the lists under breaking: that this call takes down
+	// to nothing, so the bare-key rule can be applied to the block as a
+	// whole once both lists have been considered — see pruneList.
+	emptied := 0
 	if len(stale) > 0 {
-		if err := pruneList(manifestPath, breakingKey, breakingNode, "allow", deleteBlock,
+		n, gone, err := pruneList(manifestPath, breakingNode, "allow", deleteBlock,
 			func(n *yaml.Node) bool {
 				id := permissionIdentity(n)
 				for _, p := range stale {
@@ -143,12 +152,17 @@ func Prune(manifestPath string, stale []config.Permission, staleMoves []config.M
 					}
 				}
 				return false
-			}); err != nil {
-			return err
+			})
+		if err != nil {
+			return 0, 0, err
+		}
+		removedPerms = n
+		if gone {
+			emptied++
 		}
 	}
 	if len(staleMoves) > 0 {
-		if err := pruneList(manifestPath, breakingKey, breakingNode, "moves", deleteBlock,
+		n, gone, err := pruneList(manifestPath, breakingNode, "moves", deleteBlock,
 			func(n *yaml.Node) bool {
 				from := moveIdentity(n)
 				for _, m := range staleMoves {
@@ -157,9 +171,25 @@ func Prune(manifestPath string, stale []config.Permission, staleMoves []config.M
 					}
 				}
 				return false
-			}); err != nil {
-			return err
+			})
+		if err != nil {
+			return 0, 0, err
 		}
+		removedMoves = n
+		if gone {
+			emptied++
+		}
+	}
+	if removedPerms == 0 && removedMoves == 0 {
+		return 0, 0, nil
+	}
+	// Every key this block carried is gone, so the block goes too. This is
+	// decided here rather than inside pruneList because each call sees only
+	// its own list: a breaking: block holding allow and moves, both fully
+	// pruned, left the key standing when each call could still see the
+	// other one.
+	if emptied*2 == len(breakingNode.Content) {
+		deleteBlock(breakingKey, breakingNode)
 	}
 
 	lines := splitKeepingEnds(raw)
@@ -171,7 +201,10 @@ func Prune(manifestPath string, stale []config.Permission, staleMoves []config.M
 		out.WriteString(line)
 	}
 
-	return atomicfile.Write(manifestPath, []byte(out.String()))
+	if err := atomicfile.Write(manifestPath, []byte(out.String())); err != nil {
+		return 0, 0, err
+	}
+	return removedPerms, removedMoves, nil
 }
 
 // pruneList runs the shared line-range surgery for one breaking.<key> list
@@ -183,14 +216,14 @@ func Prune(manifestPath string, stale []config.Permission, staleMoves []config.M
 // pruned, and a flow-style list is refused rather than guessed at.
 func pruneList(
 	manifestPath string,
-	breakingKey, breakingNode *yaml.Node,
+	breakingNode *yaml.Node,
 	key string,
 	deleteBlock func(startNode, endNode *yaml.Node),
 	match func(*yaml.Node) bool,
-) error {
+) (removed int, emptied bool, err error) {
 	listKey, listNode := mapEntry(breakingNode, key)
 	if listNode == nil || listNode.Kind != yaml.SequenceNode {
-		return fmt.Errorf("%s: has no breaking.%s list to prune", manifestPath, key)
+		return 0, false, fmt.Errorf("%s: has no breaking.%s list to prune", manifestPath, key)
 	}
 
 	matched := make(map[int]bool)
@@ -200,7 +233,7 @@ func pruneList(
 		}
 	}
 	if len(matched) == 0 {
-		return nil
+		return 0, false, nil
 	}
 	idx := make([]int, 0, len(matched))
 	for i := range matched {
@@ -235,7 +268,7 @@ func pruneList(
 				collectLines(sibling, &sibLines)
 				for _, l := range sibLines {
 					if l >= start && l <= end {
-						return fmt.Errorf("%s: breaking.%s[%d] shares its source line with an "+
+						return 0, false, fmt.Errorf("%s: breaking.%s[%d] shares its source line with an "+
 							"entry that is not being pruned; this looks like a flow-style list "+
 							"([{...}, ...]) — --prune edits block-style lists only, "+
 							"one entry beginning its own line, and refuses to guess at flow-style surgery",
@@ -248,20 +281,18 @@ func pruneList(
 
 	if len(idx) == len(listNode.Content) {
 		// Every entry is going: the key itself goes rather than being left
-		// bare. If this key was the only thing this breaking: block
-		// carried, "same for any other key this leaves empty" applies one
-		// level up too.
+		// bare. Whether the breaking: block itself is now empty cannot be
+		// decided here — this call sees only its own list — so it is
+		// reported back to Prune, which knows about them all.
 		deleteBlock(listKey, listNode)
-		if len(breakingNode.Content) == 2 {
-			deleteBlock(breakingKey, breakingNode)
-		}
+		emptied = true
 	} else {
 		for _, i := range idx {
 			item := listNode.Content[i]
 			deleteBlock(item, item)
 		}
 	}
-	return nil
+	return len(idx), emptied, nil
 }
 
 // permKey is the (rule, subject, change) triple Prune matches on — deliber-

@@ -66,7 +66,7 @@ func TestPruneMatchesByIdentityNotPosition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Prune(path, []config.Permission{stale}, nil); err != nil {
+	if _, _, err := Prune(path, []config.Permission{stale}, nil); err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestPruneRefusesFlowStyleList(t *testing.T) {
 		Reason:  "dropped in the v2 rollout",
 	}
 
-	err := Prune(path, []config.Permission{stale}, nil)
+	_, _, err := Prune(path, []config.Permission{stale}, nil)
 	if err == nil {
 		t.Fatal("Prune must refuse a flow-style allow list, not guess at the surgery")
 	}
@@ -152,7 +152,7 @@ func TestPruneRemovesAStaleMove(t *testing.T) {
 	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Prune(path, nil, []config.Move{{From: "example.orders.v1", To: "example.ordering.v1"}}); err != nil {
+	if _, _, err := Prune(path, nil, []config.Move{{From: "example.orders.v1", To: "example.ordering.v1"}}); err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -164,5 +164,89 @@ func TestPruneRemovesAStaleMove(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "example.billing.v1") {
 		t.Fatalf("pruning removed a move that was not stale:\n%s", got)
+	}
+}
+
+// TestPruneCountsWhatItMatchedNotWhatItWasAsked: the count Prune reports is
+// what the file actually gave up. An entry whose text changed under the
+// command — the same window TestPruneMatchesByIdentityNotPosition covers —
+// is not deleted, and must not be counted as if it had been, or --prune
+// would tell a reader the manifest is clean when the entry is still there.
+func TestPruneCountsWhatItMatchedNotWhatItWasAsked(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stele.yaml")
+
+	original := "version: 1\n" +
+		"modules:\n" +
+		"  - path: api\n" +
+		"breaking:\n" +
+		"  moves:\n" +
+		"    - from: example.renamed.again\n" +
+		"      to: example.ordering.v1\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	perms, moves, err := Prune(path, nil, []config.Move{
+		{From: "example.orders.v1", To: "example.ordering.v1"},
+	})
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if perms != 0 || moves != 0 {
+		t.Errorf("Prune counted %d permission(s) and %d move(s) it did not remove", perms, moves)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Errorf("Prune edited a file it matched nothing in:\ngot:\n%s", got)
+	}
+}
+
+// TestPruneEmptyingBothListsRemovesTheBreakingKey: the "never leave a bare
+// key" rule is about the block as a whole, not one list at a time. A
+// breaking: block holding only allow and moves, both entirely pruned, must
+// take the breaking: key with it.
+func TestPruneEmptyingBothListsRemovesTheBreakingKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stele.yaml")
+
+	head := "version: 1\n" +
+		"modules:\n" +
+		"  - path: api\n"
+	original := head +
+		"breaking:\n" +
+		"  allow:\n" +
+		"    - rule: break/field_removed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      reason: dropped in the v2 rollout\n" +
+		"  moves:\n" +
+		"    - from: example.orders.v1\n" +
+		"      to: example.ordering.v1\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	perms, moves, err := Prune(path,
+		[]config.Permission{{
+			Rule:    "break/field_removed",
+			Subject: "example.v1.Order.status",
+			Reason:  "dropped in the v2 rollout",
+		}},
+		[]config.Move{{From: "example.orders.v1", To: "example.ordering.v1"}})
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if perms != 1 || moves != 1 {
+		t.Errorf("Prune removed %d permission(s) and %d move(s), want 1 and 1", perms, moves)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != head {
+		t.Errorf("pruning every list under breaking: must take the breaking: key too:\ngot:\n%s\nwant:\n%s", got, head)
 	}
 }

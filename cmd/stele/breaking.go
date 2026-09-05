@@ -449,10 +449,15 @@ func runBreakingAudit(mf *config.File, manifestPath string, findings, rawFinding
 		// Prune matches staleSpent against the manifest's own current text
 		// by (rule, subject, change), not by position — see its own doc
 		// comment for why that matters even within one invocation.
-		if err := breaking.Prune(manifestPath, staleSpent, staleMoves); err != nil {
+		// The counts come back from Prune rather than from the slices it
+		// was given: an entry whose text changed under the command is not
+		// deleted, and reporting it as removed would say the manifest is
+		// clean while the entry is still in it.
+		removedPerms, removedMoves, err := breaking.Prune(manifestPath, staleSpent, staleMoves)
+		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "stele: breaking: --prune removed %d stale permission(s) and %d stale move(s); dormant permissions were left in place\n", len(staleSpent), len(staleMoves))
+		fmt.Fprintf(stdout, "stele: breaking: --prune removed %d stale permission(s) and %d stale move(s); dormant permissions were left in place\n", removedPerms, removedMoves)
 		return nil
 	}
 
