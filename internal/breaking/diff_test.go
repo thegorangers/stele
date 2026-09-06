@@ -2,6 +2,7 @@ package breaking
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -338,5 +339,109 @@ func TestReformattingOnlyProducesNoChanges(t *testing.T) {
 	changes := Diff(prevRev, curRev)
 	if len(changes) != 0 {
 		t.Fatalf("Diff = %+v, want no changes from a pure reformat", changes)
+	}
+}
+
+// readValidateProto returns the vendored buf/validate/validate.proto source
+// (testdata/buf/validate/validate.proto, copied verbatim from protovalidate)
+// so fixtures can apply a real message-valued custom option — buf.validate's
+// own (buf.validate.field) — instead of inventing one.
+func readValidateProto(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "buf", "validate", "validate.proto"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// validateFixture lays out a single-module repository owning both
+// buf/validate/validate.proto and an order.proto that applies
+// (buf.validate.field), compiling the same orderBody as two separate
+// revisions — two independent compiler runs, exactly as prev and cur always
+// are — and returns the two Revisions Diff compares.
+func validateFixture(t *testing.T, orderBody string) (prevRev, curRev Revision) {
+	t.Helper()
+	dir := repo(t)
+	write(t, dir, lint.ManifestName, "version: 1\nmodules:\n  - path: own\n")
+	writeEmptyLock(t, dir)
+	write(t, dir, "own/buf/validate/validate.proto", readValidateProto(t))
+	write(t, dir, "own/example/orders/v1/order.proto", orderBody)
+	prevSHA := commit(t, dir, "marker.txt", "prev", "prev revision")
+
+	// A second, independent commit of the byte-identical source. Load
+	// compiles prev and cur separately, so this reproduces two distinct
+	// compiler runs over the same text — the exact condition under which the
+	// option's dynamic message ends up backed by two different descriptor
+	// instances.
+	curSHA := commit(t, dir, "marker.txt", "cur", "cur revision")
+
+	r, err := gitrepo.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevRev, err = Load(context.Background(), r, prevSHA, noopFetch, true)
+	if err != nil {
+		t.Fatalf("Load prev: %v", err)
+	}
+	curRev, err = Load(context.Background(), r, curSHA, noopFetch, false)
+	if err != nil {
+		t.Fatalf("Load cur: %v", err)
+	}
+	return prevRev, curRev
+}
+
+// TestMessageValuedCustomOptionIsNotSpuriouslyModified is the regression
+// test for the defect this package's descEqual used to have: a
+// message-valued custom option — here (buf.validate.field), protovalidate's
+// real per-field rules — compares equal across two independent compiler
+// runs of byte-identical source, even though each run's option value is a
+// dynamic message backed by its own descriptor instance. proto.Equal, which
+// descEqual used before, is sensitive to that instance identity and reports
+// such a field Modified with nothing textually different behind it; the fix
+// compares deterministic marshalled bytes instead, which are identical
+// regardless of which descriptor produced them.
+func TestMessageValuedCustomOptionIsNotSpuriouslyModified(t *testing.T) {
+	orderBody := "syntax = \"proto3\";\n" +
+		"package example.orders.v1;\n\n" +
+		"import \"buf/validate/validate.proto\";\n\n" +
+		"message Order {\n" +
+		"  string id = 1 [(buf.validate.field).string.min_len = 1];\n" +
+		"}\n"
+
+	prevRev, curRev := validateFixture(t, orderBody)
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 0 {
+		t.Fatalf("Diff = %+v, want no changes: same source compiled twice, differing only in which compiler run produced the (buf.validate.field) option's descriptor instance", changes)
+	}
+}
+
+// TestIdenticalRevisionSelfDiffProducesNoChanges holds the general property
+// the option defect violated: diffing any revision against an identical
+// copy of itself — including one with message-valued custom options present
+// throughout, not just on one field — must produce no changes at all.
+func TestIdenticalRevisionSelfDiffProducesNoChanges(t *testing.T) {
+	orderBody := "syntax = \"proto3\";\n" +
+		"package example.orders.v1;\n\n" +
+		"import \"buf/validate/validate.proto\";\n\n" +
+		"message Order {\n" +
+		"  option (buf.validate.message).cel = {\n" +
+		"    id: \"has_id\"\n" +
+		"    message: \"id must be present\"\n" +
+		"    expression: \"has(this.id)\"\n" +
+		"  };\n" +
+		"  string id = 1 [(buf.validate.field).string.min_len = 1];\n" +
+		"  int64 eta = 2 [(buf.validate.field).int64.gte = 0];\n" +
+		"}\n\n" +
+		"service Orders {\n" +
+		"  rpc Get(Order) returns (Order);\n" +
+		"}\n"
+
+	prevRev, curRev := validateFixture(t, orderBody)
+
+	changes := Diff(prevRev, curRev)
+	if len(changes) != 0 {
+		t.Fatalf("Diff = %+v, want no changes between a revision and an identical copy of itself", changes)
 	}
 }
