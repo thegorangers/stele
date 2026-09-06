@@ -71,7 +71,7 @@ jobs:
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
 
       - name: Check out the tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.tag.outputs.tag }}
           # The version comes from the tag the toolchain can see, so the whole
@@ -81,7 +81,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
@@ -146,7 +146,7 @@ jobs:
       # release's shape. A floating version could change that shape between
       # two tags without anything in this repository moving.
       - name: Install goreleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           install-only: true
           version: v2.18.0
