@@ -38,6 +38,8 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [v0.5.0] — 2026-09-06
+
 ### Added
 
 - `breaking.moves` declares that a proto package or file was renamed. `stele
