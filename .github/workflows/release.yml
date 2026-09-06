@@ -146,7 +146,7 @@ jobs:
       # release's shape. A floating version could change that shape between
       # two tags without anything in this repository moving.
       - name: Install goreleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           install-only: true
           version: v2.18.0
