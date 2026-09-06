@@ -13,6 +13,8 @@ git repositories instead of a schema registry.
 [![Release](https://img.shields.io/github/v/release/thegorangers/stele)](https://github.com/thegorangers/stele/releases)
 [![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
 
+**English** · [Русский](README.ru.md)
+
 ```yaml
 # stele.yaml
 version: 1
