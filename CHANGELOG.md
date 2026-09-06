@@ -38,8 +38,18 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-### Fixed
+### Refused input
+- A manifest (`stele.yaml`) or lock (`stele.lock`) with an empty list entry —
+  a stray `-` line, or an explicit `~`/`null` — is now refused, naming the
+  line. Previously it was accepted and silently decoded to a shorter list:
+  `gopkg.in/yaml.v3` drops a null item when decoding a sequence into a slice
+  of a non-nilable element type, so `breaking.allow: [~, {rule: ..., subject:
+  ..., reason: ...}]` and `breaking.allow: [{rule: ..., subject: ...,
+  reason: ...}]` decoded to the identical one-entry list. A file that lost
+  an approved permission this way would go on parsing and validating as if
+  nothing were missing. Found by `FuzzParseManifest`.
 
+### Fixed
 - `stele breaking`'s declaration comparison used `proto.Equal` to decide
   whether a descriptor changed. For a message-valued custom option — such as
   `(buf.validate.field)` or `(google.api.http)` — that value is a dynamic
@@ -51,6 +61,14 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
   deterministically and compares bytes, which does not depend on which run
   produced the descriptor. No output of `generate` or `export` is affected;
   this changes only what `stele breaking` reports.
+
+### Internal
+- Added `FuzzParseManifest` (`internal/config`), `FuzzParseLock`
+  (`internal/lockfile`) and `FuzzPrune` (`internal/breaking`), seeded from
+  the existing manifest schema testdata and from the hand-written prune
+  regression cases. `FuzzPrune` is a property test: after pruning, every
+  permission not targeted for removal must still parse out of the file,
+  byte for byte in substance if not in position.
 
 ## [v0.4.1] — 2026-08-31
 

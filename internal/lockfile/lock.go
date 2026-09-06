@@ -202,6 +202,50 @@ func Load(path string) (*Lock, error) {
 	return &l, nil
 }
 
+// refuseNullSequenceItems refuses a lock that contains an empty (null) entry
+// inside a YAML block sequence — a stray "-" line, or an explicit
+// "~"/"null" — anywhere in the document.
+//
+// See the identical helper and its comment in internal/config/parse.go,
+// where FuzzParseManifest found the defect this closes: gopkg.in/yaml.v3
+// silently drops such an item when decoding a sequence node into a slice of
+// a non-nilable element type ([]Entry, []Plugin here), so a corrupted lock
+// line can quietly resolve to fewer pinned dependencies than the file
+// actually names, with no error. A lock is meant to reproduce a build byte
+// for byte; losing an entry without saying so is the one failure mode that
+// contract cannot survive.
+func refuseNullSequenceItems(raw []byte) error {
+	var root yaml.Node
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return nil
+	}
+	if len(root.Content) == 0 {
+		return nil
+	}
+	return walkForNullSequenceItems(root.Content[0])
+}
+
+func walkForNullSequenceItems(n *yaml.Node) error {
+	if n == nil {
+		return nil
+	}
+	if n.Kind == yaml.SequenceNode {
+		for _, item := range n.Content {
+			if item.Kind == yaml.ScalarNode && item.Tag == "!!null" {
+				return fmt.Errorf("line %d: empty list entry; yaml.v3 would silently drop this item rather "+
+					"than decode it, shortening the list without an error — write a value here, or remove the line",
+					item.Line)
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if err := walkForNullSequenceItems(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (l *Lock) validate() error {
 	switch {
 	case l.Version == 0:
