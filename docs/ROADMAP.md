@@ -29,9 +29,10 @@ Where `stele` stands and what it needs before it can be relied on.
   breakages in 20 rule ids, plus changes in the dependency closure this
   repository re-exports. It now has a valve: every rule is on at `error` until
   `stele.yaml` lowers it with a stated reason, `breaking.allow` permits one
-  specific change, and a finding standing at `error` fails the run. A rename
-  map for a deliberate package move (`breaking.moves`), and the evidence a
-  fleet needs before it can enable the check by default, are not built.
+  specific change, and a finding standing at `error` fails the run. The rename
+  map for a deliberate package move (`breaking.moves`) shipped in v0.5.0. The
+  evidence a fleet needs before it can enable the check by default is not
+  gathered.
 
 That is enough to migrate a repository deliberately, with a human watching. What is
 left before 1.0 is the rest of contract linting (milestone 6), and the honest
@@ -696,11 +697,6 @@ leaves the merge commit itself uncompared until the branch lands.
 **What is still missing, and it is what stands between this and a check a
 fleet can turn on:**
 
-- **The rename map.** `breaking.moves` — an identity map applied before the
-  comparison, so a deliberate package rename does not read as removing
-  everything inside it — does not exist yet. A repository facing one holds
-  the affected rules at `warning`, or permits each removal individually,
-  until it lands.
 - **The evidence.** Two kinds are still owed before a fleet enables the check
   by default: a shadow period, running in CI in report-only mode with every
   firing classified by hand as true or false, because "did it fire" is not

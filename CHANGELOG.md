@@ -38,6 +38,16 @@ Versions follow the policy in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Internal
+
+- The README is now a short front page — what the tool is, how to install it,
+  a first run, and migrating off buf. The full reference it used to be moved
+  to [docs/GUIDE.md](docs/GUIDE.md) unchanged apart from its links, so nothing
+  written there was lost. Two stale claims went with the move: the README no
+  longer says the project is "early development" containing "project
+  scaffolding", and neither it nor `docs/ROADMAP.md` still says the rename map
+  does not exist — `breaking.moves` shipped in v0.5.0.
+
 ## [v0.5.0] — 2026-09-06
 
 ### Added
