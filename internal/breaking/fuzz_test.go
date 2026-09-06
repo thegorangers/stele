@@ -71,7 +71,7 @@ func FuzzPrune(f *testing.F) {
 		if err != nil || before.Breaking == nil || len(before.Breaking.Allow) == 0 {
 			// Not a manifest with a breaking.allow list to prune. Prune
 			// itself still must not panic or hang on it.
-			_ = Prune(path, []config.Permission{{Rule: "break/field_removed", Subject: "x"}})
+			_, _, _ = Prune(path, []config.Permission{{Rule: "break/field_removed", Subject: "x"}}, nil)
 			return
 		}
 
@@ -99,7 +99,7 @@ func FuzzPrune(f *testing.F) {
 			}
 		}
 
-		err = Prune(path, []config.Permission{target})
+		_, _, err = Prune(path, []config.Permission{target}, nil)
 		if err != nil {
 			// A refusal (e.g. flow-style) must leave the file untouched.
 			after, rerr := os.ReadFile(path)

@@ -358,7 +358,34 @@ type Breaking struct {
 	// Allow is the individual changes this repository has approved, each
 	// against a rule that otherwise stands.
 	Allow []Permission `yaml:"allow"`
+	// Moves are the renames this repository has declared, applied to the
+	// previous revision before the comparison runs.
+	//
+	// A move is not a permission and suppresses nothing: it renames the old
+	// side so the comparison sees the same declarations under their new
+	// names. A lossless rename therefore produces no findings because there
+	// is nothing left to report, and a rename that also dropped a field
+	// reports that field, by its new name, as an ordinary removal. Laundering
+	// is impossible by construction rather than by a check that has to be got
+	// right.
+	Moves []Move `yaml:"moves"`
 }
+
+// Move is one declared rename: a proto package, or — with both sides carrying
+// the "file:" prefix a permission subject already uses for a file — a file
+// path. The two are separate namespaces: a repository can rename a package
+// without moving its files, or move its files without renaming the package,
+// so a file move is its own entry rather than a consequence of a package one.
+type Move struct {
+	// From is the name in the previous revision.
+	From string `yaml:"from"`
+	// To is the name in the current revision.
+	To string `yaml:"to"`
+}
+
+// MoveFilePrefix marks a move as being over file paths rather than proto
+// package names.
+const MoveFilePrefix = "file:"
 
 // BreakingRule is what a repository says about one breaking-change rule.
 type BreakingRule struct {

@@ -2277,3 +2277,262 @@ func TestBreakingReportOnlyCannotBeSetInManifest(t *testing.T) {
 		t.Errorf("the error does not name the unknown key: %v", err)
 	}
 }
+
+// --- stele breaking moves ---
+
+// TestBreakingDeclaredMoveLosslessRenameExitsZero: a package rename with no
+// other change, declared under breaking.moves, must be reported as no
+// breaking change at all — the whole point of a move is that the
+// comparison sees the same declarations under their new name.
+func TestBreakingDeclaredMoveLosslessRenameExitsZero(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  moves:\n    - from: example.v1\n      to: example.v2\n"+
+		"    - from: file:example/v1/order.proto\n      to: file:example/v2/order.proto\n")
+	renamed := `syntax = "proto3";
+package example.v2;
+
+message Order {
+  int64 id = 1;
+  string status = 2;
+}
+`
+	breakingGit(t, dir, "rm", "-q", "api/example/v1/order.proto")
+	breakingCommit(t, dir, "api/example/v2/order.proto", renamed, "rename package example.v1 to example.v2")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("a declared lossless rename must exit zero: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "no breaking") {
+		t.Errorf("the report does not say there were no breaking changes:\n%s", out.String())
+	}
+}
+
+// TestBreakingUndeclaredRenameReportsEveryDeclarationRemoved is the negative
+// half of the test above, and the reason a move exists: the same rename,
+// without breaking.moves, must be seen as the whole package vanishing.
+func TestBreakingUndeclaredRenameReportsEveryDeclarationRemoved(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	renamed := `syntax = "proto3";
+package example.v2;
+
+message Order {
+  int64 id = 1;
+  string status = 2;
+}
+`
+	breakingGit(t, dir, "rm", "-q", "api/example/v1/order.proto")
+	breakingCommit(t, dir, "api/example/v2/order.proto", renamed, "rename package example.v1 to example.v2, undeclared")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("an undeclared rename must be reported as removal, and fail the run:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1") || !strings.Contains(out.String(), "package_renamed") {
+		t.Errorf("the report does not flag the undeclared rename of example.v1:\n%s", out.String())
+	}
+}
+
+// TestBreakingDeclaredMoveRenameAndDropFailsAndNamesFieldUnderNewPackage: a
+// move covers the rename, but does not and must not paper over a field the
+// same commit also dropped — that field must still be reported, named under
+// the destination package the move declared.
+func TestBreakingDeclaredMoveRenameAndDropFailsAndNamesFieldUnderNewPackage(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  moves:\n    - from: example.v1\n      to: example.v2\n")
+	renamedDropped := `syntax = "proto3";
+package example.v2;
+
+message Order {
+  int64 id = 1;
+}
+`
+	breakingGit(t, dir, "rm", "-q", "api/example/v1/order.proto")
+	breakingCommit(t, dir, "api/example/v2/order.proto", renamedDropped, "rename package and drop status")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("a rename that also drops a field must fail the run:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "example.v2.Order.status") {
+		t.Errorf("the dropped field is not named under its new package:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "example.v1.Order.status") {
+		t.Errorf("the dropped field is named under the old package instead of the new one:\n%s", out.String())
+	}
+}
+
+// TestBreakingMovesComeFromWorkingManifestOnly pins which side's moves
+// govern the run, on the same terms as breaking's severity block (see the
+// comment above ValidateConfig in cmd/stele/breaking.go): the previous
+// revision declares the move, the working tree does not, so the rename
+// must be reported as a removal rather than silently applied.
+func TestBreakingMovesComeFromWorkingManifestOnly(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  moves:\n    - from: example.v1\n      to: example.v2\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingWrite(t, dir, "stele.yaml", breakingManifest)
+	renamed := `syntax = "proto3";
+package example.v2;
+
+message Order {
+  int64 id = 1;
+  string status = 2;
+}
+`
+	breakingGit(t, dir, "rm", "-q", "api/example/v1/order.proto")
+	breakingCommit(t, dir, "api/example/v2/order.proto", renamed, "rename, move declared on the previous revision only")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("a move declared only on the previous revision must not be applied:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "example.v1") || !strings.Contains(out.String(), "package_renamed") {
+		t.Errorf("the report does not flag the undeclared rename of example.v1:\n%s", out.String())
+	}
+}
+
+// TestBreakingPruneRemovesStaleAllowAndStaleMoveTogether exercises the path
+// this task first makes reachable from the command: an approved change and
+// a stale move pruned in the same --prune run. Both entries must go, and
+// everything else in the manifest — the module block, the dormant rule,
+// the retained permission — must survive untouched.
+func TestBreakingPruneRemovesStaleAllowAndStaleMoveTogether(t *testing.T) {
+	dir := breakingRepo(t)
+	manifest := breakingManifest +
+		"breaking:\n" +
+		"  rules:\n" +
+		"    - id: break/field_removed\n" +
+		"      severity: off\n" +
+		"      reason: known and accepted\n" +
+		"  allow:\n" +
+		"    - rule: break/field_removed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      reason: kept for when the rule is raised again\n" +
+		"    - rule: break/field_type_changed\n" +
+		"      subject: example.v1.Order.total\n" +
+		"      change: int32 -> int64\n" +
+		"      reason: widening; no consumer stores this in a 32-bit field\n" +
+		"  moves:\n" +
+		"    - from: example.old\n" +
+		"      to: example.v1\n"
+	breakingWrite(t, dir, "stele.yaml", manifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--prune"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("--prune must succeed: %v\n%s", err, out.String())
+	}
+
+	want := breakingManifest +
+		"breaking:\n" +
+		"  rules:\n" +
+		"    - id: break/field_removed\n" +
+		"      severity: off\n" +
+		"      reason: known and accepted\n" +
+		"  allow:\n" +
+		"    - rule: break/field_removed\n" +
+		"      subject: example.v1.Order.status\n" +
+		"      reason: kept for when the rule is raised again\n"
+
+	got, err := os.ReadFile(filepath.Join(dir, "stele.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Errorf("--prune must remove the stale permission and the stale move, leaving everything else byte-identical:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestBreakingPruneRetiresAMoveThatIsStaleAndAlsoInvalid: staleness is
+// decided before validation, and a stale move is not validated at all —
+// otherwise the one mechanism the design names for retiring an entry
+// (--audit, then --prune) would be unreachable for the entry that most
+// needs it. Here the source has aged out of the window AND the destination
+// has since been renamed again, so the entry would fail validation; it must
+// still be reported and pruned.
+func TestBreakingPruneRetiresAMoveThatIsStaleAndAlsoInvalid(t *testing.T) {
+	dir := breakingRepo(t)
+	manifest := breakingManifest +
+		"breaking:\n" +
+		"  moves:\n" +
+		"    - from: example.ancient\n" +
+		"      to: example.gone\n"
+	breakingWrite(t, dir, "stele.yaml", manifest)
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--prune"}, &out, &errOut)
+	if err != nil {
+		t.Fatalf("--prune must retire a move that is stale and otherwise invalid: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "example.ancient") {
+		t.Errorf("the report does not name the stale move:\n%s", out.String())
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "stele.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != breakingManifest {
+		t.Errorf("--prune must remove the stale move and its now-empty block:\ngot:\n%s\nwant:\n%s", got, breakingManifest)
+	}
+}
+
+// TestBreakingAuditReddensOnAStaleMove: a stale move is a fact about a
+// file that needs an edit, exactly as a stale permission is, and --audit
+// exists to fail on that. Reporting it as a note while exiting zero would
+// leave the promise that --prune has something to remove visible only to
+// whoever read the output.
+func TestBreakingAuditReddensOnAStaleMove(t *testing.T) {
+	dir := breakingRepo(t)
+	breakingWrite(t, dir, "stele.yaml", breakingManifest+
+		"breaking:\n  moves:\n    - from: example.ancient\n      to: example.v1\n")
+	breakingWrite(t, dir, "stele.lock", breakingLock)
+	breakingCommit(t, dir, "api/example/v1/order.proto", breakingOrder(""), "base")
+
+	breakingGit(t, dir, "checkout", "-q", "-b", "topic")
+	breakingCommit(t, dir, "README.md", "notes", "unrelated topic work")
+
+	var out, errOut strings.Builder
+	err := run(context.Background(), []string{"breaking", "--dir", dir, "--base", "main", "--audit"}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("--audit must exit non-zero on a stale move:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "example.ancient") {
+		t.Errorf("the audit does not name the stale move:\n%s", out.String())
+	}
+}

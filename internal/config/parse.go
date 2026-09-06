@@ -348,15 +348,18 @@ func (b *Breaking) validate() error {
 	if b == nil {
 		return nil
 	}
-	if b.Base == "" && len(b.Rules) == 0 && len(b.Allow) == 0 {
+	if b.Base == "" && len(b.Rules) == 0 && len(b.Allow) == 0 && len(b.Moves) == 0 {
 		// As with lint: a block that configures nothing reads as if it
 		// configured something.
-		return fmt.Errorf("breaking: at least one of base, rules or allow is required")
+		return fmt.Errorf("breaking: at least one of base, rules, allow or moves is required")
 	}
 	if err := b.validateRules(); err != nil {
 		return err
 	}
-	return b.validateAllow()
+	if err := b.validateAllow(); err != nil {
+		return err
+	}
+	return b.validateMoves()
 }
 
 func (b *Breaking) validateRules() error {
@@ -418,6 +421,67 @@ func (b *Breaking) validateAllow() error {
 			// A permission with no stated reason cannot be told from a
 			// workaround six months later.
 			return fmt.Errorf("%s.reason: missing", field)
+		}
+	}
+	return nil
+}
+
+// validateMoves checks the shape of the move map: what can be decided from
+// the manifest alone. Whether a move's destination is a package this
+// repository owns, and whether its source really has gone, need the compiled
+// revisions and are checked in internal/breaking.
+func (b *Breaking) validateMoves() error {
+	seen := make(map[string]int, len(b.Moves))
+	edge := make(map[string]string, len(b.Moves))
+	for i, m := range b.Moves {
+		field := fmt.Sprintf("breaking.moves[%d]", i)
+		if m.From == "" {
+			return fmt.Errorf("%s.from: missing", field)
+		}
+		if m.To == "" {
+			return fmt.Errorf("%s.to: missing", field)
+		}
+		fromFile := strings.HasPrefix(m.From, MoveFilePrefix)
+		if fromFile != strings.HasPrefix(m.To, MoveFilePrefix) {
+			return fmt.Errorf("%s: both sides must name the same kind of thing; "+
+				"write %q on both sides for a file move, or on neither for a package move",
+				field, MoveFilePrefix)
+		}
+		if m.From == m.To {
+			return fmt.Errorf("%s: moves nothing, from and to are both %q", field, m.From)
+		}
+		if first, dup := seen[m.From]; dup {
+			return fmt.Errorf("%s.from: duplicate move for %s, already moved by breaking.moves[%d]; "+
+				"one name cannot move to two places", field, m.From, first)
+		}
+		seen[m.From] = i
+		edge[m.From] = m.To
+	}
+	// A cycle is a walk that returns to where it started, not merely a name
+	// that appears as both a "to" and, elsewhere, a "from" — that is a chain,
+	// and a chain is refused later, against the compiled revisions, for a
+	// different reason than a cycle is.
+	for i, start := range b.Moves {
+		field := fmt.Sprintf("breaking.moves[%d]", i)
+		visited := map[string]bool{start.From: true}
+		cur := start.To
+		for {
+			if cur == start.From {
+				return fmt.Errorf("%s: cycle, %s moves to %s and the chain of moves leads back to %s; "+
+					"the previous revision cannot be renamed into two states at once",
+					field, start.From, start.To, start.From)
+			}
+			if visited[cur] {
+				// A different cycle, not containing start.From: it is
+				// reported from its own entry's iteration instead.
+				break
+			}
+			visited[cur] = true
+			next, ok := edge[cur]
+			if !ok {
+				break
+			}
+			cur = next
 		}
 	}
 	return nil
