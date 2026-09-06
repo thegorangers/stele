@@ -112,6 +112,20 @@ jobs:
         uses: ./.github/actions/parity
 
       - name: Install cosign
+        # Deliberately not pinned via `cosign-release:`. Supplying that input
+        # does not just fix the version — it switches the action onto its
+        # custom-version code path, which downloads a *detached signature*
+        # (a `.sig` file) to verify the cosign binary. No cosign v3 release
+        # publishes a `.sig` asset; v3 releases ship
+        # `cosign-linux-amd64.sigstore.json` bundles instead. So any v3
+        # version pinned through this input fails at install, regardless of
+        # which v3 version is named. This is what broke the v0.4.0 release.
+        #
+        # The pin that actually matters is `@v3` on the action itself: it
+        # moves only when someone deliberately updates the tag, and its
+        # default path installs cleanly. Before reintroducing
+        # `cosign-release:`, first check whether the action's custom-version
+        # path still requires a `.sig` asset — do not assume this is fixed.
         uses: sigstore/cosign-installer@v3
 
       # goreleaser's sboms section shells out to syft; unlike cosign it is
